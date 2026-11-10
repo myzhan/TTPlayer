@@ -37,6 +37,7 @@ struct ArchiveSuite: SelfTestSuite {
         checkDuplicateAdd(ctx, root: root, stage: stage)
         checkEmptyReject(ctx, root: root, stage: stage)
         checkEntryReaderModes(ctx, root: root, stage: stage)
+        checkRestoreFromKeys(ctx, root: root, stage: stage)
         check7zFixture(ctx)
         checkEncryptedZipFixture(ctx)
 
@@ -216,6 +217,29 @@ struct ArchiveSuite: SelfTestSuite {
                   added == 0 && note.contains("没有可播放"),
                   "added=\(added) note=\(note)")
         try? FileManager.default.removeItem(at: txt)
+    }
+
+    /// 归档条目 URL 存档往返（bugreport P1#2）：identityKey 形式写回后能重建 Track，外层缺失时平稳跳过
+    private func checkRestoreFromKeys(_ ctx: SelfTestContext, root: URL, stage: URL) {
+        let zip = root.appendingPathComponent("restore.zip")
+        try? FileManager.default.removeItem(at: zip)
+        guard runTool("/usr/bin/zip", ["-q", "-j", zip.path,
+                                       "01 - alpha.wav", "02 - beta.wav"], cwd: stage) else {
+            ctx.check("归档-URL 存档往返", false, "zip 造不出来"); return
+        }
+        let imported = LibraryStore.importURLs([zip])
+        guard imported.tracks.count == 2 else {
+            ctx.check("归档-URL 存档往返", false, "n=\(imported.tracks.count)"); return
+        }
+        let keys = imported.tracks.map { $0.identityKey }
+        let restored = LibraryStore.tracks(fromArchiveEntries: keys)
+        ctx.check("归档-URL 存档往返",
+                  restored.count == 2 && restored.map { $0.identityKey } == keys,
+                  "n=\(restored.count)")
+        // 外层文件不在盘上：既不崩也不入表
+        let fakeKey = "file:///no/such/dir/album.zip#archive-entry=ghost.wav"
+        let missing = LibraryStore.tracks(fromArchiveEntries: [fakeKey])
+        ctx.check("归档-外层缺失平稳跳过", missing.isEmpty, "n=\(missing.count)")
     }
 
     /// EntryReader 两种模式都能过（cached 走 Data，超大条目重放路径单测不了就 SKIP）

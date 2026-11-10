@@ -184,7 +184,8 @@ final class AVFormatOpenResult {
             c = alloc
             let ret = avformat_open_input(&c, nil, nil, nil)
             if ret < 0 {
-                if var f: UnsafeMutablePointer<AVFormatContext>? = c { avformat_close_input(&f) }
+                var f = c
+                avformat_close_input(&f)
                 io?.dispose()
                 return nil
             }

@@ -126,6 +126,9 @@ final class PlayerController {
     }
 
     func removeTracks(at indexes: IndexSet) {
+        // 记下正在放的行有没有被删；删完同步引擎，免得声音留在被删那一行、界面却指向下一首
+        let removedCurrent = playlist.currentIndex.map { indexes.contains($0) } ?? false
+        let wasPlaying = isPlaying
         switch activeGroup {
         case .main:
             playlist.remove(at: indexes)
@@ -142,6 +145,15 @@ final class PlayerController {
             invalidate(activeGroup)
             reloadActiveGroup()
         }
+        if removedCurrent {
+            // 声音与显示一起对齐到新的当前行：正在放就立刻接手，暂停/尾部就顺手停住，不隔空跳一个
+            if wasPlaying, playlist.currentTrack != nil {
+                loadAndPlayCurrent()
+            } else {
+                stop()
+                playingTrackOverride = nil
+            }
+        }
         notifyPlaylistChanged()
     }
 
@@ -153,11 +165,10 @@ final class PlayerController {
             playlist.removeAll()
             reloadActiveGroup()       // 就留在这一组：空表 + 中央一句提示
         } else if activeGroup.isDerived {
+            // 只清这一组的档案；[默认] 现场不动，切回去还在（同“在台页清空”一样靠 reloadActiveGroup 开空表 + 中央提示）
             groups.clear(activeGroup)
             invalidate(activeGroup)
-            playlist.removeAll()
-            mainSnapshot = []       // 派生组清空后没有“留档”可言，[默认] 只剩空表
-            activeGroup = .main
+            reloadActiveGroup()
         } else {
             playlist.removeAll()
         }

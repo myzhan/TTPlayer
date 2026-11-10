@@ -179,6 +179,8 @@ enum LibraryStore {
         var sheetCache: [String: CueSheet?] = [:]
         var covered = Set<String>()          // 已按分轨展开的镜像，不再整盘入表
         var seenKeys = Set<String>()
+        /// m3u/m3u8 展开过程中已进过的歌单文件（防自引用/互引无限递归）
+        var visitedPlaylists = Set<String>()
         let fm = FileManager.default
 
         mutating func absorb(_ url: URL) {
@@ -262,6 +264,9 @@ enum LibraryStore {
 
         /// m3u/m3u8：一行一个路径（也可以是电台地址），相对路径按歌单所在目录解析，保序入表
         mutating func absorbPlaylist(_ url: URL) {
+            // 循环引用防护：同一个 m3u 在本次导入里只展开一次（直接拖 / 嵌套 / 目录扫描都算）；
+            // A→B→A 跟自引用都会在下一次进入时短路，不致无限递归
+            guard visitedPlaylists.insert(url.path).inserted else { return }
             guard let text = LibraryStore.readText(url) else {
                 reject(url, reason: "歌单读不出文本（不是 UTF-8/GBK 编码的 m3u）")
                 return
@@ -318,7 +323,7 @@ enum LibraryStore {
             }
         }
 
-        /// 歌单里嵌歌单：只跟进一层，不记录额外拒收原因
+        /// 歌单里嵌歌单：不记额外拒收原因；循环防护靠 absorbPlaylist 自己的 visitedPlaylists
         private mutating func absorbPlaylistSource(_ url: URL) {
             let before = directURLs
             directURLs = []
@@ -405,6 +410,12 @@ enum LibraryStore {
                 continue
             }
             guard let marker = entry.range(of: cueArchiveMarker) else {
+                // 归档条目 URL：file:///…/album.zip#archive-entry=<percent-encoded>，
+                // identityKey 在 Track 那边已经专走 absoluteString，这里按外层存在与否判断
+                if let url = URL(string: entry), Archive.parseEntryURL(url) != nil {
+                    if fm.fileExists(atPath: url.path) { result.append(Track(url: url)) }
+                    continue
+                }
                 if fm.fileExists(atPath: entry) { result.append(Track(url: URL(fileURLWithPath: entry))) }
                 continue
             }

@@ -92,7 +92,7 @@ enum FFmpegProbe {
         info.tags = tags
 
         // 内嵌封面：找带 ATTACHED_PIC 属性的流
-        var nb = Int(ctx.pointee.nb_streams)
+        let nb = Int(ctx.pointee.nb_streams)
         for i in 0..<nb {
             guard let stream = ctx.pointee.streams[i] else { continue }
             guard stream.pointee.disposition & AV_DISPOSITION_ATTACHED_PIC != 0 else { continue }

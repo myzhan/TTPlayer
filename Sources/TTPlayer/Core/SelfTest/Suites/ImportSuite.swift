@@ -9,6 +9,7 @@ struct ImportSuite: SelfTestSuite {
         let fm = ctx.fm
 
         checkFolderDrop(ctx)
+        checkM3UCycle(ctx)
 
         // 拖进来的东西被挡在门外：不能入表，但要在显示区回答为什么
         let fmtDir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
@@ -47,6 +48,50 @@ struct ImportSuite: SelfTestSuite {
         _ = p.addTracks(savedTracks)
         ctx.check("格式-测完把曲库恢复回去", p.playlist.count == savedTracks.count,
                   "n=\(p.playlist.count)")
+    }
+
+    /// m3u 循环引用防护（bugreport P1#3）：自引用与 A↔B 互引均不死循环，正常嵌套能展开
+    private func checkM3UCycle(_ ctx: SelfTestContext) {
+        let fm = ctx.fm
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("ttplayer-m3u-cycle", isDirectory: true)
+        try? fm.removeItem(at: root)
+        try? fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let audio = ctx.dir.appendingPathComponent("demo01.wav")
+        guard fm.fileExists(atPath: audio.path) else {
+            ctx.emit("[selftest] SKIP m3u 循环防护（testlib 缺 demo01.wav）")
+            return
+        }
+        try? fm.copyItem(at: audio, to: root.appendingPathComponent("demo01.wav"))
+
+        // 自引用：self.m3u 里写自己
+        let selfCyc = root.appendingPathComponent("self.m3u")
+        try? "#EXTM3U\nself.m3u\ndemo01.wav\n".write(to: selfCyc, atomically: true, encoding: .utf8)
+        let r1 = LibraryStore.importURLs([selfCyc])
+        ctx.check("导入-m3u 自引用不死循环",
+                  r1.tracks.count == 1 && r1.tracks[0].url.lastPathComponent == "demo01.wav",
+                  "n=\(r1.tracks.count)")
+
+        // A↔B 互引
+        let a = root.appendingPathComponent("a.m3u")
+        let b = root.appendingPathComponent("b.m3u")
+        try? "#EXTM3U\nb.m3u\ndemo01.wav\n".write(to: a, atomically: true, encoding: .utf8)
+        try? "#EXTM3U\na.m3u\n".write(to: b, atomically: true, encoding: .utf8)
+        let r2 = LibraryStore.importURLs([a])
+        ctx.check("导入-m3u 互引用不死循环",
+                  r2.tracks.count == 1 && r2.tracks[0].url.lastPathComponent == "demo01.wav",
+                  "n=\(r2.tracks.count)")
+
+        // 正常嵌套： outer.m3u → inner.m3u → demo01.wav，一层内层多一个同文件仍只一条（seenKeys 去重）
+        let inner = root.appendingPathComponent("inner.m3u")
+        let outer = root.appendingPathComponent("outer.m3u")
+        try? "#EXTM3U\ndemo01.wav\n".write(to: inner, atomically: true, encoding: .utf8)
+        try? "#EXTM3U\ninner.m3u\ndemo01.wav\n".write(to: outer, atomically: true, encoding: .utf8)
+        let r3 = LibraryStore.importURLs([outer])
+        ctx.check("导入-m3u 正常嵌套与去重",
+                  r3.tracks.count == 1 && r3.tracks[0].url.lastPathComponent == "demo01.wav",
+                  "n=\(r3.tracks.count)")
+        try? fm.removeItem(at: root)
     }
 
     /// 拖文件夹：递归把子目录里的音频都收进来，歌词跟着目录一起认

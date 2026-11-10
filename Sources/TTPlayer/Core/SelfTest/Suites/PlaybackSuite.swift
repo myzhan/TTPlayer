@@ -110,5 +110,57 @@ struct PlaybackSuite: SelfTestSuite {
                   p.playlist.currentIndex == 1 && p.isPlaying,
                   "idx=\(String(describing: p.playlist.currentIndex)) playing=\(p.isPlaying)")
         p.stop()
+
+        checkClearDerivedPreservesMain(ctx)
+        checkRemoveCurrentHandsOff(ctx)
+    }
+
+    /// 派生组清空不丢 [默认] 现场（bugreport P1#1）
+    private func checkClearDerivedPreservesMain(_ ctx: SelfTestContext) {
+        let p = ctx.player
+        p.clearPlaylist()
+        _ = p.addFiles(ctx.libraryURLs)
+        guard p.playlist.count >= 2 else {
+            ctx.check("清空派生组-不丢 [默认]", false, "list=\(p.playlist.count)"); return
+        }
+        let mainCount = p.playlist.count
+        // 拿两条当前不在收藏里的轨道，确保 toggle 只“加→减”、不会把基线里本来已收藏的条目弄掉
+        let picks = p.playlist.tracks.filter { !p.isFavorite($0) }.prefix(2)
+        for t in picks { _ = p.toggleFavorite(t) }
+        p.switchGroup(.favorites)
+        let favBefore = p.playlist.count
+        p.clearPlaylist()
+        p.switchGroup(.main)
+        ctx.check("清空派生组-不丢 [默认]", p.playlist.count == mainCount,
+                  "expect=\(mainCount) got=\(p.playlist.count) favBefore=\(favBefore)")
+        // 把刚加的收藏重新 toggle 回去，不给基线留尾巴
+        for t in picks { _ = p.toggleFavorite(t) }
+        p.switchGroup(.main)
+    }
+
+    /// 删除正在播放行 → 引擎接手新当前行、不隔空跳过一首（bugreport P2#4）
+    private func checkRemoveCurrentHandsOff(_ ctx: SelfTestContext) {
+        let p = ctx.player
+        p.clearPlaylist()
+        _ = p.addFiles(ctx.libraryURLs)
+        guard p.playlist.count >= 3 else {
+            ctx.check("删除当前行-引擎接手下一首", false, "list=\(p.playlist.count)"); return
+        }
+        let removed = p.playlist.tracks[1]
+        p.setMode(.order)
+        p.playRowAt(1)
+        _ = ctx.waitUntil(4.0) { p.isPlaying && p.currentTime > 0.2 }
+        let expectNext = p.playlist.tracks[2].url.lastPathComponent   // 删 index 1 后 C 顶上来
+        p.removeTracks(at: IndexSet(integer: 1))
+        ctx.check("删除当前行-列表指向下一首",
+                  p.playlist.currentTrack?.url.lastPathComponent == expectNext,
+                  "cur=\(p.playlist.currentTrack?.url.lastPathComponent ?? "nil") expect=\(expectNext)")
+        let handed = ctx.waitUntil(3.0) { p.isPlaying && p.currentTime > 0.1 }
+        ctx.check("删除当前行-引擎接手新当前行", handed,
+                  "playing=\(p.isPlaying) t=\(String(format: "%.2f", p.currentTime))")
+        p.stop()
+        p.setMode(.listLoop)
+        // 把删掉的那行加回来，保证 trackPaths 回到基线
+        _ = p.addTracks([removed])
     }
 }

@@ -201,9 +201,10 @@ final class Playlist {
         case fileName = "文件名"
     }
 
-    /// 按指定字段排序，并让“当前播放曲”仍指向原来那一首
+    /// 按指定字段排序。无当前曲目时照样排序；有当前曲目时排序后仍指向同一个 Track。
     func sort(by key: SortKey, ascending: Bool) {
-        guard tracks.count > 1, let cur = currentTrack else { return }
+        guard tracks.count > 1 else { return }
+        let cur = currentTrack
         func compare(_ a: Track, _ b: Track) -> ComparisonResult {
             switch key {
             case .title: return a.title.localizedStandardCompare(b.title)
@@ -221,7 +222,7 @@ final class Playlist {
             return ascending ? r == .orderedAscending : r == .orderedDescending
         }
         tracks = sorted
-        currentIndex = sorted.firstIndex { $0 === cur }
+        if let cur { currentIndex = sorted.firstIndex { $0 === cur } }
         shuffleHistory.removeAll()
     }
 

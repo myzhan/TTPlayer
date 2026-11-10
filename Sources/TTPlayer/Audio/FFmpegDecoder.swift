@@ -242,8 +242,12 @@ final class FFmpegDecoder: PCMAudioDecoder {
             }
             let take = min(need - produced, stageCount - stageCursor)
             let off = stageCursor * MemoryLayout<Float>.stride
-            stageL.withUnsafeBytes { src in memcpy(out[0].advanced(by: produced), src.baseAddress!.advanced(by: off), take * MemoryLayout<Float>.stride) }
-            stageR.withUnsafeBytes { src in memcpy(out[1].advanced(by: produced), src.baseAddress!.advanced(by: off), take * MemoryLayout<Float>.stride) }
+            stageL.withUnsafeBytes { src in
+                _ = memcpy(out[0].advanced(by: produced), src.baseAddress!.advanced(by: off), take * MemoryLayout<Float>.stride)
+            }
+            stageR.withUnsafeBytes { src in
+                _ = memcpy(out[1].advanced(by: produced), src.baseAddress!.advanced(by: off), take * MemoryLayout<Float>.stride)
+            }
             stageCursor += take
             produced += take
             nextOutPos += Int64(take)
