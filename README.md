@@ -5,7 +5,7 @@
 ## 主要特性
 
 - **格式覆盖广**：mp3、flac、ape、tta、wv、DSD、24/32-bit hi-res、网络电台、CUE 分轨、zip/tar/7z/rar 压缩包直听等，白名单收录 43 个扩展名
-- **单文件分发**：app 包 4.5 MB，通用二进制（Universal 2，同时支持 Intel 与 Apple Silicon）
+- **单文件分发**：通用二进制（Universal 2，同时支持 Intel 与 Apple Silicon），zip 下载 ≈ 4 MB / 解压后 app ≈ 9 MB
 - **低资源占用**：播放态 CPU 与 QQ 音乐同量级（6~8%）；窗口被遮挡或熄屏时自动暂停绘图
 - **可调半透明皮肤**：壳层、内嵌槽、按钮、传输带、底部条共用单一透明度参数，右键菜单内置滑块实时调节
 - **菜单栏驻留**：支持最小化至后台继续播放；集成 macOS 控制中心、锁屏与 Now Playing
@@ -83,7 +83,7 @@ open build/TTPlayer.app
 ## 系统要求
 
 - macOS 12 Monterey 或更新版本（Intel 与 Apple Silicon 均支持）
-- 磁盘空间：解压后 app 约 4.5 MB
+- 磁盘空间：zip 下载 ≈ 4 MB，解压后 app ≈ 9 MB（arm64 + x86_64 两个架构同时包含）
 
 ## 常见问题
 
