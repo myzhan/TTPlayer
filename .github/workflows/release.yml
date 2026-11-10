@@ -1,0 +1,135 @@
+# 打 tag 即发版：推送 v* 标签后编译通用二进制、打包 .app、发到 GitHub Release。
+# 也能在 Actions 页面手动指定一个已有 tag 重跑（workflow_dispatch），用来补传资产或修发布说明。
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要重新发布到哪个已有 tag（例如 v1.16）
+        required: true
+
+# 建 release、传资产要写权限，其余一律只读
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # 只编一次通用二进制：--arch 交叉编译在 Intel 与 Apple Silicon 机器上都能跑，
+    # 所以用哪种 runner 都行，产物始终是 arm64 + x86_64
+    runs-on: macos-15
+    # 编译 + 打包 + 上传正常 3~5 分钟；卡住就让它早点失败，不要挂满 6 小时
+    timeout-minutes: 30
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: 校验 tag 名
+        run: |
+          set -euo pipefail
+          # tag 会进 checkout 的 ref、zip 文件名与 release 标题：只认 v1.16 这种形状，
+          # 手填的 workflow_dispatch 输入也就带不进别的字符了
+          if [[ ! "$TAG" =~ ^v[0-9]+(\.[0-9]+)*$ ]]; then
+            echo "tag 名不合法：$TAG（应形如 v1.16）"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          # 发布说明要按 tag 列提交，得拿全历史与 tag
+          fetch-depth: 0
+
+      - name: 拉 FFmpeg submodule
+        run: |
+          set -euo pipefail
+          # 父仓 fetch-depth: 0 拿全历史；submodule 本身不需要 history，
+          # 直接 --depth 1 拉一层（全量 FFmpeg .git 有几百 MB）。
+          git submodule update --init --depth 1 3rd/ffmpeg
+
+      - name: 安装构建依赖
+        run: brew install nasm yasm
+
+      - name: 取版本号
+        run: |
+          # v1.16 → 1.16：CFBundleShortVersionString 只认点分数字
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: 编译并打包（arm64 + x86_64）
+        env:
+          TTPLAYER_ARCHS: arm64 x86_64
+        run: |
+          TTPLAYER_VERSION="$VERSION" TTPLAYER_BUILD="$GITHUB_RUN_NUMBER" ./build_app.sh
+
+      - name: 校验产物
+        run: |
+          set -euo pipefail
+          APP=build/TTPlayer.app
+          plutil -lint "$APP/Contents/Info.plist"
+          echo "版本号：$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist")"
+          # 文档类型是 build_app.sh 现场问 CoreAudio 生成的，问不到会退兜底名单——所以打出来看一眼
+          echo "文档类型：$(plutil -extract CFBundleDocumentTypes.0.CFBundleTypeExtensions json -o - "$APP/Contents/Info.plist")"
+          archs=$(lipo -archs "$APP/Contents/MacOS/TTPlayer")
+          echo "架构：$archs"
+          [[ "$archs" == *arm64* && "$archs" == *x86_64* ]]
+
+      - name: 压缩成 zip
+        run: |
+          set -euo pipefail
+          # 用 ditto 而不是 zip：保留 app 包的符号链接与扩展属性，用户解压后双击就能开
+          ZIP="TTPlayer-${TAG}-macOS-universal.zip"
+          ditto -c -k --keepParent build/TTPlayer.app "$ZIP"
+          shasum -a 256 "$ZIP" | tee "$ZIP.sha256"
+
+      - name: 生成发布说明
+        run: |
+          set -euo pipefail
+          prev=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          {
+            echo "## 安装"
+            echo
+            echo "1. 解压后把 \`TTPlayer.app\` 拖进「应用程序」（要求 macOS 12+，通用二进制：arm64 + x86_64）。"
+            echo "2. 这个包只有本地自签名（ad-hoc），首次打开请右键 →「打开」；或执行："
+            echo
+            echo '   ```bash'
+            echo '   xattr -dr com.apple.quarantine /Applications/TTPlayer.app'
+            echo '   ```'
+            echo
+            echo "## 校验"
+            echo
+            echo "SHA-256 见附件 \`*.zip.sha256\`。"
+            echo
+            echo "## 本次变更"
+            echo
+            if [[ -n "$prev" ]]; then
+              echo "对比 \`$prev\` → \`$TAG\`："
+              echo
+              git log --no-merges --pretty='- %s' "$prev..$TAG" | head -50 || true
+            else
+              echo "首个 release，最近的提交："
+              echo
+              git log --no-merges --pretty='- %s' -n 20 "$TAG"
+            fi
+          } > notes.md
+
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ZIP="TTPlayer-${TAG}-macOS-universal.zip"
+          # 重跑（workflow_dispatch）时同名 release 已经在了：改说明 + 覆盖资产，不另外建一份
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file notes.md
+            gh release upload "$TAG" "$ZIP" "$ZIP.sha256" --clobber
+          else
+            gh release create "$TAG" "$ZIP" "$ZIP.sha256" \
+              --title "TTPlayer ${TAG}" \
+              --notes-file notes.md \
+              --verify-tag
+          fi

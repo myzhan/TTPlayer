@@ -1,0 +1,11 @@
+.build/
+build/
+ttlogs/
+tttools/
+testlib/
+.DS_Store
+# FFmpeg 源码子模块的编译产物（scripts/build_ffmpeg.sh 生成，3rd/ffmpeg 本身是 submodule 要入库）
+3rd/ffmpeg-build/
+# 调试用的界面截图/探针产物（仓库根目录）
+/*.png
+/*.txt
