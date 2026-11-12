@@ -27,6 +27,13 @@ final class Track: NSObject {
     @Atomic var formatName: String = ""
     /// 解不开时的人话原因（nil = 能解）；属性面板与日志都拿它回答“为什么放不了”
     @Atomic var decodeProblem: String?
+    /// 引用还在、但文件已经不在盘上了（歌单里的失效条目：留着标出来让用户自己决定删不删，
+    /// 不静默丢行，见 requirements F04）。只在按档案键还原时才会被标上
+    @Atomic var missingOnDisk = false
+    /// 曲子里带的 ReplayGain 标签（F02）。nil = 还没解析过；解析过但没标签是 `isEmpty`。
+    /// 两者要分得开：属性面板得能回答“没标签”与“还没读到”是两回事，
+    /// 响度均衡也只在有标签时动音量，绝不自己分析
+    @Atomic var replayGainTags: ReplayGainTags?
 
     /// CUE 分轨来源（nil = 整个文件就是一曲）；一份镜像可以对应多条曲目
     var cue: CueTrackInfo?
@@ -72,11 +79,12 @@ final class Track: NSObject {
         self.album = ""
     }
 
-    /// 由电台地址构造：标题取 host[:port]/尾段，类型先写“网络电台”，
+    /// 由电台地址构造：标题先看用户给这个地址起过什么名（F11 的台名按地址存），
+    /// 没起过就用 host[:port]/尾段；类型先写“网络电台”，
     /// 真正的编码/采样率/码率要等流里回话（见 AudioEngine 的 onRadioInfo）
     convenience init(radio: URL) {
         self.init(url: radio)
-        title = RadioURL.displayName(for: radio)
+        title = RadioStations.shared.displayName(for: radio)
         formatName = Track.radioFormatName
         channels = 2
     }
@@ -97,6 +105,22 @@ final class Track: NSObject {
     var formatLabel: String {
         formatName.isEmpty ? AudioFormats.containerLabel(for: url) : formatName
     }
+
+    /// 格式筛选用的档位名（requirements F05）：只看条目来路，不看异步解析出来的 `formatName`。
+    /// 元数据晚到时筛选菜单不能变来变去（刚勾上「MP3」，解析完变成「MPEG1/2 Layer3」会筛掉正在看的结果）。
+    /// 归档里的条目按条目自己的后缀算（外层是 .zip，把「ZIP」当音频格式没意义）；
+    /// CUE 分轨的 url 就是那份镜像，自然拿到镜像的格式
+    var filterFormat: String {
+        if isRadio { return Track.radioFilterFormat }
+        if let entry = Archive.entryName(of: url) {
+            let ext = (entry as NSString).pathExtension
+            return ext.isEmpty ? "归档" : ext.uppercased()
+        }
+        let ext = url.pathExtension.uppercased()
+        return ext.isEmpty ? "其他" : ext
+    }
+    /// 电台在筛选菜单里自成一档：它没有文件后缀可言
+    static let radioFilterFormat = "电台"
 
     var fileSizeLabel: String {
         let f = ByteCountFormatter()
@@ -119,6 +143,9 @@ final class Track: NSObject {
         if channels > 0 { lines.append(("声道", channels == 2 ? "立体声" : "\(channels) 声道")) }
         if bitRateKbps > 0 { lines.append(("码率", "\(bitRateKbps) kbps")) }
         lines.append(("封面", coverSource.isEmpty ? CoverArt.absentHint : coverSource))
+        if missingOnDisk {
+            lines.append(("文件状态", "已不在磁盘上（引用保留，可以重新定位也可以删掉）"))
+        }
         if let problem = decodeProblem { lines.append(("无法播放", problem)) }
         if let cue {
             // 整盘镜像 + CUE 的情况：属性里说清本轨在镜像中的位置

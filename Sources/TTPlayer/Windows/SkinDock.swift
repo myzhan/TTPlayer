@@ -352,6 +352,16 @@ final class SkinDock {
         return true
     }
 
+    /// 组所在那块屏的可视区：跨屏时子窗（歌词 / 队列）要跟着组走。
+    /// 不能拿 `NSScreen.main` 当基准：它跟着键盘焦点跳，焦点到另一块屏上就会
+    /// 把子窗夹到另一块屏去（组在这块、窗在那块，看着就是「窗不知道跑哪去了」）
+    static func visibleFrame(near point: NSPoint) -> NSRect {
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) {
+            return screen.visibleFrame
+        }
+        return NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+    }
+
     /// 把组挪进屏幕（插拔显示器、存档越界时用）
     func constrainToScreen() {
         guard let screen = NSScreen.main else { return }

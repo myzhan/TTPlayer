@@ -175,13 +175,13 @@ struct UISuite: SelfTestSuite {
         let main = ctx.main
         let w = main.window
         let dock = main.dock
-        // 列表面板：独立窗 + 工具条 7 个按钮
+        // 列表面板：独立窗 + 工具条 9 个按钮（第九键是待播队列）
         let listWin = dock.window(for: .playlist)
         ctx.check("播放列表独立面板",
                   main.listVisible && listWin != nil && listWin!.isVisible
                     && abs(listWin!.frame.width - w.frame.width) < 1.5,
                   "list=\(listWin.map { "\(Int($0.frame.width))×\(Int($0.frame.height))" } ?? "nil")")
-        ctx.check("列表工具条齐全", main.playlistPanel.toolbarButtonCount == 8,
+        ctx.check("列表工具条齐全", main.playlistPanel.toolbarButtonCount == 9,
                   "count=\(main.playlistPanel.toolbarButtonCount)")
         // 启动时的 lit 要跟存档里的面板显隐一致（owner 是建完窗口才接上的）
         let dpStart = main.displayPanel
@@ -292,12 +292,14 @@ struct UISuite: SelfTestSuite {
         }
         lyricWin.contentView?.layoutSubtreeIfNeeded()
         let gap = lyric.contentView.frame.minY
+        // 底下现在让给了校准行（F10）：只要求歌词视图把除那一行以外的地方都占满
+        let rowH = LyricWindow.controlsRowHeight
         ctx.check("歌词秀皮肤窗",
                   lyricWin.styleMask.contains(.borderless) && lyricWin.isVisible
-                    && lyric.contentView.frame.height > lyricWin.frame.height - 20
+                    && lyric.contentView.frame.height > lyricWin.frame.height - rowH - 20
                     && gap <= 8,
                   "lyric=\(Int(lyricWin.frame.width))×\(Int(lyricWin.frame.height)) "
-                    + "viewH=\(Int(lyric.contentView.frame.height)) gap=\(Int(gap))")
+                    + "viewH=\(Int(lyric.contentView.frame.height)) gap=\(Int(gap)) 校准行=\(Int(rowH))")
         ctx.snapshot(lyricWin, named: "shot_lyric_panel")
         // 同宽才好在主面板下面上下叠放：左右边缘必须对齐
         ctx.check("歌词窗与停靠组等宽",
@@ -475,16 +477,16 @@ struct UISuite: SelfTestSuite {
         // 上一轮自检会把收藏写进 testlib/state.json 并在启动时还原，
         // 所以这里先清空，不依赖上一轮留下的状态
         p.groups.clear(.favorites)
-        main.playlistPanel.clickGroup(at: GroupKind.favorites.rawValue)
+        main.playlistPanel.clickGroup(.favorites)
         ctx.check("列表组-空的收藏页给提示",
                   p.playlist.isEmpty && main.playlistPanel.showsEmptyHint,
                   "empty=\(main.playlistPanel.showsEmptyHint) list=\(p.playlist.count) "
                     + "fav=\(p.groups.favoriteKeys.count)")
         ctx.snapshot(main.playlistPanel.window, named: "shot_group_empty")
-        main.playlistPanel.clickGroup(at: GroupKind.main.rawValue)
+        main.playlistPanel.clickGroup(.main)
         if let current { p.toggleFavorite(current) }
         // 走真实点击链路：mouseDown → onClick → 面板 selectGroup
-        main.playlistPanel.clickGroup(at: GroupKind.favorites.rawValue)
+        main.playlistPanel.clickGroup(.favorites)
         ctx.check("列表组-单击我的收藏就切过去",
                   p.activeGroup == .favorites
                     && main.playlistPanel.selectedGroup == .favorites,
@@ -495,24 +497,24 @@ struct UISuite: SelfTestSuite {
                   "list=\(p.playlist.count) fav=\(p.groups.favoriteKeys.count) "
                     + "key=\(current?.identityKey ?? "nil")")
         ctx.snapshot(main.playlistPanel.window, named: "shot_group_favorites")
-        main.playlistPanel.clickGroup(at: GroupKind.recent.rawValue)
+        main.playlistPanel.clickGroup(.recent)
         ctx.check("列表组-单击最近播放就切过去",
                   p.activeGroup == .recent
                     && p.playlist.currentTrack?.identityKey == current?.identityKey,
                   "group=\(p.activeGroup) list=\(p.playlist.count)")
         // 派生组里删除 = 移出收藏/历史，不能顺手把 [默认] 的列表删了
-        main.playlistPanel.clickGroup(at: GroupKind.favorites.rawValue)
+        main.playlistPanel.clickGroup(.favorites)
         p.removeTracks(at: IndexSet(integer: 0))
         ctx.check("列表组-收藏里删除只动收藏",
                   p.groups.favoriteKeys.isEmpty && p.playlist.isEmpty,
                   "fav=\(p.groups.favoriteKeys.count) list=\(p.playlist.count)")
-        main.playlistPanel.clickGroup(at: GroupKind.main.rawValue)
+        main.playlistPanel.clickGroup(.main)
         ctx.check("列表组-切回默认内容不丢",
                   p.activeGroup == .main && p.playlist.count == defaultCount,
                   "list=\(p.playlist.count) 应=\(defaultCount)")
         // 停在派生组时存档不能拿派生组的内容覆盖 [默认] 列表
         if let current { p.toggleFavorite(current) }
-        main.playlistPanel.clickGroup(at: GroupKind.favorites.rawValue)
+        main.playlistPanel.clickGroup(.favorites)
         p.persistNow()
         let saved = LibraryStore.load()
         ctx.check("列表组-存档只写默认组",
@@ -521,7 +523,7 @@ struct UISuite: SelfTestSuite {
                     && !saved.recentKeys.isEmpty,
                   "paths=\(saved.trackPaths.count) 应=\(defaultCount) "
                     + "fav=\(saved.favoriteKeys.count) recent=\(saved.recentKeys.count)")
-        main.playlistPanel.clickGroup(at: GroupKind.main.rawValue)
+        main.playlistPanel.clickGroup(.main)
         ctx.check("列表组-回到默认后右键收藏还在",
                   p.groups.favoriteKeys.count == 1)
     }

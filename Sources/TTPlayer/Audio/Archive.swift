@@ -8,7 +8,7 @@ import Foundation
 ///
 /// 三条硬约束：
 /// - **不解压到磁盘**：条目要么整个进 `Data`（≤ 200 MB），要么以 libarchive 游标
-///   为准做流式重放；LRU 池 5 个 EntryReader，超出淘汰。
+///   为准做流式重放；LRU 池 5 个 cached EntryReader，超出淘汰，streaming 实例不入池。
 /// - **同归档被外部改动**：mtime 变了就把 LRU 里同 path 的 reader 全清掉，避免
 ///   旧偏移读到错位的字节。
 /// - **加密条目**：`archive_entry_is_encrypted` 非 0 时不读，`Archive.list` 里
@@ -29,20 +29,28 @@ enum Archive {
     /// 归档内条目的 URL 写法：`file:///…/album.zip#archive-entry=<percent-encoded path>`
     /// 归档 file URL 保持不变，只在 fragment 里挂条目路径；
     /// `Track.identityKey` 见到这个 fragment 会走 `absoluteString` 分支去重。
-    private static let fragmentPrefix = "archive-entry="
+    /// 前缀对外露出来是给媒体库用的（F08 重新定位要按这一眼认出「这是个归档条目」
+    /// 而不必拆 URLComponents），写法只此一处
+    static let entryFragmentMarker = "archive-entry="
 
     static func makeEntryURL(archive: URL, entry: String) -> URL? {
         guard var c = URLComponents(url: archive, resolvingAgainstBaseURL: false) else { return nil }
         // .alphanumerics 只留字母与数字，其他全 escape；round-trip 靠 removingPercentEncoding
-        c.percentEncodedFragment = fragmentPrefix +
+        c.percentEncodedFragment = entryFragmentMarker +
             (entry.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? entry)
         return c.url
     }
 
+    /// 只问「这个 URL 是不是归档条目、条目叫什么」：不拆 URLComponents。
+    /// 筛选每首曲目都要判一次（见 Track.filterFormat），构造 URLComponents 太贵
+    static func entryName(of url: URL) -> String? {
+        guard let f = url.fragment, f.hasPrefix(entryFragmentMarker) else { return nil }
+        let enc = String(f.dropFirst(entryFragmentMarker.count))
+        return enc.removingPercentEncoding
+    }
+
     static func parseEntryURL(_ url: URL) -> (archive: URL, entry: String)? {
-        guard let f = url.fragment, f.hasPrefix(fragmentPrefix) else { return nil }
-        let enc = String(f.dropFirst(fragmentPrefix.count))
-        guard let entry = enc.removingPercentEncoding else { return nil }
+        guard let entry = entryName(of: url) else { return nil }
         guard var c = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
         c.fragment = nil
         c.percentEncodedFragment = nil
@@ -97,6 +105,9 @@ enum Archive {
 
     /// LRU 池：key = archive path + entry name + mtime。
     /// 单进程内共享，播放器同一时刻只可能有一个真在放，但元数据/封面探测可能并行。
+    /// 只池 cached 实例（字节只读、位置在各会话自己的 Cursor 上，共享无害）；
+    /// streaming 实例背后是那一条全文件唯一的 libarchive 活游标，两个人共用它
+    /// 就会互相把对方顶回头，所以这类实例每次现开、不进池、谁 open 谁持有。
     static func reader(archive: URL, entry: String) -> EntryReader? {
         let attrs = try? FileManager.default.attributesOfItem(atPath: archive.path)
         let mtime = (attrs?[.modificationDate] as? Date) ?? Date.distantPast
@@ -109,6 +120,7 @@ enum Archive {
             return hit
         }
         guard let r = EntryReader(archive: archive, entry: entry) else { return nil }
+        if r.cached == nil { return r }        // streaming：见上面「不入池」的理由
         cache[key] = r
         while cache.count > cacheCapacity, let oldest = cache.first?.key {
             cache.removeValue(forKey: oldest)
@@ -151,17 +163,21 @@ enum Archive {
 ///
 /// 两种模式：
 /// - **cached**：条目 ≤ `Archive.inMemoryCap`，open 时一次读完进 `Data`，
-///   read/seek 就是纯内存拷贝。绝大多数歌/整盘 wav 走这条。
+///   read/seek 就是纯内存拷贝。绝大多数歌/整盘 wav 走这条。字节只读，可以给
+///   多个会话共享，位置由各会话自己的 `Cursor` 拿着。
 /// - **streaming**：条目 > 200 MB 或 size 元数据缺失；保留 libarchive 游标，
 ///   前向读增量，seek 后向 = close+reopen+iterate 到同 entry+skip 到目标偏移。
+///   这一份活游标全文件只有一个，所以这类实例不进 LRU 池（见 `Archive.reader`）。
 final class EntryReader {
     let size: Int64
-    private var offset: Int64 = 0
-    private var cached: Data?
+    /// cached 模式的整份条目字节（只读）；streaming 模式为 nil
+    let cached: Data?
     private let archiveURL: URL
     private let entryName: String
     /// streaming 模式下 live archive 句柄；cached 模式为 nil。
     private var a: UnsafeMutablePointer<archive>?
+    /// streaming 模式的那一个游标（cached 模式不碰它）
+    private var offset: Int64 = 0
     private let lock = NSRecursiveLock()
 
     /// 打开并（若适用）全量缓存。返回 nil 表示打不开或 entry 不存在。
@@ -207,58 +223,92 @@ final class EntryReader {
 
     deinit { closeLive() }
 
-    // MARK: AVIO 回调对偶
+    // MARK: AVIO 读取会话
 
-    /// AVIOContext.read_packet：把最多 count 字节拷进 buf，返回实际读的（0 = EOF，<0 错误）
-    func read(into buf: UnsafeMutableRawPointer?, count: Int) -> Int {
-        guard count > 0, let buf else { return 0 }
-        lock.lock(); defer { lock.unlock() }
-        if let data = cached {
-            let remain = max(0, data.count - Int(offset))
-            let n = min(count, remain)
-            if n <= 0 { return 0 }
+    /// 开一趟读取会话：`ArchiveIO` 每次打开都拿一个新的 Cursor。
+    /// `Cursor()` 起点就是条目开头，不用谁去回卷。
+    func cursor() -> Cursor { Cursor(self) }
+
+    /// FFmpeg 自定义 IO 的读取会话。同一条目可以被两边同时打开（媒体库页在探元数据、
+    /// 用户同时在播），位置存在共享的 reader 上就会互相把对方顶回头，谁都读不到尾
+    final class Cursor {
+        private let reader: EntryReader
+        /// cached 模式下本会话的位置
+        private var local: Int64 = 0
+
+        fileprivate init(_ reader: EntryReader) { self.reader = reader }
+
+        /// 条目字节数（属性面板与自检读它）
+        var size: Int64 { reader.size }
+        /// 本会话当前位置
+        var position: Int64 { reader.cached != nil ? local : reader.livePosition }
+
+        /// AVIOContext.read_packet：把最多 count 字节拷进 buf，返回实际读的字节数。
+        /// **读到尾巴要回 `AVERROR_EOF`，不能回 0**：FFmpeg n9 的 `fill_buffer` 只把
+        /// `AVERROR_EOF` 与负数当结束，回 0 算「这趟没读到东西」，下一趟还是 0，
+        /// 整条线程就原地空转（条目比 IO 缓冲还短时最容易撞上）
+        func read(into buf: UnsafeMutableRawPointer?, count: Int) -> Int {
+            guard let buf, count > 0 else { return EntryReader.eof }
+            guard let data = reader.cached else { return reader.readStreaming(into: buf, count: count) }
+            let n = min(count, max(0, data.count - Int(local)))
+            if n <= 0 { return EntryReader.eof }
             data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Void in
-                _ = memcpy(buf, raw.baseAddress!.advanced(by: Int(offset)), n)
+                _ = memcpy(buf, raw.baseAddress!.advanced(by: Int(local)), n)
             }
-            offset += Int64(n)
+            local += Int64(n)
             return n
         }
-        guard let a else { return -1 }
-        // streaming：直接读，libarchive 会按 entry 尾返回 0
+
+        /// AVIOContext.seek：whence 0=SET/1=CUR/2=END，0x10000=SIZE（只回 size 不动游标）
+        func seek(to pos: Int64, whence: Int32) -> Int64 {
+            // AVIOSEEK_SIZE：AVIO 用它拿总长
+            if whence == 0x10000 { return reader.size }
+            let target: Int64
+            switch whence {
+            case 0: target = pos
+            case 1: target = position + pos
+            case 2: target = (reader.size >= 0 ? reader.size : 0) + pos
+            default: return -1
+            }
+            if target < 0 { return -1 }
+            if reader.cached != nil {
+                local = target
+                return local
+            }
+            return reader.seekStreaming(to: target)
+        }
+    }
+
+    // MARK: 内部
+
+    /// `AVERROR_EOF`：读到头了要回这个，回 0 不算结束（见 `Cursor.read` 的注释）
+    static let eof = Int(cff_averror_eof())
+
+    /// streaming 会话的位置（只在那一条活游标上有意义）
+    fileprivate var livePosition: Int64 {
+        lock.lock(); defer { lock.unlock() }
+        return offset
+    }
+
+    fileprivate func readStreaming(into buf: UnsafeMutableRawPointer, count: Int) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        guard let a else { return EntryReader.eof }
+        // libarchive 到条目尾回 0，翻成 FFmpeg 要的 AVERROR_EOF
         let r = cff_archive_read_all(a, buf, min(count, 65536))
         if r < 0 { return Int(r) }
+        if r == 0 { return EntryReader.eof }
         offset += Int64(r)
         return Int(r)
     }
 
-    /// AVIOContext.seek：whence 0=SET/1=CUR/2=END，0x10000=SIZE（只回 size 不动游标）
-    func seek(to pos: Int64, whence: Int32) -> Int64 {
-        // AVIOSEEK_SIZE：AVIO 用它拿总长
-        if whence == 0x10000 { return size }
+    fileprivate func seekStreaming(to target: Int64) -> Int64 {
         lock.lock(); defer { lock.unlock() }
-        let target: Int64
-        switch whence {
-        case 0: target = pos
-        case 1: target = offset + pos
-        case 2: target = (size >= 0 ? size : 0) + pos
-        default: return -1
-        }
-        if target < 0 { return -1 }
-        if cached != nil {
-            offset = target
-            return offset
-        }
-        // streaming：往前近跳 = skip 增量，往后远跳 = 关闭重开
+        // 往前近跳 = skip 增量，往后远跳 = 关闭重开
         if target >= offset {
             return skipForward(to: target)
         }
         return reopen(skipTo: target)
     }
-
-    /// 当前位置（给上层的诊断/测试用）
-    var currentPosition: Int64 { offset }
-
-    // MARK: 内部
 
     private func skipForward(to target: Int64) -> Int64 {
         let need = target - offset
@@ -322,15 +372,16 @@ final class EntryReader {
 /// - `attach(to:)` 把 AVIOContext 挂到 fmtCtx.pb，并置 `AVFMT_FLAG_CUSTOM_IO`，
 ///   这样 `avformat_close_input` 只关闭容器资源、不动 pb；
 /// - 上层调用 `avformat_close_input` 之后再调 `dispose()` 释放 buffer 和 AVIOContext；
-/// - reader 走 `Unmanaged.passUnretained` 传下去，`Archive.reader(...)` 里的 LRU
-///   池持有强引用；`ArchiveIO` 自己也保留 reader 引用，防止 dispose 前被淘汰。
+/// - cursor 走 `Unmanaged.passUnretained` 传下去，`ArchiveIO` 自己强引用 cursor（cursor
+///   又强引用 reader），所以 dispose 前不会被打断；reader 本体可能在 LRU 里被其
+///   他会话共享，但位置只在本会话的 cursor 上，互相踩不着。
 final class ArchiveIO {
     /// AVIOContext 内部缓冲；一次填充满，FFmpeg 按需消费。
     private static let bufferCapacity = 32 * 1024
 
     private var io: UnsafeMutablePointer<AVIOContext>?
-    /// reader 由 Archive 的 LRU 池持有；这里保留一份引用，防止中途被淘汰后野指针。
-    private let reader: EntryReader
+    /// 本会话的读取游标：上面一条注释里的「强引用 cursor」就是它。
+    private let cursor: EntryReader.Cursor
 
     /// url 不是归档条目时返回 nil（走普通文件路径）；是归档条目但 reader 打不开时抛错。
     /// 抛错以便上层给出「归档打不开」的提示，而不是回退到「把这个 URL 当文件打开」。
@@ -339,25 +390,24 @@ final class ArchiveIO {
         guard let reader = Archive.reader(archive: archive, entry: entry) else {
             throw FFmpegDecoder.DecodeError.cannotOpen(reason: "归档条目打不开：\(entry)")
         }
-        // 重置 reader 游标到 0：LRU 可能返回一个已被前一次探测消费过的实例，
-        // FFmpeg 的 probe_format 不会主动 seek(0)，它假定 pb 起始位置就是文件头。
-        _ = reader.seek(to: 0, whence: 0)
+        // 每次 open 一个新 cursor：起点就是条目开头，FFmpeg 的 probe_format 不会先 seek(0)
+        let cursor = reader.cursor()
         guard let raw = av_malloc(bufferCapacity) else {
             throw FFmpegDecoder.DecodeError.cannotOpen(reason: "IO 缓冲分配失败")
         }
-        let opaque = Unmanaged.passUnretained(reader).toOpaque()
+        let opaque = Unmanaged.passUnretained(cursor).toOpaque()
         guard let io = avio_alloc_context(raw.assumingMemoryBound(to: UInt8.self),
                                           Int32(bufferCapacity), 0, opaque,
                                           readCB, nil, seekCB) else {
             av_free(raw)
             throw FFmpegDecoder.DecodeError.cannotOpen(reason: "IO 上下文分配失败")
         }
-        return ArchiveIO(io: io, reader: reader)
+        return ArchiveIO(io: io, cursor: cursor)
     }
 
-    private init(io: UnsafeMutablePointer<AVIOContext>, reader: EntryReader) {
+    private init(io: UnsafeMutablePointer<AVIOContext>, cursor: EntryReader.Cursor) {
         self.io = io
-        self.reader = reader
+        self.cursor = cursor
     }
 
     /// 把自定义 IO 挂到容器上下文；调用方随后必须 `avformat_open_input(&fmt, nil, nil, nil)`。
@@ -378,14 +428,14 @@ final class ArchiveIO {
     deinit { dispose() }
 
     private static let readCB: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutablePointer<UInt8>?, Int32) -> Int32 = { opq, buf, size in
-        guard let opq, let buf, size > 0 else { return 0 }
-        let reader = Unmanaged<EntryReader>.fromOpaque(opq).takeUnretainedValue()
-        return Int32(reader.read(into: buf, count: Int(size)))
+        guard let opq, let buf, size > 0 else { return Int32(cff_averror_invalid_data()) }
+        let cursor = Unmanaged<EntryReader.Cursor>.fromOpaque(opq).takeUnretainedValue()
+        return Int32(cursor.read(into: buf, count: Int(size)))
     }
 
     private static let seekCB: @convention(c) (UnsafeMutableRawPointer?, Int64, Int32) -> Int64 = { opq, pos, whence in
         guard let opq else { return -1 }
-        let reader = Unmanaged<EntryReader>.fromOpaque(opq).takeUnretainedValue()
-        return reader.seek(to: pos, whence: whence)
+        let cursor = Unmanaged<EntryReader.Cursor>.fromOpaque(opq).takeUnretainedValue()
+        return cursor.seek(to: pos, whence: whence)
     }
 }

@@ -165,10 +165,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // 退出时及时保存：整档（曲库与设置）+ 播放现场（当前曲/进度/待播次序）
         PlayerController.shared.persistNow()
+        PlayerController.shared.flushScene()
+        // 媒体库监控（F08）：目录流与播放无关，不摘就一直挂在系统里
+        PlayerController.shared.shutdownLibrary()
         mainController?.persistWindowLayout()
         NowPlaying.clear()
-        Diagnostics.log("退出，已持久化播放列表与窗口布局")
+        Diagnostics.log("退出，已持久化播放列表、播放现场与窗口布局")
     }
 
     // 主窗口关闭 = 隐藏（由 MainWindowController 的 windowShouldClose 处理）

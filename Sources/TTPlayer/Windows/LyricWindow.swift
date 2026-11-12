@@ -3,16 +3,32 @@ import AppKit
 /// 歌词秀：独立无边框皮肤窗（不加入停靠组，可单独置顶/拖动）
 /// 当前行居中高亮，其余行按距离渐隐，随播放时间平滑滚动
 /// 顶部不再有标题条：开关走主面板底部的「歌词」键，右上角只留一个置顶小键
+/// 底部一条校准行（F10）：提前/延后 0.5 秒、重置与当前偏移
 /// 宽度始终与停靠组一致（上下叠放时左右边缘对齐），存档只沿用位置与高度
 final class LyricWindow: NSObject {
     let window: SkinPanelWindow
     private let view: LyricContentView
     private let pinButton: TTButton
+    /// 校准行三件：与⌥←/⌥→/⌥0 是同一个入口的两个形体，走的都是控制层那一个方法
+    private let shiftPrev: TTButton
+    private let shiftNext: TTButton
+    private let shiftReset: TTButton
+    /// 当前偏移（或一句「为什么按不动」）
+    private let shiftField = NSTextField(labelWithString: "")
+    /// 三个键各自本来的悬停说明：能用时念它，不能用时换成「为什么不能用」
+    private var shiftHints: [(TTButton, String)] = []
     private let controller = PlayerController.shared
     private var syncTimer: Timer?
+    /// 一次性说明（到边界、没歌词）挂到什么时候：值真变了就不挂，
+    /// 状态格里那句新偏移就是答复，没必要再叠一层提示
+    private var noteText: String?
+    private var noteUntil = Date.distantPast
 
     /// 默认高度（宽度由停靠组决定）
     static let defaultHeight: CGFloat = 260
+    /// 底部校准行占的高度（含上下留白）：歌词视图不再顶到窗口下沿，
+    /// 免得按钮压在字上。界面自检按这个数算视图高度
+    static let controlsRowHeight: CGFloat = 26
     /// 建档时是否用上了存档的位置（否则由主面板贴到组下方）
     private(set) var usedSavedFrame = false
 
@@ -22,6 +38,13 @@ final class LyricWindow: NSObject {
         window = SkinPanelWindow(width: w, height: Self.defaultHeight, title: "歌词秀")
         pinButton = TTButton(.symbol("pin"), target: nil, action: nil,
                              size: NSSize(width: 22, height: 18))
+        // 校准行用文字键（与主面板那三个文字键同一类造型）：±0.5 秒写在 tooltip 与状态格里
+        shiftPrev = TTButton(.title("提前"), target: nil, action: nil,
+                             size: NSSize(width: 42, height: 18), face: .glass)
+        shiftNext = TTButton(.title("延后"), target: nil, action: nil,
+                             size: NSSize(width: 42, height: 18), face: .glass)
+        shiftReset = TTButton(.title("重置"), target: nil, action: nil,
+                              size: NSSize(width: 42, height: 18), face: .glass)
         view = LyricContentView(frame: rect)
         super.init()
 
@@ -30,26 +53,63 @@ final class LyricWindow: NSObject {
         pinButton.target = self
         pinButton.action = #selector(togglePin)
         pinButton.toolTip = "总在最前"
+        for (btn, say, step) in [(shiftPrev, "歌词提前 0.5 秒（⌥←）", -PlayerController.lyricShiftStep),
+                                 (shiftNext, "歌词延后 0.5 秒（⌥→）", PlayerController.lyricShiftStep)] {
+            btn.target = self
+            btn.action = #selector(shiftTapped(_:))
+            btn.toolTip = say
+            btn.tag = Int(step * 10)          // ±5 ↔ ±0.5 秒：tag 存十进制，免得浮点比较
+            shiftHints.append((btn, say))
+        }
+        let resetHint = "把这一曲的歌词校准归零（⌥ 0）"
+        shiftReset.target = self
+        shiftReset.action = #selector(shiftResetTapped)
+        shiftReset.toolTip = resetHint
+        shiftHints.append((shiftReset, resetHint))
+        shiftField.font = NSFont.systemFont(ofSize: 11)
+        shiftField.textColor = Theme.textSecondary
+        shiftField.alignment = .right
+        shiftField.lineBreakMode = .byTruncatingHead
 
         pinButton.translatesAutoresizingMaskIntoConstraints = false
         view.translatesAutoresizingMaskIntoConstraints = false
+        for btn in [shiftPrev, shiftNext, shiftReset] { btn.translatesAutoresizingMaskIntoConstraints = false }
+        shiftField.translatesAutoresizingMaskIntoConstraints = false
         window.skinRoot.addSubview(view)
         window.skinRoot.addSubview(pinButton)
+        window.skinRoot.addSubview(shiftPrev)
+        window.skinRoot.addSubview(shiftNext)
+        window.skinRoot.addSubview(shiftReset)
+        window.skinRoot.addSubview(shiftField)
         NSLayoutConstraint.activate([
             view.topAnchor.constraint(equalTo: window.skinRoot.topAnchor, constant: 6),
             view.leadingAnchor.constraint(equalTo: window.skinRoot.leadingAnchor, constant: 6),
             view.trailingAnchor.constraint(equalTo: window.skinRoot.trailingAnchor, constant: -6),
-            view.bottomAnchor.constraint(equalTo: window.skinRoot.bottomAnchor, constant: -6),
+            // 底下留出校准行那一挡（不然按钮与字叠在一起）
+            view.bottomAnchor.constraint(equalTo: shiftPrev.topAnchor, constant: -2),
 
-            // 置顶键浮在右上角：不再是“标题条里的一排键”
             pinButton.trailingAnchor.constraint(equalTo: window.skinRoot.trailingAnchor, constant: -7),
             pinButton.topAnchor.constraint(equalTo: window.skinRoot.topAnchor, constant: 7),
             pinButton.widthAnchor.constraint(equalToConstant: 22),
             pinButton.heightAnchor.constraint(equalToConstant: 18),
+
+            shiftPrev.leadingAnchor.constraint(equalTo: window.skinRoot.leadingAnchor, constant: 8),
+            shiftPrev.bottomAnchor.constraint(equalTo: window.skinRoot.bottomAnchor, constant: -6),
+            shiftNext.leadingAnchor.constraint(equalTo: shiftPrev.trailingAnchor, constant: 4),
+            shiftNext.centerYAnchor.constraint(equalTo: shiftPrev.centerYAnchor),
+            shiftReset.leadingAnchor.constraint(equalTo: shiftNext.trailingAnchor, constant: 4),
+            shiftReset.centerYAnchor.constraint(equalTo: shiftPrev.centerYAnchor),
+
+            shiftField.trailingAnchor.constraint(equalTo: window.skinRoot.trailingAnchor, constant: -8),
+            shiftField.centerYAnchor.constraint(equalTo: shiftPrev.centerYAnchor),
+            shiftField.widthAnchor.constraint(equalToConstant: 176),
+            shiftField.leadingAnchor.constraint(greaterThanOrEqualTo: shiftReset.trailingAnchor,
+                                                constant: 6),
         ])
 
         usedSavedFrame = restoreFrame()
         applyWidthLimits(w)
+        refreshShiftRow()
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(trackChanged(_:)), name: .ttTrackChanged, object: nil)
         nc.addObserver(self, selector: #selector(willClose(_:)),
@@ -60,6 +120,63 @@ final class LyricWindow: NSObject {
 
     /// 歌词绘制视图（自检用：确认它直接顶到窗口上沿，不再有标题条）
     var contentView: NSView { view }
+
+    // MARK: - 校准行（F10）
+
+    /// 自检入口：状态格当前那句话
+    var shiftLabelText: String { shiftField.stringValue }
+    /// 自检入口：歌词秀当前高亮那一行（与主显示区那句对得上才叫「同一校准结果」）
+    var currentLineText: String { view.currentLineText }
+    /// 自检入口：状态格悬停那一句完整说明（含上下限与「不改写 .lrc」）
+    var shiftToolTip: String { shiftField.toolTip ?? "" }
+    /// 自检入口：三个键的当前可用性（没歌词时应全部按不动）
+    var shiftButtons: [TTButton] { [shiftPrev, shiftNext, shiftReset] }
+
+    @objc private func shiftTapped(_ sender: TTButton) {
+        let before = controller.lyricShift
+        let said = controller.nudgeLyricShift(Double(sender.tag) / 10)
+        note(said, changed: controller.lyricShift != before)
+    }
+
+    @objc private func shiftResetTapped() {
+        let before = controller.lyricShift
+        let said = controller.resetLyricShift()
+        note(said, changed: before != 0 && controller.lyricShift == 0)
+    }
+
+    /// 值真变了：不挂提示，状态格自己会说；值没变（到边界、没歌词）：
+    /// 这才是需要说清「为什么按了不动」的一次性说明，挂三秒
+    private func note(_ text: String, changed: Bool) {
+        if changed {
+            noteText = nil
+        } else {
+            noteText = text
+            noteUntil = Date().addingTimeInterval(3)
+        }
+        refreshShiftRow()
+    }
+
+    /// 把校准行对齐到当前曲目：没歌词就禁用三个键并把原因写在状态格里
+    private func refreshShiftRow() {
+        let applies = controller.lyricShiftApplies
+        for (btn, hint) in shiftHints {
+            btn.isEnabled = applies
+            // 自绘键不读 isEnabled，用透明度把「按不动」画出来
+            btn.alphaValue = applies ? 1 : 0.42
+            // 键按不动时悬停也要说清「为什么不动」，否则只当界面坏了
+            btn.toolTip = applies ? hint : (controller.lyricShiftProblem ?? hint)
+        }
+        shiftField.toolTip = controller.lyricShiftDetail
+        if let pending = noteText {
+            if Date() < noteUntil {
+                shiftField.stringValue = pending
+                return
+            }
+            noteText = nil
+        }
+        shiftField.stringValue = applies ? "校准：\(controller.lyricShiftText)"
+            : (controller.lyricShiftProblem ?? "没有歌词可校准")
+    }
 
     /// 只沿用存档的位置与高度：宽度跟着停靠组走（旧存档的 520 宽会被对齐到组宽）
     @discardableResult
@@ -93,9 +210,10 @@ final class LyricWindow: NSObject {
 
     /// 首次打开且没有存档时贴在停靠组下方（同宽、左对齐），上下叠放就是一块
     func placeBelow(groupLeft: CGFloat, groupBottom: CGFloat) {
-        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         var f = window.frame
         f.origin = NSPoint(x: groupLeft, y: groupBottom - SkinDock.gap - f.height)
+        // 夹回组所在那块屏：拿 NSScreen.main 会在多屏时把歌词窗夹到另一块屏上
+        let screen = SkinDock.visibleFrame(near: NSPoint(x: groupLeft + f.width / 2, y: groupBottom - 1))
         f.origin.x = min(max(f.minX, screen.minX), max(screen.minX, screen.maxX - f.width))
         f.origin.y = min(max(f.minY, screen.minY), max(screen.minY, screen.maxY - f.height))
         window.setFrame(f, display: false)
@@ -114,6 +232,8 @@ final class LyricWindow: NSObject {
 
     @objc private func trackChanged(_ note: Notification) {
         view.resetScroll()
+        // 换曲等于换了一整套校准量（各轨各存），状态行与按键可用性当场跟着走
+        refreshShiftRow()
     }
 
     func showAndSync() {
@@ -130,8 +250,14 @@ final class LyricWindow: NSObject {
         guard syncTimer == nil else { return }
         let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             guard let self else { return }
-            let time = self.controller.isPlaying ? self.controller.currentTime : -1
-            self.view.update(lyric: self.controller.lyric, currentTime: time)
+            // 暂停时引擎报的就是停住的那一秒，照样能查行（拖过进度条再停下，两处得说同一句）；
+            // 只有真的没在放东西（没曲目）才保持原位不重算
+            let time = self.controller.currentTrack == nil ? -1 : self.controller.currentTime
+            // 滚动只认控制器那一份校准量：与主显示区查行用的是同一个数，两处才不会各说一套
+            self.view.update(lyric: self.controller.lyric, currentTime: time,
+                             delay: self.controller.lyricShift)
+            // 校准行也挂在这个节拍上：一次性说明（到边界、没歌词）到点自己消失
+            self.refreshShiftRow()
         }
         RunLoop.main.add(t, forMode: .common)
         syncTimer = t
@@ -184,7 +310,14 @@ final class LyricContentView: NSView {
         needsDisplay = true
     }
 
-    func update(lyric: Lyric?, currentTime: Double) {
+    /// 自检入口：当前高亮的那一行（与主显示区同一句才是「两处用同一校准结果」）
+    var currentLineText: String {
+        lines.indices.contains(currentIndex) ? lines[currentIndex].text : ""
+    }
+
+    /// 滚动位置按「歌词自己的时间轴」算：整盘词补段起点、用户校准（正值 = 延后）减掉，
+    /// 换算只走 `Lyric.alignedTime` 这一条路，与控制层找当前行那一句一模一样
+    func update(lyric: Lyric?, currentTime: Double, delay: Double = 0) {
         guard let lyric, !lyric.isEmpty else {
             // 无歌词：只在状态变化时重绘
             let empty = LyricStateDescriptor(lyric: lyric)
@@ -200,25 +333,24 @@ final class LyricContentView: NSView {
         lastEmptyDescriptor = nil
         hasLyric = true
         lines = lyric.lines
-        let idx = currentTime >= 0 ? lyric.lineIndex(at: currentTime) : currentIndex
-        if idx != currentIndex {
-            currentIndex = idx
-        }
+        // 没在播（传 -1）时不重新查行：换曲刚回到顶部、暂停那一瞬的余量都要接着走完，
+        // 但不能再拿一个没有意义的播放位置去算行
+        let aligned = currentTime >= 0 ? lyric.alignedTime(segmentTime: currentTime, delay: delay) : nil
+        if let aligned { currentIndex = lyric.lineIndex(at: aligned) }
+        let idx = currentIndex
         // 目标位置：当前行居中
         let lineH: CGFloat = Self.lineHeight
         targetOffset = CGFloat(max(0, idx)) * lineH - (bounds.height - lineH) / 2
         // 行内微滚动（两行之间线性过渡）
-        if idx >= 0, idx + 1 < lines.count {
+        if let aligned, idx >= 0, idx + 1 < lines.count {
             let cur = lines[idx], next = lines[idx + 1]
             let span = max(0.001, next.time - cur.time)
-            let f = min(1, max(0, (currentTime - cur.time) / span))
+            let f = min(1, max(0, (aligned - cur.time) / span))
             targetOffset += CGFloat(f) * lineH
         }
         // 平滑逼近
         scrollOffset += (targetOffset - scrollOffset) * 0.12
-        if abs(targetOffset - scrollOffset) > 0.3 {
-            needsDisplay = true
-        } else if currentTime >= 0 {
+        if abs(targetOffset - scrollOffset) > 0.3 || currentTime >= 0 {
             needsDisplay = true
         }
     }

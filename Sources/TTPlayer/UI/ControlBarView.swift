@@ -11,6 +11,9 @@ final class DisplayPanelView: NSView {
     private let channelField = NSTextField(labelWithString: "立体声")
     private let statusField = NSTextField(labelWithString: "状态: 停止")
     private let codecField = NSTextField(labelWithString: "")
+    /// 主显示区的歌词两行（F10）：只念控制层查出来的那一行，查行的时间轴与歌词秀共用
+    private let lyricField = NSTextField(labelWithString: "")
+    private let lyricNextField = NSTextField(labelWithString: "")
     private let coverView = CoverView()
     private let bottomStrip = GradientView()
     private let volumeWell = VolumeWellView()
@@ -70,16 +73,26 @@ final class DisplayPanelView: NSView {
         codecField.textColor = Theme.textSecondary
         codecField.lineBreakMode = .byTruncatingTail
         codecField.alignment = .right
+        // 当前行比下一行重一档，跟歌词秀一个道理：眼睛先落在要唱的那句上
+        lyricField.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        lyricField.textColor = Theme.textPrimary
+        lyricField.lineBreakMode = .byTruncatingTail
+        lyricNextField.font = Theme.smallFont
+        lyricNextField.textColor = Theme.textSecondary
+        lyricNextField.lineBreakMode = .byTruncatingTail
 
         coverView.cornerRadius = 3
 
-        for v in [songMarquee, channelField, statusField, codecField, coverView, bottomStrip] {
+        for v in [songMarquee, channelField, statusField, codecField, lyricField, lyricNextField,
+                  coverView, bottomStrip] {
             v.translatesAutoresizingMaskIntoConstraints = false
         }
         well.addSubview(songMarquee)
         well.addSubview(channelField)
         well.addSubview(statusField)
         well.addSubview(codecField)
+        well.addSubview(lyricField)
+        well.addSubview(lyricNextField)
         well.addSubview(coverView)
 
         // 底部条：更深的玻璃条，装音量、传输键、三个文字键
@@ -146,12 +159,24 @@ final class DisplayPanelView: NSView {
             statusField.topAnchor.constraint(equalTo: songMarquee.bottomAnchor, constant: 2),
             statusField.trailingAnchor.constraint(equalTo: channelField.trailingAnchor),
             statusField.heightAnchor.constraint(equalToConstant: 18),
-            statusField.widthAnchor.constraint(equalToConstant: 120),
+            statusField.widthAnchor.constraint(equalToConstant: 150),
 
             codecField.topAnchor.constraint(equalTo: statusField.bottomAnchor, constant: 2),
             codecField.trailingAnchor.constraint(equalTo: channelField.trailingAnchor),
             codecField.heightAnchor.constraint(equalToConstant: 16),
             codecField.widthAnchor.constraint(equalToConstant: 190),
+
+            // 歌词两行就填在封面右侧、状态/格式那两列左侧那块空档里（不新加高度，
+            // 窄窗时先截尾，传输键那一行不受影响）
+            lyricField.topAnchor.constraint(equalTo: statusField.topAnchor),
+            lyricField.leadingAnchor.constraint(equalTo: coverView.trailingAnchor, constant: 10),
+            lyricField.trailingAnchor.constraint(equalTo: statusField.leadingAnchor, constant: -8),
+            lyricField.heightAnchor.constraint(equalToConstant: 18),
+
+            lyricNextField.topAnchor.constraint(equalTo: codecField.topAnchor),
+            lyricNextField.leadingAnchor.constraint(equalTo: lyricField.leadingAnchor),
+            lyricNextField.trailingAnchor.constraint(equalTo: codecField.leadingAnchor, constant: -8),
+            lyricNextField.heightAnchor.constraint(equalToConstant: 16),
 
             coverView.topAnchor.constraint(equalTo: songMarquee.bottomAnchor, constant: 6),
             coverView.leadingAnchor.constraint(equalTo: well.leadingAnchor, constant: 8),
@@ -245,6 +270,11 @@ final class DisplayPanelView: NSView {
     var volumeView: NSView { volumeWell }
     /// 供自检：显示区那行说明文字（格式信息 / 放不起来的原因 / 未入表提示 / 未播放提示都走它）
     var noteText: String { codecField.stringValue }
+    /// 供自检：状态那一行（播放/暂停/直播 + 睡眠定时器的剩余时间缀在后面，F09）
+    var statusText: String { statusField.stringValue }
+    /// 供自检：主显示区那两行歌词（与歌词秀走同一份校准结果，两处必须一模一样）
+    var lyricText: String { lyricField.stringValue }
+    var lyricNextText: String { lyricNextField.stringValue }
     /// 供自检：显示区左上贴的是当前曲目的封面（而不是占位光盘）
     var showsTrackCover: Bool { coverView.showsCoverImage && coverView.image === controller.currentTrack?.cover }
     /// 点封面弹大图窗（由主面板控制器决定开哪个窗）
@@ -269,6 +299,12 @@ final class DisplayPanelView: NSView {
         nc.addObserver(self, selector: #selector(playlistChanged), name: .ttPlaylistChanged, object: nil)
         // 电台状态/正在播变化：格式行与状态字都要跟着变
         nc.addObserver(self, selector: #selector(radioChanged(_:)), name: .ttRadioChanged, object: nil)
+        // 输出设备换了/拔了：那一行要说为什么没声（F07）
+        nc.addObserver(self, selector: #selector(outputChanged(_:)), name: .ttOutputChanged, object: nil)
+        // 睡眠定时器走了一格：状态行后缀的剩余时间要跟着跳（F09）
+        nc.addObserver(self, selector: #selector(sleepChanged(_:)), name: .ttSleepChanged, object: nil)
+        // 歌词行换了（包括查行被校准量扳回去那一档）：主显示区跟着说一句（F10）
+        nc.addObserver(self, selector: #selector(lyricChanged(_:)), name: .ttLyricChanged, object: nil)
     }
 
     // MARK: - 状态
@@ -281,26 +317,36 @@ final class DisplayPanelView: NSView {
     }
 
     private func refreshTrack() {
+        // 设备层面的问题优先于格式信息：这时候放不出声，先回答为何没声（完整原因悬在 tooltip）
+        let outputIssue = controller.outputProblem
+        if let problem = outputIssue {
+            codecField.stringValue = "输出：" + Self.brief(problem)
+            codecField.toolTip = problem
+        } else {
+            codecField.toolTip = nil
+        }
         guard let track = controller.currentTrack else {
             // 没有当前曲：封面格自己画占位光盘，不再摆 SF Symbol
             coverView.image = nil
-            codecField.stringValue = idleHint
+            if outputIssue == nil { codecField.stringValue = idleHint }
             songMarquee.text = "千千静听 复刻版"
             return
         }
         coverView.image = track.cover
-        if let problem = controller.playbackProblem {
-            // 这一行本来放格式信息，播不动的时候改成说人话（完整原因在属性面板）
-            codecField.stringValue = "放不了：" + Self.brief(problem)
-        } else if track.isRadio {
-            // 电台：参数由流里报，后面跟一句直播状态（正在连接/直播中/重连中）
-            let sr = track.sampleRate > 0 ? String(format: " %.1fk", track.sampleRate / 1000) : ""
-            let head = track.bitRateKbps > 0 ? "\(track.formatLabel) \(track.bitRateKbps)k" : track.formatLabel
-            codecField.stringValue = "\(head)\(sr) · \(controller.radioStateText)"
-        } else {
-            let sr = track.sampleRate > 0 ? String(format: "%.1fk", track.sampleRate / 1000) : ""
-            codecField.stringValue = "\(track.formatLabel) \(track.bitRateKbps)k · \(sr) · "
-                + (track.channels == 2 ? "立体声" : "\(track.channels)声道")
+        if outputIssue == nil {
+            if let problem = controller.playbackProblem {
+                // 这一行本来放格式信息，播不动的时候改成说人话（完整原因在属性面板）
+                codecField.stringValue = "放不了：" + Self.brief(problem)
+            } else if track.isRadio {
+                // 电台：参数由流里报，后面跟一句直播状态（正在连接/直播中/重连中）
+                let sr = track.sampleRate > 0 ? String(format: " %.1fk", track.sampleRate / 1000) : ""
+                let head = track.bitRateKbps > 0 ? "\(track.formatLabel) \(track.bitRateKbps)k" : track.formatLabel
+                codecField.stringValue = "\(head)\(sr) · \(controller.radioStateText)"
+            } else {
+                let sr = track.sampleRate > 0 ? String(format: "%.1fk", track.sampleRate / 1000) : ""
+                codecField.stringValue = "\(track.formatLabel) \(track.bitRateKbps)k · \(sr) · "
+                    + (track.channels == 2 ? "立体声" : "\(track.channels)声道")
+            }
         }
         // 电台真在唱时，“正在播”的歌名比台名更有用；两个都写上
         if track.isRadio, !controller.radioNowPlaying.isEmpty {
@@ -329,6 +375,45 @@ final class DisplayPanelView: NSView {
 
     @objc private func playStateChanged(_ note: Notification) { refreshState() }
 
+    /// 输出设备变化：重画那一行（拔了要说不可用，接回来/换了要把那句说出去的话收回来）
+    @objc private func outputChanged(_ note: Notification) { refreshTrack() }
+
+    /// 定时器变化：只有状态行那一截后缀要重算，格式行不跟着动
+    @objc private func sleepChanged(_ note: Notification) { refreshState() }
+
+    /// 歌词行：控制层已经按校准后的时间轴查好了，这里只负责念，不再算一次
+    @objc private func lyricChanged(_ note: Notification) {
+        let info = note.userInfo ?? [:]
+        pendingLine = (info["line"] as? String) ?? ""
+        pendingNext = (info["next"] as? String) ?? ""
+        applyLyricLine()
+        lyricField.toolTip = PlayerController.shared.lyricShiftDetail
+    }
+
+    private var pendingLine = ""
+    private var pendingNext = ""
+    /// 一次性说明的代号：新的歌词行一到就把它推一把，旧的那份定时回来也盖不上现在
+    private var lyricFlashToken = 0
+
+    private func applyLyricLine() {
+        lyricFlashToken += 1
+        lyricField.stringValue = pendingLine
+        lyricNextField.stringValue = pendingNext
+    }
+
+    /// 快捷键按下去的答复落在这一行歌词上：歌词秀没开时也要有个地方说话，
+    /// 三秒后回到歌词本身（期间来了新的歌词行就以新的为准）
+    func flashLyricNote(_ text: String) {
+        lyricFlashToken += 1
+        let token = lyricFlashToken
+        lyricField.stringValue = text
+        lyricNextField.stringValue = ""
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, self.lyricFlashToken == token else { return }
+            self.applyLyricLine()
+        }
+    }
+
     private func refreshState() {
         let playing = controller.isPlaying
         // 电台的“播放”就是直播：没有进度可言，用直播/停播两个字才不让人误会
@@ -339,6 +424,14 @@ final class DisplayPanelView: NSView {
                 + (playing ? "播放" : (controller.currentTrack == nil ? "停止" : "暂停"))
         }
         playButton.content = .symbol(playing ? "pause.fill" : "play.fill")
+        // 睡眠定时器设着就缀一句（F09）：「剩 12:34」或「播完停」。
+        // 完整那句（等哪一首、淡出开没开）悬在 tooltip 与属性面板里，窄窄一行放不下
+        if let hint = controller.sleepMenuHint {
+            statusField.stringValue += " \(hint)"
+            statusField.toolTip = controller.sleepDetailText
+        } else {
+            statusField.toolTip = controller.sleepNote
+        }
         if playing {
             spectrumView.startAnimating()
         } else {

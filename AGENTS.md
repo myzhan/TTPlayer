@@ -5,8 +5,8 @@
 ## TL;DR
 
 1. 编译必须 **0 error 0 warning**（debug 与 release 都过）
-2. 自检必须 **311 PASS / 0 FAIL**（环境相关 SKIP 不算失败：TTA 真码流不入库、APE 真引擎需 `brew install mac`、归档 rar 本机无 CLI）
-3. 用户 `testlib/state.json` **前后逐字节相同**（回归纪律）
+2. 全量自检必须 **1293 PASS / 0 FAIL**（debug 全量实测约 291 s：radio 46 s、gapless 48 s、gain 88 s 是三大头；条数随功能增长，以当前仓库实跑为准；环境相关 SKIP 不算失败：TTA 真码流不入库、APE 真引擎需 `brew install mac`、归档 rar 本机无 CLI、本机拿不到「零输出设备」环境。另：`性能-常驻内存` 与 `性能-启动/首帧` 只认热轮，连着构建的忙轮会虚高，见 PerfSuite 注释）
+3. 用户 `~/Library/Application Support/TTPlayer/state.json` **前后逐字节相同**（回归纪律；`scripts/selftest.sh` 自己用 shasum 校验，测试存档走 `TTPLAYER_TESTDIR`）
 4. 本文只留开发约定，不写版本历史——每版改了什么、靠什么验证，看 `git log` 与 GitHub Release
 5. 音频素材不入仓（除了 `testlib/` 现有的短样本）；FFmpeg 产物 `3rd/ffmpeg-build/` 走 `.gitignore`
 
@@ -115,7 +115,7 @@ testlib/                    # 自检素材（.gitignore，运行时现射）
 ### state.json 持久化
 
 - `AppState`（`LibraryStore.swift`）用**宽容解码**：每字段 `decodeIfPresent` + 兜底默认值。加字段必须同步加 `case`，否则旧档解到新档缺 key 会整份失败、退化成空默认、把用户曲库丢掉
-- 用户 `testlib/state.json` 是回归基线，跑自检/改动前后应 **逐字节相同**（`sha1sum` 对比）
+- 用户 `~/Library/Application Support/TTPlayer/state.json` 是回归基线，跑自检前后应 **逐字节相同**（`scripts/selftest.sh` 用 shasum 对比并透传失败）；自检自己的存档走 `TTPLAYER_TESTDIR`，两者不得串
 
 ### 关闭 / 最小化
 
@@ -139,6 +139,12 @@ testlib/                    # 自检素材（.gitignore，运行时现射）
 5. **`swift build` 的链接顺序**：`avformat → avcodec → swresample → avutil`，缺 `-lz -lm -lpthread -framework CoreFoundation/CoreVideo/CoreMedia` 会 undefined symbols。
 6. **SwiftPM `-Xcc` 传头路径**：`cSettings.unsafeFlags -I` 只作用于 CFFmpeg 自身；Swift 侧 `import CFFmpeg` 走 clang importer，还要 `swiftSettings.unsafeFlags(["-Xcc", "-I..."])`，否则 umbrella header 里的 `<libavutil/...>` 找不到。
 7. **APE 标签样本要写在 `NSTemporaryDirectory()/ttplayer-ape`**，别写 `testlib/` 根目录，否则会被 `scanLibrary()` 当曲库把 m3u 展开/转码矩阵全打乱。
+8. **电台的「过期回调」有三种，各挡一处**（F11）：① 退避定时器要登记连接代号（`RadioPlayer.generation`），否则用户在断线退避中点了「重试」，新流刚连上就被旧定时器掐掉重连；② `startRadioPlayback()` 撞上一个还挂着「要切的台」的淡出时必须直接返回，否则 `resetRadioFade()` 会把那条待办一起丢掉，重试按下去没反应（自检表现为会话号不翻页）；③ 晚到的 `.playing` 状态不能把界面点亮——`engine.stop()` 之后 `isRadio` 依旧为真，靠它挡不住，只认 `radioWantsPlay`。
+9. **`LocalRadioStream` 的 `config` 只对下一个连接生效**（`handle()` 里快照）：改剧本要靠重连才生效；`lastDropBy` 说的是「最近一次掉线由谁掐」，剧本不再掐线了它也不会自己变回去，验「不再掉线」得看连接数冻住。
+10. **电台 `stop()` 是「装载着但停住」**（跟本地文件一致，再按播放就是重连这个台）：`isRadio` 不会被抹掉，自检要拿它当「擦干净」的证据就错；凭据是 `!isPlaying && radioStateText == "未连接"`。
+11. **音频取证不能单点读一窗**：① 频谱——`SpectrumView` 按窗口 occlusion 驱动 `analyzer.setEnabled(false)`，窗口不可见时 PCM 再真 `bars` 也是 0，自检一律走 `ctx.spectrumEnergy`（测量期间临时 enable、多次取 max）；② 设备切换——换设备/重建输出链/拔插之后马上 `measure` 会撞上旧缓冲尾巴与重排期的咔哒（实测全量跑里 RMS 0.36 / 音高能量 0.008，单跑复现不出来），走 `DeviceSuite.measureSettled` 连采几窗取音高最强的一窗（拿到干净窗就 break，不白等）。
+12. **自绘 `TTButton` 用 anchor 约束前必须关 `translatesAutoresizingMaskIntoConstraints`**：不关的话 AppKit 会按它的初始 frame 补一组**必需**的 `minX/width/minY/height` 约束，顺着 `toggle.trailing == field.leading - 4` 这类兄弟关系把整条标题行的宽度锁死（放大镜那颗就曾经把搜索框钉在 264pt、把列表标题压成 4pt），而且**不打印冲突日志** —— 只能靠 dump `listWell.constraints` 的 description 才看得见。这类“宽度怎么改常量都不生效”的现象先查 autoresizing 约束，不要去猜“哪个控件自带固有宽度”。
+13. **搜索态里 `controller.playlist` 就是命中表**（F05 全局搜索）：任何“原列表还剩多少行”、“这首歌不在当前页”的断言都得先 `collapseSearch()` 退出后再读，否则会拿命中表当原列表，验证的是假命题。同理，面板把关键字交给控制器**之前**必须先 `playlistView.noteSceneBeforeSearch()`（那一刻表格装的还是原页），而 `sceneBeforeSearch` 只能在退出分支消费并置 nil，进分支干空会把刚采到的现场抹掉。
 
 ## 变更前后必做的验证
 

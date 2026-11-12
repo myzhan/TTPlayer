@@ -9,7 +9,11 @@ enum PropertyPanel {
         if let cover = track.cover { alert.icon = cover }
         // 电台没有艺术家：只写台名，别留一个空荡荡的“ - ”
         alert.messageText = track.artist.isEmpty ? track.title : "\(track.artist) - \(track.title)"
-        alert.informativeText = track.propertyLines
+        var lines = track.propertyLines
+        // 无缝与响度均衡这类「播放期才生效」的状态走控制层那一份，
+        // 面板本身不拼字符串（不然自检验了数据源、界面却在说另一套话）
+        lines.append(contentsOf: PlayerController.shared.propertyExtraLines(for: track))
+        alert.informativeText = lines
             .map { "\($0.0)：\($0.1)" }
             .joined(separator: "\n")
         alert.addButton(withTitle: "好")

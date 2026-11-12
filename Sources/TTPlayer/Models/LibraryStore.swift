@@ -36,6 +36,47 @@ struct AppState: Codable {
     var favoriteKeys: [String] = []
     /// 最近听过的台的地址（最近的在最前）：台被删出列表也还留在这里
     var recentRadioKeys: [String] = []
+    /// 自建歌单：名字 + 条目引用（写法同 trackPaths），旧档没这一项时是空表
+    var userLists: [UserPlaylist] = []
+    /// 上次在看的歌单 ID（空 = 停在固定页）。存 ID 不存名字：改了名也找得回来
+    var viewListID: String = ""
+    /// 「启动后自动继续播放」：默认关闭。只在上次退出前处于播放状态时才自动开播，
+    /// 手动停止过就再也不会自己响起来（requirements F06）
+    var autoResumePlay: Bool = false
+    /// 无缝衔接（F01）：默认开。旧档缺这一项时不能「升级一下就又跳出空白」
+    var gaplessPlay: Bool = true
+    /// 响度均衡（F02）：`ReplayGainMode.rawValue`。默认 0 = 关闭，
+    /// 存整数不存枚举名：以后加模式不用改动存档写法
+    var replayGainMode: Int = 0
+    /// ReplayGain 前置增益（dB，-12…+12）。默认 0：它只是在已经算好的增益上再推一把
+    var replayGainPreamp: Float = 0
+    /// 峰值防削波（F02）：默认开。开着时合成增益会被 Peak 压到不越过满量程
+    var replayGainPeakLimit: Bool = true
+    /// 输出设备（F07）：只存 UID，不存临时的 AudioDeviceID（重插一次就换号）。
+    /// 空串 = 跟随系统默认（需求里的默认档）
+    var outputDeviceUID: String = ""
+    /// 那台设备的可读名字：只为「设备已经不在了还能说出它叫什么」而存，不参与查找
+    var outputDeviceName: String = ""
+    /// 媒体库（F08）：用户添加的音乐目录，按添加顺序。
+    /// 只存目录本身，不存目录里的文件：那一片盘的东西随时会变，以扫描结果为准
+    var libraryFolders: [String] = []
+    /// 媒体库扫出来的条目引用（与 trackPaths 同一套写法）。存下来是为了
+    /// 启动时盘还没接上也能先列出「上次看到有什么」（标失效），不是重新扫一次的成果
+    var libraryKeys: [String] = []
+    /// 睡眠定时器到期前要不要淡出最后十秒（F09）：默认开。
+    /// 只有这个开关入库，定时器本身不入库 —— 睡前设的那三特别不能下次开机自己冒出来
+    var sleepFade: Bool = true
+    /// 歌词时间校准（F10）：键是曲目的稳定身份（`Track.identityKey` 那一套写法，
+    /// CUE 轨自带轨号、归档条目自带条目名），值是用户校准量（秒，正值 = 歌词延后显示）。
+    /// 只存这一份表，绝不回写用户的 .lrc；没调过的曲子不占位
+    var lyricShifts: [String: Double] = [:]
+    /// 电台自定义台名（F11）：键是电台地址（与 `Track.identityKey` 同一写法），
+    /// 值是用户起的名字。没起过名字的台不占位，显示时回落 host/端口
+    var radioAliases: [String: String] = [:]
+    /// 电台分类（F11）：只有用户自己建的那些，未分类不是分类所以不在这里（它是默认入口）
+    var radioCategories: [RadioCategory] = []
+    /// 地址 → 分类 id。没归类的台不在这里占位
+    var radioAssignments: [String: String] = [:]
 
     // MARK: 宽容解码
     // 逐字段 decodeIfPresent：旧版 state.json 缺少新增字段时不能整档解码失败，
@@ -44,6 +85,12 @@ struct AppState: Codable {
         case trackPaths, playMode, volume, muted, eqEnabled, eqGains, eqPreGain
         case eqPresetName, windowFrame, listVisible, dockGeometry, eqVisible, lyricFrame
         case skinLayout, recentKeys, favoriteKeys, recentRadioKeys, glass, transparency
+        case userLists, viewListID, autoResumePlay, gaplessPlay
+        case replayGainMode, replayGainPreamp, replayGainPeakLimit
+        case outputDeviceUID, outputDeviceName
+        case libraryFolders, libraryKeys
+        case sleepFade, lyricShifts
+        case radioAliases, radioCategories, radioAssignments
     }
 
     /// 显式写默认构造：定义了 init(from:) 后 struct 的成员构造不再合成
@@ -70,6 +117,22 @@ struct AppState: Codable {
         recentKeys = try c.decodeIfPresent([String].self, forKey: .recentKeys) ?? []
         favoriteKeys = try c.decodeIfPresent([String].self, forKey: .favoriteKeys) ?? []
         recentRadioKeys = try c.decodeIfPresent([String].self, forKey: .recentRadioKeys) ?? []
+        userLists = try c.decodeIfPresent([UserPlaylist].self, forKey: .userLists) ?? []
+        viewListID = try c.decodeIfPresent(String.self, forKey: .viewListID) ?? ""
+        autoResumePlay = try c.decodeIfPresent(Bool.self, forKey: .autoResumePlay) ?? false
+        gaplessPlay = try c.decodeIfPresent(Bool.self, forKey: .gaplessPlay) ?? true
+        replayGainMode = try c.decodeIfPresent(Int.self, forKey: .replayGainMode) ?? 0
+        replayGainPreamp = try c.decodeIfPresent(Float.self, forKey: .replayGainPreamp) ?? 0
+        replayGainPeakLimit = try c.decodeIfPresent(Bool.self, forKey: .replayGainPeakLimit) ?? true
+        outputDeviceUID = try c.decodeIfPresent(String.self, forKey: .outputDeviceUID) ?? ""
+        outputDeviceName = try c.decodeIfPresent(String.self, forKey: .outputDeviceName) ?? ""
+        libraryFolders = try c.decodeIfPresent([String].self, forKey: .libraryFolders) ?? []
+        libraryKeys = try c.decodeIfPresent([String].self, forKey: .libraryKeys) ?? []
+        sleepFade = try c.decodeIfPresent(Bool.self, forKey: .sleepFade) ?? true
+        lyricShifts = try c.decodeIfPresent([String: Double].self, forKey: .lyricShifts) ?? [:]
+        radioAliases = try c.decodeIfPresent([String: String].self, forKey: .radioAliases) ?? [:]
+        radioCategories = try c.decodeIfPresent([RadioCategory].self, forKey: .radioCategories) ?? []
+        radioAssignments = try c.decodeIfPresent([String: String].self, forKey: .radioAssignments) ?? [:]
     }
 }
 
@@ -79,25 +142,52 @@ enum LibraryStore {
     /// 分轨表（单独统计，命中时把一份镜像拆成多首）
     static let cueExtension = AudioFormats.cueExtension
 
-    private static var stateURL: URL {
+    /// 整目录扫描的发现集：可播 ∪ 分轨表 ∪ 歌单 ∪ 归档容器。
+    /// 拖目录与媒体库扫描共用这一份 —— 两条路必须认同一批扩展名，
+    /// 不然同一个目录会给出两种结果（F08）
+    static let directoryExtensions: Set<String> = {
+        var ext = AudioFormats.scanExtensions
+        ext.insert(cueExtension)
+        ext.formUnion(AudioFormats.playlistExtensions)
+        ext.formUnion(AudioFormats.archiveExtensions)
+        return ext
+    }()
+
+    /// 存档目录：自检用 TTPLAYER_TESTDIR 隔离，避免跑一次自检就覆盖用户的播放列表与窗口布局
+    private static var storeDirectory: URL {
         let env = ProcessInfo.processInfo.environment
-        // 自检模式把存档落在测试目录里，避免跑一次自检就覆盖用户的播放列表与窗口布局
         if env["TTPLAYER_SELFTEST"] == "1", let dir = env["TTPLAYER_TESTDIR"], !dir.isEmpty {
             let base = URL(fileURLWithPath: dir, isDirectory: true)
             try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-            return base.appendingPathComponent("state.json")
+            return base
         }
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("TTPlayer", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("state.json")
+        return dir
     }
 
-    /// 自检每次从干净存档起跑：上一轮留下的面板开关、窗口位置会让首批断言时灵时不灵
+    private static func stateFile(named name: String) -> URL {
+        storeDirectory.appendingPathComponent(name)
+    }
+
+    private static var stateURL: URL { stateFile(named: "state.json") }
+
+    /// 播放现场（F06）单独一份文件：进度要 5 秒落一次，不能陪着整库一起重写
+    private static var resumeURL: URL { stateFile(named: "resume.json") }
+
+    /// 自检用：两份存档文件的位置。「旧版存档兼容」与「进度只写小文件」这两类断言
+    /// 要直接读写原始 JSON 与文件字节数，走不了 load/save 这一层封装
+    static var selfTestResumeURL: URL { resumeURL }
+    static var selfTestStateURL: URL { stateURL }
+
+    /// 自检每次从干净存档起跑：上一轮留下的面板开关、窗口位置、播放现场会让
+    /// 首批断言时灵时不灵
     static func resetSelfTestStateIfRequested() {
         let env = ProcessInfo.processInfo.environment
         guard env["TTPLAYER_SELFTEST"] == "1" else { return }
         try? FileManager.default.removeItem(at: stateURL)
+        try? FileManager.default.removeItem(at: resumeURL)
     }
 
     static func load() -> AppState {
@@ -111,6 +201,23 @@ enum LibraryStore {
     static func save(_ state: AppState) {
         guard let data = try? JSONEncoder().encode(state) else { return }
         try? data.write(to: stateURL, options: .atomic)
+    }
+
+    /// 读播放现场：没有文件、或是旧版从没写过这一项 → 空现场（`isEmpty`），
+    /// 恢复正常启动流程，不报错也不自动开播
+    static func loadResume() -> ResumeScene {
+        guard let data = try? Data(contentsOf: resumeURL),
+              let scene = try? JSONDecoder().decode(ResumeScene.self, from: data) else {
+            return ResumeScene()
+        }
+        return scene.sanitized
+    }
+
+    /// 原子写（`.atomic` 先落临时文件再改名）：进度是 5 秒一次频繁写，
+    /// 半途断电/崩溃不能留下半截 JSON 让下次启动解不开
+    static func saveResume(_ scene: ResumeScene) {
+        guard let data = try? JSONEncoder().encode(scene) else { return }
+        try? data.write(to: resumeURL, options: .atomic)
     }
 
     /// 按扩展名收集一批 URL 里的文件（文件夹递归，跳过隐藏文件），按文件名自然序排列
@@ -308,7 +415,12 @@ enum LibraryStore {
                 switch item {
                 case .radio(let radioURL, let name):
                     let track = Track(radio: radioURL)
-                    if !name.isEmpty { track.title = name }
+                    // 台名按地址存（F11）：用户已经给这个地址起过名，就不能因为
+                    // 某一版 m3u 里写的是另一个名字就把它改掉 —— m3u 里那一句
+                    // 本来就是从某个地方抄来的标题，不是用户在这台机器上的设置
+                    if !name.isEmpty, !RadioStations.shared.hasCustomName(for: radioURL) {
+                        track.title = name
+                    }
                     emit(track)
                 case .file(let entry):
                     var isDir: ObjCBool = false
@@ -332,19 +444,19 @@ enum LibraryStore {
         }
 
         mutating func absorbDirectory(_ dir: URL) {
-            var extensions = AudioFormats.scanExtensions
-            extensions.insert(cueExtension)
-            extensions.formUnion(AudioFormats.playlistExtensions)
-            extensions.formUnion(AudioFormats.archiveExtensions)
-            let found = LibraryStore.files(in: [dir], extensions: extensions)
+            let found = LibraryStore.files(in: [dir], extensions: LibraryStore.directoryExtensions)
             // 按文件名自然序逐个展开（和旧行为一致：一张盘的 cue 与单曲按名字交错时不乱）；
             // 同名 cue 排在镜像后面也不会重复：absorbAudio 会主动找同名 cue，后面的 cue 条目靠去重失效
-            for url in found {
-                if AudioFormats.isCue(url) { absorbCue(url) }
-                else if AudioFormats.isPlaylist(url) { absorbPlaylist(url) }
-                else if AudioFormats.isArchive(url) { absorbArchive(url) }
-                else { absorbAudio(url) }
-            }
+            for url in found { absorbScanned(url) }
+        }
+
+        /// 已经在发现集里的文件 → 按类型路由入表。媒体库扫描自己走盘收集路径，
+        /// 但路由必须走这一条，否则「拖目录」与「扫目录」对同一个位置会有两种写法
+        mutating func absorbScanned(_ url: URL) {
+            if AudioFormats.isCue(url) { absorbCue(url) }
+            else if AudioFormats.isPlaylist(url) { absorbPlaylist(url) }
+            else if AudioFormats.isArchive(url) { absorbArchive(url) }
+            else { absorbAudio(url) }
         }
 
         /// v1.23 归档容器：一次 list 拿到 entry 表，音频条目扁平入表；
@@ -394,38 +506,89 @@ enum LibraryStore {
 
     /// 从存档条目还原曲目（CUE 轨会重新解析分轨表，因此旧存档不写死起止点）
     static func tracks(fromArchiveEntries entries: [String]) -> [Track] {
-        let fm = FileManager.default
-        var sheetCache: [String: CueSheet?] = [:]
-        func sheet(at path: String) -> CueSheet? {
+        var resolver = EntryResolver()
+        return entries.compactMap { resolver.track($0) }
+    }
+
+    /// 存档写法 → 曲目的解析器（分轨表只解一次，多轨共享一份）。
+    /// 播放现场（F06）直接用它逐条解：解不开的那条要留占位，队列的次序与下标
+    /// 是照条目算的，丢掉一条就把「当前位置」和后面的条目全顶歪了
+    struct EntryResolver {
+        private let fm = FileManager.default
+        private var sheetCache: [String: CueSheet?] = [:]
+
+        private mutating func sheet(at path: String) -> CueSheet? {
             if let cached = sheetCache[path] { return cached }
             let parsed = CueSheet.parse(url: URL(fileURLWithPath: path))
             sheetCache[path] = parsed
             return parsed
         }
-        var result: [Track] = []
-        for entry in entries {
+
+        /// 解不开（文件不在了、分轨表里没这一轨了）返回 nil
+        mutating func track(_ entry: String) -> Track? {
             // 电台：存档里就是完整地址，不查磁盘
             if let radio = RadioURL.explicit(entry) {
-                result.append(Track(radio: radio))
-                continue
+                return Track(radio: radio)
             }
             guard let marker = entry.range(of: cueArchiveMarker) else {
                 // 归档条目 URL：file:///…/album.zip#archive-entry=<percent-encoded>，
                 // identityKey 在 Track 那边已经专走 absoluteString，这里按外层存在与否判断
                 if let url = URL(string: entry), Archive.parseEntryURL(url) != nil {
-                    if fm.fileExists(atPath: url.path) { result.append(Track(url: url)) }
-                    continue
+                    return fm.fileExists(atPath: url.path) ? Track(url: url) : nil
                 }
-                if fm.fileExists(atPath: entry) { result.append(Track(url: URL(fileURLWithPath: entry))) }
-                continue
+                return fm.fileExists(atPath: entry) ? Track(url: URL(fileURLWithPath: entry)) : nil
             }
             let sheetPath = String(entry[..<marker.lowerBound])
             guard let number = Int(entry[marker.upperBound...]),
                   fm.fileExists(atPath: sheetPath),
                   let sheet = sheet(at: sheetPath),
-                  let info = sheet.tracks.first(where: { $0.number == number }) else { continue }
-            result.append(Track(cueTrack: info, sheet: sheet))
+                  let info = sheet.tracks.first(where: { $0.number == number }) else { return nil }
+            return Track(cueTrack: info, sheet: sheet)
         }
-        return result
+    }
+
+    /// 一条存档写法现在还在不在盘上（电台没有文件可言，算“在”）。
+    /// CUE 轨看分轨表，归档条目看外层归档，普通文件看自己
+    static func entryExists(_ entry: String) -> Bool {
+        let fm = FileManager.default
+        if RadioURL.explicit(entry) != nil { return true }
+        if let url = URL(string: entry), Archive.parseEntryURL(url) != nil {
+            return fm.fileExists(atPath: url.path)
+        }
+        if let marker = entry.range(of: cueArchiveMarker) {
+            return fm.fileExists(atPath: String(entry[..<marker.lowerBound]))
+        }
+        return fm.fileExists(atPath: entry)
+    }
+
+    /// 解不出来的存档写法 → 一条指着原位置的占位引用，并标上失效。
+    /// 歌单页要用它：用户的引用不能因为文件走了就在表里静默消失（F04「缺失文件标记」），
+    /// 放在表里看得见，才能决定是重新定位还是删掉。
+    static func placeholder(for entry: String) -> Track {
+        let track: Track
+        if let radio = RadioURL.explicit(entry) {
+            track = Track(radio: radio)
+            return track            // 电台没有盘上文件，不进失效这条路
+        }
+        if let marker = entry.range(of: cueArchiveMarker),
+           let number = Int(entry[marker.upperBound...]) {
+            let sheetURL = URL(fileURLWithPath: String(entry[..<marker.lowerBound]))
+            track = Track(url: sheetURL)
+            // 分轨身份一并留着：占位条目的 identityKey 必须与存档写法逐字符相同，
+            // 不然用户在歌单页删掉一条失效的 CUE 引用会删不掉（删行是按 identityKey 找键的）
+            track.cue = CueTrackInfo(number: number, sheetURL: sheetURL, title: "",
+                                      performer: "", fileURL: sheetURL, start: 0,
+                                      nextStart: nil)
+            track.title = "\(sheetURL.deletingPathExtension().lastPathComponent) 第"
+                + " \(String(format: "%02d", number)) 轨"
+        } else if let url = URL(string: entry), let parsed = Archive.parseEntryURL(url) {
+            track = Track(url: url)
+            // 条目名字就是本来在归档里的那一段，不然标题只能退到外层 zip 本身
+            track.title = (parsed.entry as NSString).lastPathComponent
+        } else {
+            track = Track(url: URL(fileURLWithPath: entry))
+        }
+        track.missingOnDisk = true
+        return track
     }
 }

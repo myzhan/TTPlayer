@@ -37,12 +37,17 @@ enum PlayMode: Int, CaseIterable {
     }
 }
 
-/// 播放列表
+/// 浏览列表：只负责「表格里列着什么、选中哪一行」。
+/// 接下来播谁是 `PlayQueue` 的事 —— 切组、筛选、排序都不该动到正在播放的音频，
+/// 所以这两份状态必须分开存（见 requirements F03）。
 final class Playlist {
     private(set) var tracks: [Track] = []
+    /// 表格里选中的行；不等于「正在播的那首」（正在播的可能已经被删出这张表）
     private(set) var currentIndex: Int?
-    /// 随机播放时的播放顺序记忆
-    private var shuffleHistory: [Int] = []
+    /// 结构版本号：加行/删行/整页换内容/排序都 +1。
+    /// 筛选的可见行映射靠它判断「要不要立刻重算」：元数据晚到不涨这个号，
+    /// 一万行导入时几百条 ttPlaylistChanged 不能各扫一遍全表（见 PlaylistView）
+    private(set) var revision = 0
 
     var currentTrack: Track? {
         guard let i = currentIndex, tracks.indices.contains(i) else { return nil }
@@ -57,6 +62,7 @@ final class Playlist {
     @discardableResult
     func add(_ track: Track) -> Int {
         tracks.append(track)
+        revision += 1
         return tracks.count - 1
     }
 
@@ -68,27 +74,41 @@ final class Playlist {
     }
 
     func remove(at indexes: IndexSet) {
+        revision += 1
         // 从后往前删，保持索引有效
         for i in indexes.sorted(by: >) {
             guard tracks.indices.contains(i) else { continue }
             tracks.remove(at: i)
             if let cur = currentIndex {
                 if i == cur {
-                    // 删除的是当前曲：保持同一位置，自然指向后一首；越界则清空
+                    // 删除的是选中行：保持同一位置，自然指向后一首；越界则清空
                     currentIndex = tracks.indices.contains(i) ? i : nil
                 } else if i < cur {
                     currentIndex = cur - 1
                 }
             }
-            shuffleHistory.removeAll { $0 == i }
-            shuffleHistory = shuffleHistory.map { $0 > i ? $0 - 1 : $0 }
         }
     }
 
     func removeAll() {
         tracks.removeAll()
         currentIndex = nil
-        shuffleHistory.removeAll()
+        revision += 1
+    }
+
+    /// 逐行换对象（F08 重新定位）：次序与选中行都不动，只把命中的那几行换成
+    /// 「同一个身份、新的位置」。revision 要涨：筛选映射按行内容算，位置换了就得重算
+    /// - Returns: 换掉了几行
+    @discardableResult
+    func replaceTracks(_ swap: (Track) -> Track?) -> Int {
+        var n = 0
+        for i in tracks.indices {
+            guard let next = swap(tracks[i]), next !== tracks[i] else { continue }
+            tracks[i] = next
+            n += 1
+        }
+        if n > 0 { revision += 1 }     // 选中行还在原来那一格，不用动 currentIndex
+        return n
     }
 
     func track(at index: Int) -> Track? {
@@ -99,55 +119,26 @@ final class Playlist {
         tracks.firstIndex { $0 === track }
     }
 
-    // MARK: - 模式切换
+    /// 按稳定身份找行：切组、派生组还原出来的 Track 未必是同一个对象，
+    /// 但 identityKey 一定是同一首（归档/CUE/电台各自都有自己的写法）
+    func index(ofKey key: String) -> Int? {
+        tracks.firstIndex { $0.identityKey == key }
+    }
 
-    /// 直接选中某曲（双击列表）
+    // MARK: - 选中
+
+    /// 直接选中某行（双击列表、查找定位）
     func select(_ index: Int) -> Track? {
         guard tracks.indices.contains(index) else { return nil }
         currentIndex = index
-        if modeIsRandom { recordShuffle(index) }
         return tracks[index]
     }
 
-    /// 下一曲；列表播完（顺序模式）返回 nil
-    func advance(for mode: PlayMode) -> Track? {
-        guard !tracks.isEmpty else { return nil }
-        switch mode {
-        case .singleLoop:
-            guard let i = currentIndex else { return select(0) }
-            return tracks[i]
-        case .order:
-            guard let i = currentIndex else { return select(0) }
-            let next = i + 1
-            return next < tracks.count ? select(next) : nil
-        case .listLoop:
-            guard let i = currentIndex else { return select(0) }
-            return select((i + 1) % tracks.count)
-        case .random:
-            return select(pickRandomIndex())
-        }
+    /// 取消选中：正在播的那首已经被删出这张表时，宁可一行都不高亮，
+    /// 也不能把旁边那行标成「当前播放」
+    func clearSelection() {
+        currentIndex = nil
     }
-
-    /// 上一曲
-    func retreat(for mode: PlayMode) -> Track? {
-        guard !tracks.isEmpty else { return nil }
-        switch mode {
-        case .random:
-            // 随机模式回退到上一个播放过的曲目
-            if shuffleHistory.count >= 2 {
-                shuffleHistory.removeLast()
-                let i = shuffleHistory.last ?? 0
-                return select(i)
-            }
-            return select(pickRandomIndex())
-        default:
-            guard let i = currentIndex else { return select(0) }
-            let prev = i - 1
-            return prev >= 0 ? select(prev) : (mode == .listLoop ? select(tracks.count - 1) : nil)
-        }
-    }
-
-    func firstTrack() -> Track? { tracks.isEmpty ? nil : select(0) }
 
     // MARK: - 列表文件导入导出（列表工具条的“列表”菜单）
 
@@ -175,18 +166,15 @@ final class Playlist {
 
     // MARK: - 查找（列表工具条的“查找”按钮）
 
-    /// 从 from+1 开始环形查找标题/艺术家/文件名包含 keyword 的曲目标引
+    /// 从 from+1 开始环形查找标题/艺术家/专辑/文件名包含 keyword 的曲目标引。
+    /// 判定与搜索框共用一份 `TrackFilter`：两套「什么算命中」不能各说各话
     func indexOfNext(matching keyword: String, after from: Int?) -> Int? {
-        guard !keyword.isEmpty, !tracks.isEmpty else { return nil }
+        let hit = TrackFilter(keyword: keyword).matcher()
+        guard !hit.isEmpty, !tracks.isEmpty else { return nil }
         let start = (from ?? -1) + 1
         for offset in 0..<tracks.count {
             let i = (start + offset) % tracks.count
-            let t = tracks[i]
-            if t.title.localizedCaseInsensitiveContains(keyword)
-                || t.artist.localizedCaseInsensitiveContains(keyword)
-                || t.fileName.localizedCaseInsensitiveContains(keyword) {
-                return i
-            }
+            if hit.hit(tracks[i]) { return i }
         }
         return nil
     }
@@ -204,6 +192,7 @@ final class Playlist {
     /// 按指定字段排序。无当前曲目时照样排序；有当前曲目时排序后仍指向同一个 Track。
     func sort(by key: SortKey, ascending: Bool) {
         guard tracks.count > 1 else { return }
+        revision += 1
         let cur = currentTrack
         func compare(_ a: Track, _ b: Track) -> ComparisonResult {
             switch key {
@@ -223,23 +212,5 @@ final class Playlist {
         }
         tracks = sorted
         if let cur { currentIndex = sorted.firstIndex { $0 === cur } }
-        shuffleHistory.removeAll()
-    }
-
-    private func recordShuffle(_ index: Int) {
-        if shuffleHistory.last != index { shuffleHistory.append(index) }
-    }
-
-    var modeIsRandom = false
-
-    private func pickRandomIndex() -> Int {
-        guard tracks.count > 1 else { return 0 }
-        var candidate: Int
-        var guardCount = 0
-        repeat {
-            candidate = Int.random(in: 0..<tracks.count)
-            guardCount += 1
-        } while candidate == currentIndex && guardCount < 16
-        return candidate
     }
 }

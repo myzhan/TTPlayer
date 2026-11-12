@@ -11,9 +11,10 @@ final class SelfTest {
     private static var finished = false
     private static var reportPath = ""
     /// 看门狗：异步链路卡住时不能一直挂着。这是整轮的总时长闸门，不是单套的——
-    /// 自带解码器那几套要跑真实时钟（光是 APE 逐样本比对就要三十秒出头），debug 全量已经在
-    /// 45 s 上下、机器忙时会飘，所以给三倍余量；真卡住时日志停在哪一套后面一眼就能看出来
-    private static let watchdogSeconds: Double = 150
+    /// 衔接类断言只认从输出链路上抄下来的 PCM，必须跑真实时钟（gapless 一套就要 48 s、
+    /// radio 46 s、gain 88 s），debug 全量实测约 291 s；机器忙时会飘，所以给三倍余量。
+    /// 真卡住时日志停在哪一套后面一眼就能看出来
+    private static let watchdogSeconds: Double = 900
 
     /// 写 stderr + 报告文件 + 运行日志（GUI 环境下 stderr 可能不可见）
     static func emit(_ s: String) {

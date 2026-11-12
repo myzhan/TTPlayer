@@ -20,6 +20,9 @@ struct RadioSuite: SelfTestSuite {
         checkICY(ctx)
         checkRetry(ctx)
         checkDecoder(ctx)
+        checkStations(ctx)
+        checkQuality(ctx)
+        checkLocalStream(ctx)
         checkLiveStream(ctx)
     }
 
@@ -167,8 +170,8 @@ struct RadioSuite: SelfTestSuite {
         ctx.check("电台-时长列写直播", radioText == "直播", "text=\(radioText ?? "nil")")
         ctx.check("电台-本地曲目仍写时间",
                   fileText?.contains(":") == true, "text=\(fileText ?? "nil")")
-        ctx.check("电台-工具条八键（添加/电台/删除/列表/排序/查找/编辑/模式）",
-                  ctx.main.playlistPanel.toolbarButtonCount == 8,
+        ctx.check("电台-工具条九键（添加/电台/删除/列表/排序/查找/编辑/模式/队列）",
+                  ctx.main.playlistPanel.toolbarButtonCount == 9,
                   "count=\(ctx.main.playlistPanel.toolbarButtonCount)")
         p.clearPlaylist()
     }
@@ -190,27 +193,28 @@ struct RadioSuite: SelfTestSuite {
         _ = p.addRadio("http://b.example.com/live", playNow: false)
         ctx.pump(0.1)
 
-        ctx.check("电台-左栏五组与顺序",
-                  panel.groupItemCount == GroupKind.allCases.count
-                    && PlaylistPanelController.groupNames
-                        == ["[默认]", "网络电台", "最近听的台", "最近播放", "我的收藏"],
-                  PlaylistPanelController.groupNames.joined(separator: "/"))
-        // 面板不跟着组数长高：五个组挤进那一列，最后一行不能被裁掉
-        ctx.check("电台-五个组都露在左栏里没被裁", panel.groupsFitInWell,
+        // 左栏现在是「固定几页 + 可变数量的歌单页」：固定页的次序不能因为建了歌单而变
+        let titles = panel.groupTitles
+        let fixed = GroupKind.fixedPages.map { $0.name }
+        ctx.check("电台-左栏固定页与顺序",
+                  Array(titles.prefix(fixed.count)) == fixed && panel.groupItemCount >= fixed.count,
+                  titles.joined(separator: "/"))
+        // 面板不跟着组数长高：固定页挤不进左栏就是布局坏了（歌单页走滚动）
+        ctx.check("电台-固定页都露在左栏里没被裁", panel.fixedGroupsFitInWell,
                   "n=\(panel.groupItemCount)")
 
-        panel.clickGroup(at: GroupKind.radio.rawValue)
+        panel.clickGroup(.radio)
         ctx.check("电台-电台页只投影台不投影歌",
                   p.activeGroup == .radio && p.playlist.count == 2
                     && p.playlist.tracks.allSatisfy { $0.isRadio }
                     && panel.infoText.contains("个台"),
                   "list=\(p.playlist.count) info=\(panel.infoText)")
-        // 目视凭据：这一页只列台，统计行写的是「几个台」，左栏五个组都在
+        // 目视凭据：这一页只列台，统计行写的是「几个台」，固定页全部都在
         ctx.snapshot(panel.window, named: "shot_group_radio")
 
         // 在这一页删台就是真删台：切回 [默认] 它不该又冒出来，本地那首也不跟着遭殃
         p.removeTracks(at: IndexSet(integer: 0))
-        panel.clickGroup(at: GroupKind.main.rawValue)
+        panel.clickGroup(.main)
         ctx.check("电台-电台页删台是真删且不伤本地歌",
                   p.playlist.count == 2 && !p.playlist.tracks[0].isRadio
                     && p.playlist.tracks.filter { $0.isRadio }.count == 1,
@@ -220,19 +224,19 @@ struct RadioSuite: SelfTestSuite {
         if let station = p.playlist.tracks.first(where: { $0.isRadio }) {
             p.groups.recordRadioPlay(station)
         }
-        panel.clickGroup(at: GroupKind.radio.rawValue)
+        panel.clickGroup(.radio)
         p.clearPlaylist()
         ctx.check("电台-电台页清空只删台不冲历史",
                   p.activeGroup == .radio && p.playlist.isEmpty && panel.showsEmptyHint
                     && p.groups.recentRadioKeys.count == 1,
                   "list=\(p.playlist.count) 历史=\(p.groups.recentRadioKeys.count)")
-        panel.clickGroup(at: GroupKind.main.rawValue)
+        panel.clickGroup(.main)
         ctx.check("电台-清空电台后本地歌还在",
                   p.playlist.count == 1 && !p.playlist.tracks[0].isRadio,
                   "list=\(p.playlist.count)")
 
         // 「最近听的台」是档案：那个台早就被删出列表了，这一页还列得出它
-        panel.clickGroup(at: GroupKind.recentRadio.rawValue)
+        panel.clickGroup(.recentRadio)
         ctx.check("电台-最近听的台列得出没在列表里的台",
                   p.activeGroup == .recentRadio && p.playlist.count == 1
                     && p.playlist.tracks[0].isRadio
@@ -271,8 +275,8 @@ struct RadioSuite: SelfTestSuite {
         // 下一次启动从这个档案还原：页面跟着档案变，不是跟着上一次内存里的样子
         p.groups.restore(recent: saved.recentKeys, favorites: saved.favoriteKeys,
                          recentRadios: saved.recentRadioKeys)
-        panel.clickGroup(at: GroupKind.main.rawValue)
-        panel.clickGroup(at: GroupKind.recentRadio.rawValue)
+        panel.clickGroup(.main)
+        panel.clickGroup(.recentRadio)
         ctx.check("电台-存档还原后台历史又能列出来",
                   p.playlist.count == TrackGroups.recentRadioLimit
                     && p.playlist.tracks.allSatisfy { $0.isRadio },
@@ -288,7 +292,7 @@ struct RadioSuite: SelfTestSuite {
                     && LibraryStore.tracks(fromArchiveEntries: legacy?.trackPaths ?? []).count == 2,
                   "paths=\(legacy?.trackPaths.count ?? -1) 台历史=\(legacy?.recentRadioKeys.count ?? -1)")
 
-        panel.clickGroup(at: GroupKind.main.rawValue)
+        panel.clickGroup(.main)
         p.groups.clear(.recentRadio)
         p.clearPlaylist()
     }
@@ -507,6 +511,756 @@ struct RadioSuite: SelfTestSuite {
                   "frames=\(frames) out=\(decoder.framesOut) packets=\(decoder.packetsSeen)")
     }
 
+    // MARK: - 台名、分类与改地址（F11）
+
+    /// 台名按地址身份存、分类建/改名/删、台移进分类、改地址要把设置一起搬过去 ——
+    /// 这些都是控制器与模型的真入口，不连网也能钉死。
+    /// 电台档案是进程级单例：起手与收摊各擦一遍，否则换个顺序跑就时灵时不灵
+    private func checkStations(_ ctx: SelfTestContext) {
+        let p = ctx.player
+        let view = ctx.main.playlistView
+        let panel = ctx.main.playlistPanel
+        let stations = p.radioStations
+        let dir = tempDir(ctx)
+        func trackOn(_ host: String) -> Track? { p.playlist.tracks.first { $0.url.host == host } }
+        func radioKeysInMain() -> [String] { p.playlist.tracks.filter { $0.isRadio }.map { $0.identityKey } }
+        func categoryRows() -> Int { p.groupLayout.filter { if case .radioCategory = $0 { return true }; return false }.count }
+
+        func wipe() {
+            p.stop()
+            p.switchGroup(.main)
+            p.clearPlaylist()
+            p.groups.clear(.recentRadio)
+            stations.restore(aliases: [:], categories: [], assigned: [:])
+            ctx.pump(0.1)
+        }
+        wipe()
+        let wav = dir.appendingPathComponent("stations.wav")
+        guard ctx.writeWave(wav, sampleRate: 44_100, channels: 2, bits: 16, freqs: [440, 660]) else {
+            ctx.check("电台-台名与分类写得出本地素材", false, "writeWave 失败")
+            return
+        }
+
+        // MARK: 台名
+        _ = p.addFiles([wav])
+        _ = p.addRadio("http://a.example.com/live", playNow: false)
+        _ = p.addRadio("http://b.example.com/live", playNow: false)
+        ctx.pump(0.1)
+        guard let a = trackOn("a.example.com"), let b = trackOn("b.example.com") else {
+            ctx.check("电台-台名前提交两个台", false, "n=\(p.playlist.count)")
+            return
+        }
+        let keyA = a.identityKey
+        ctx.check("电台-台名-没起过名字的台按地址显示",
+                  a.title == "a.example.com/live" && !stations.hasCustomName(for: a.url)
+                    && stations.alias(for: keyA) == nil, "title=\(a.title)")
+        ctx.check("电台-台名-自定义后列表这一行跟着改",
+                  p.setRadioName(a, to: "城市之声") == nil
+                    && stations.alias(for: keyA) == "城市之声"
+                    && a.title == "城市之声" && stations.hasCustomName(for: a.url),
+                  "title=\(a.title) alias=\(stations.alias(for: keyA) ?? "nil")")
+        // 台名记在地址上而不是记在对象上：同地址新建的对象一出生就叫这个名字
+        ctx.check("电台-台名-记在地址上（同址新建的条目一出生就是这个名字）",
+                  Track(radio: a.url).title == "城市之声"
+                    && stations.displayName(for: a.url) == "城市之声")
+        _ = p.addRadio("http://a.example.com/live", playNow: false)
+        ctx.check("电台-台名-相同地址复用条目不多塞一条",
+                  p.playlist.count == 3
+                    && p.playlist.tracks.filter { $0.url.host == "a.example.com" }.count == 1,
+                  "n=\(p.playlist.count)")
+        ctx.check("电台-台名-空名是取消自定义不是报错",
+                  p.setRadioName(a, to: "  ") == nil && stations.alias(for: keyA) == nil
+                    && a.title == "a.example.com/live" && !stations.hasCustomName(for: a.url))
+        _ = p.setRadioName(a, to: "城市之声")
+        ctx.check("电台-台名-全角空格也算空（中文用户敲的那个空格）",
+                  p.setRadioName(a, to: "\u{3000} \u{3000}") == nil
+                    && stations.alias(for: keyA) == nil)
+        _ = p.setRadioName(a, to: String(repeating: "名", count: 80))
+        ctx.check("电台-台名-超长截到上限不顶穿标题区",
+                  stations.alias(for: keyA)?.count == RadioStations.aliasLimit,
+                  "n=\(stations.alias(for: keyA)?.count ?? 0)")
+        ctx.check("电台-台名-首尾空白去掉再存",
+                  p.setRadioName(a, to: "  城市之声  ") == nil
+                    && stations.alias(for: keyA) == "城市之声",
+                  stations.alias(for: keyA) ?? "nil")
+        ctx.check("电台-台名-本地文件不走这个入口（该用编辑标签）",
+                  p.setRadioName(Track(url: wav), to: "不行")?.contains("不是电台") == true)
+
+        // MARK: 分类建与改名
+        ctx.check("电台-分类-名字空就不建（不产出看不见的页）",
+                  p.createRadioCategory(named: "   ") == nil && stations.isEmpty)
+        guard let pop = p.createRadioCategory(named: "通勤") else {
+            ctx.check("电台-分类-建得出一张", false, "返回 nil"); return
+        }
+        ctx.check("电台-分类-建出来左栏多一行且正看着它",
+                  panel.groupTitles.contains("通勤") && p.activeGroup == .radioCategory(pop.id)
+                    && stations.count == 1, "titles=\(panel.groupTitles)")
+        let dup = p.createRadioCategory(named: "通勤")
+        ctx.check("电台-分类-同名自动区分并把实际用的名说出来",
+                  dup?.note?.contains("已经有叫") == true
+                    && dup.flatMap { stations.name(of: $0.id) } == "通勤 (2)",
+                  "note=\(dup?.note ?? "nil")")
+        ctx.check("电台-分类-全角空格不算名字（与歌单同一套规矩）",
+                  p.createRadioCategory(named: "\u{3000}") == nil)
+        let long = p.createRadioCategory(named: String(repeating: "分", count: 60))
+        ctx.check("电台-分类-名字截到上限（左栏那一列只有 110pt）",
+                  long.flatMap { stations.name(of: $0.id) }?.count == RadioStations.nameLimit,
+                  "n=\(long.flatMap { stations.name(of: $0.id) }?.count ?? 0)")
+        ctx.check("电台-分类-未分类是默认入口改不了名",
+                  p.renameRadioCategory(id: RadioStations.uncategorizedID, to: "别的")?
+                    .contains("改不了") == true
+                    && stations.name(of: RadioStations.uncategorizedID) == "未分类电台")
+        ctx.check("电台-分类-未分类删不掉且左栏永远有这一行",
+                  p.deleteRadioCategory(id: RadioStations.uncategorizedID) == nil
+                    && panel.groupTitles.contains("未分类电台"))
+        ctx.check("电台-分类-改名只动显示名不动 id 与归属",
+                  p.moveRadios(keys: [keyA], to: pop.id) == nil
+                    && p.renameRadioCategory(id: pop.id, to: "深夜") == nil
+                    && stations.name(of: pop.id) == "深夜"
+                    && stations.categoryID(of: keyA) == pop.id
+                    && p.radioCount(in: pop.id) == 1,
+                  "n=\(p.radioCount(in: pop.id))")
+        ctx.check("电台-分类-改名后左栏那一行也跟着换名",
+                  panel.groupTitles.contains("深夜") && !panel.groupTitles.contains("通勤"),
+                  "titles=\(panel.groupTitles)")
+        ctx.check("电台-分类-空名不能改名",
+                  p.renameRadioCategory(id: pop.id, to: " ")?.contains("不能是空的") == true
+                    && stations.name(of: pop.id) == "深夜")
+
+        // MARK: 归属与投影
+        p.switchGroup(.main)
+        let both = [keyA, b.identityKey]
+        ctx.check("电台-分类-一次移进两个台",
+                  p.moveRadios(keys: both, to: pop.id) == nil && p.radioCount(in: pop.id) == 2,
+                  "n=\(p.radioCount(in: pop.id))")
+        panel.clickGroup(.radioCategory(pop.id))
+        ctx.pump(0.2)
+        ctx.check("电台-分类页只列归到这一类的台（统计行写个台）",
+                  p.playlist.count == 2 && p.playlist.tracks.allSatisfy { $0.isRadio }
+                    && panel.infoText.contains("个台"),
+                  "list=\(p.playlist.count) info=\(panel.infoText)")
+        ctx.snapshot(panel.window, named: "shot_radio_category")
+        ctx.check("电台-分类-移回未分类是摘归属不是删台",
+                  p.moveRadios(keys: [keyA], to: nil) == nil && p.radioCount(in: pop.id) == 1
+                    && stations.categoryID(of: keyA) == nil && p.playlist.count == 1,
+                  "分类里=\(p.radioCount(in: pop.id)) 本页=\(p.playlist.count)")
+        ctx.check("电台-分类-台地址一条都没丢",
+                  { panel.clickGroup(.radio)
+                    return p.playlist.count == 2 && p.playlist.tracks.allSatisfy { $0.isRadio } }())
+        ctx.check("电台-分类-移进一个已经不存在的分类时一个都不动",
+                  p.moveRadios(keys: both, to: "已经不存在的ID")?.contains("已经不在了") == true
+                    && p.radioCount(in: pop.id) == 1, "n=\(p.radioCount(in: pop.id))")
+
+        // 在分类页删行 = 真删台（投影页只有一份地址）；台名与归属仍留在地址上，
+        // 同地址再加回来时不用重新起名——这就是需求说的「复用既有条目与设置」
+        panel.clickGroup(.radioCategory(pop.id))
+        ctx.pump(0.2)
+        guard let doomed = p.playlist.tracks.first else {
+            ctx.check("电台-分类-删行前置：分类页有台", false, "本页空"); return
+        }
+        let doomedKey = doomed.identityKey
+        _ = p.setRadioName(doomed, to: "要删的台")
+        p.removeTracks(at: IndexSet(integer: 0))
+        ctx.check("电台-分类-在分类页删行是真删台（切回全部台也没了）",
+                  p.radioCount(in: pop.id) == 0
+                    && { panel.clickGroup(.radio); return p.playlist.count == 1 }(),
+                  "分类里=\(p.radioCount(in: pop.id))")
+        ctx.check("电台-分类-删台不伤本地歌",
+                  { panel.clickGroup(.main); return p.playlist.tracks.filter { !$0.isRadio }.count == 1 }())
+        _ = p.addRadio(doomed.url.absoluteString, playNow: false)
+        ctx.check("电台-分类-同址再加回来台名与归属还认得（复用设置）",
+                  trackOn(doomed.url.host ?? "")?.title == "要删的台"
+                    && stations.alias(for: doomedKey) == "要删的台"
+                    && stations.categoryID(of: doomedKey) == pop.id,
+                  "title=\(trackOn(doomed.url.host ?? "")?.title ?? "nil")")
+
+        // MARK: 清空分类页与删分类
+        panel.clickGroup(.radioCategory(pop.id))
+        ctx.pump(0.2)
+        let clearTitle = view.refreshContextMenu(over: 0)
+            .first { $0.title.contains("清空分类") }?.title ?? ""
+        ctx.check("电台-分类-清空那一行说清真删而不是移出",
+                  clearTitle.contains("真删") && clearTitle.contains("不是移出分类"), clearTitle)
+        _ = p.addRadio("http://d.example.com/live", playNow: false)
+        guard let gym = p.createRadioCategory(named: "健身") else {
+            ctx.check("电台-分类-建得出第二张", false); return
+        }
+        p.switchGroup(.main)
+        _ = p.moveRadios(keys: ["http://d.example.com/live"], to: gym.id)
+        panel.clickGroup(.radioCategory(pop.id))     // 这一页只有那个「要删的台」
+        p.clearPlaylist()
+        ctx.check("电台-分类-清空只删这一页那几台（别的分类与本地歌不动）",
+                  p.playlist.isEmpty && panel.showsEmptyHint
+                    && { panel.clickGroup(.radioCategory(gym.id)); return p.playlist.count == 1 }()
+                    && { panel.clickGroup(.main); return p.playlist.count == 3
+                        && p.playlist.tracks.filter { !$0.isRadio }.count == 1 }(),
+                  "全部台=\(radioKeysInMain().count)")
+        let aliasesBefore = stations.snapshotAliases
+        _ = p.moveRadios(keys: [keyA], to: gym.id)
+        p.switchGroup(.radioCategory(gym.id))
+        let gone = p.deleteRadioCategory(id: gym.id)
+        ctx.check("电台-分类-删除只掉壳：两个台回未分类、地址与台名都不动",
+                  gone?.name == "健身" && gone?.moved == 2 && p.radioCount(in: gym.id) == 0
+                    && stations.snapshotAliases == aliasesBefore
+                    && stations.categoryID(of: keyA) == nil, "gone=\(gone?.moved ?? -1)")
+        ctx.check("电台-分类-正在看这一页时删除会落到未分类页",
+                  p.activeGroup == .radioCategory(RadioStations.uncategorizedID)
+                    && p.playlist.count == 2, "group=\(p.activeGroup) n=\(p.playlist.count)")
+        ctx.check("电台-分类-存档停在已删分类上只能回默认页",
+                  { p.switchGroup(.radioCategory("已经不存在的ID")); return p.activeGroup == .main }())
+
+        // MARK: 改地址（换身份就得把设置搬过去）
+        p.switchGroup(.main)
+        _ = p.addRadio("http://c.example.com/live", playNow: false)
+        guard let c = trackOn("c.example.com") else {
+            ctx.check("电台-改地址-前置：有个台", false); return
+        }
+        let oldKey = c.identityKey
+        _ = p.setRadioName(c, to: "三台")
+        guard let moveID = p.createRadioCategory(named: "搬得走")?.id else {
+            ctx.check("电台-改地址-建得出分类", false); return
+        }
+        _ = p.moveRadios(keys: [oldKey], to: moveID)
+        p.groups.recordRadioPlay(c)
+        _ = p.toggleFavorite(c)
+        p.switchGroup(.main)
+        ctx.check("电台-改地址-非法地址不动任何东西",
+                  p.updateRadioAddress(c, to: "ftp://x/y")?.contains("地址不对") == true
+                    && stations.alias(for: oldKey) == "三台" && c.url.host == "c.example.com")
+        ctx.check("电台-改地址-与列里另一个台撞地址先拒（台名与归属认不出谁是谁）",
+                  p.updateRadioAddress(c, to: "http://a.example.com/live")?
+                    .contains("已经有一条") == true && stations.alias(for: oldKey) == "三台")
+        ctx.check("电台-改地址-一模一样的地址不用改",
+                  p.updateRadioAddress(c, to: "http://c.example.com/live")?.contains("没变") == true)
+        let newAddr = "http://c.example.com:8000/new"
+        let radiosBeforeRewrite = radioKeysInMain().count
+        ctx.check("电台-改地址-台名与归属搬到新地址且旧地址不留悬空条目",
+                  p.updateRadioAddress(c, to: newAddr) == nil
+                    && stations.alias(for: newAddr) == "三台" && stations.alias(for: oldKey) == nil
+                    && stations.categoryID(of: newAddr) == moveID
+                    && stations.snapshotAssigned[oldKey] == nil,
+                  "新址台名=\(stations.alias(for: newAddr) ?? "nil")")
+        // 行数必须一字不变：改地址是「同一条换个写法」，多出一条就意味着旧址被复制了一份
+        ctx.check("电台-改地址-列表里是同一条换了写法不是多出一条",
+                  radioKeysInMain().count == radiosBeforeRewrite
+                    && p.playlist.tracks.contains { $0.url.absoluteString == newAddr }
+                    && !p.playlist.tracks.contains { $0.identityKey == oldKey },
+                  "台\(radiosBeforeRewrite)→\(radioKeysInMain().count)")
+        ctx.check("电台-改地址-列表那一行还是那个台名（换的是地址不是身份）",
+                  p.playlist.tracks.first { $0.url.absoluteString == newAddr }?.title == "三台",
+                  p.playlist.tracks.first { $0.url.absoluteString == newAddr }?.title ?? "nil")
+        ctx.check("电台-改地址-收藏与台历史里的键一起换（不用重新收藏）",
+                  p.groups.favoriteKeys.contains(newAddr) && !p.groups.favoriteKeys.contains(oldKey)
+                    && p.groups.recentRadioKeys.contains(newAddr)
+                    && !p.groups.recentRadioKeys.contains(oldKey),
+                  "收藏=\(p.groups.favoriteKeys.prefix(3)) 历史=\(p.groups.recentRadioKeys.prefix(3))")
+        // 新地址上本来就有用户给那个台起的名字：以那一份为准，旧址那份随即作废
+        let hitAddr = "http://hit.example.com/live"
+        stations.setAlias(key: hitAddr, raw: "那边已经有了")
+        ctx.check("电台-改地址-目标地址已有台名时以那一份为准（不拿旧名覆了它）",
+                  p.updateRadioAddress(p.playlist.tracks.first { $0.url.absoluteString == newAddr }!,
+                                       to: hitAddr) == nil
+                    && stations.alias(for: hitAddr) == "那边已经有了"
+                    && stations.alias(for: newAddr) == nil
+                    && stations.categoryID(of: hitAddr) == moveID,
+                  "新址台名=\(stations.alias(for: hitAddr) ?? "nil") 归类=\(stations.categoryID(of: hitAddr) ?? "nil")")
+
+        // MARK: 存档往返与旧档宽容
+        p.switchGroup(.main)
+        p.persistNow()
+        let saved = LibraryStore.load()
+        ctx.check("电台-存档-台名分类归属三份都写进档",
+                  saved.radioAliases == stations.snapshotAliases
+                    && saved.radioCategories == stations.snapshotCategories
+                    && saved.radioAssignments == stations.snapshotAssigned
+                    && saved.radioAliases[hitAddr] == "那边已经有了",
+                  "台名=\(saved.radioAliases.count) 分类=\(saved.radioCategories.count)")
+        stations.restore(aliases: [:], categories: [], assigned: [:])
+        ctx.check("电台-存档-内存擦干净后左栏只剩未分类那一格电台页",
+                  categoryRows() == 1 && stations.isEmpty, "分类=\(stations.count)")
+        stations.restore(aliases: saved.radioAliases, categories: saved.radioCategories,
+                         assigned: saved.radioAssignments)
+        ctx.check("电台-存档-重启后台名分类归属都回来了",
+                  stations.snapshotAliases == saved.radioAliases
+                    && stations.snapshotCategories == saved.radioCategories
+                    && stations.snapshotAssigned == saved.radioAssignments
+                    && stations.alias(for: hitAddr) == "那边已经有了"
+                    && categoryRows() == saved.radioCategories.count + 1,
+                  "分类=\(stations.count) 行数=\(categoryRows())")
+        let legacyJSON = "{\"trackPaths\":[],\"volume\":0.42}"
+        let legacy = try? JSONDecoder().decode(AppState.self, from: Data(legacyJSON.utf8))
+        ctx.check("电台-存档-旧版档缺这三项也能整档解开",
+                  legacy?.volume == 0.42 && legacy?.radioAliases.isEmpty == true
+                    && legacy?.radioCategories.isEmpty == true
+                    && legacy?.radioAssignments.isEmpty == true,
+                  "volume=\(legacy?.volume ?? -1)")
+        stations.restore(aliases: ["http://x.example.com/live": "  ",
+                                   "http://y.example.com/live": "有名字"],
+                         categories: [RadioCategory(id: "", name: "空ID"),
+                                      RadioCategory(id: "dup", name: "甲"),
+                                      RadioCategory(id: "dup", name: "甲"),
+                                      RadioCategory(id: RadioStations.uncategorizedID, name: "未分类"),
+                                      RadioCategory(id: "keep", name: "乙")],
+                         assigned: ["http://z.example.com/live": "已经不存在的分类"])
+        ctx.check("电台-存档-空台名不收（回落成按地址显示）",
+                  stations.snapshotAliases.count == 1
+                    && stations.alias(for: "http://y.example.com/live") == "有名字",
+                  "n=\(stations.snapshotAliases.count)")
+        ctx.check("电台-存档-空 ID / 重复 ID / 未分类那种 ID 都不认",
+                  stations.ids == ["dup", "keep"] && stations.name(of: "keep") == "乙",
+                  "ids=\(stations.ids)")
+        ctx.check("电台-存档-指向不存在的分类的归属当场丢弃（不把台藏起来）",
+                  stations.snapshotAssigned.isEmpty && stations.unassignedCount == 0,
+                  "n=\(stations.snapshotAssigned.count)")
+
+        // MARK: 用户入口（行右键四项 + 左栏分类三项）
+        p.switchGroup(.main)
+        p.clearPlaylist()
+        stations.restore(aliases: [:], categories: [], assigned: [:])
+        _ = p.addFiles([wav])
+        _ = p.addRadio("http://a.example.com/live", playNow: false)
+        _ = p.addRadio("http://b.example.com/live", playNow: false)
+        guard let entryID = p.createRadioCategory(named: "入口类")?.id else {
+            ctx.check("电台-入口-建得出一张分类", false); return
+        }
+        _ = p.moveRadios(keys: [keyA], to: entryID)
+        _ = p.setRadioName(trackOn("a.example.com")!, to: "城市之声")
+        p.switchGroup(.main)
+        ctx.pump(0.3)
+        guard let fileRow = p.playlist.tracks.firstIndex(where: { !$0.isRadio }),
+              let radioRow = p.playlist.tracks.firstIndex(where: { $0.isRadio }) else {
+            ctx.check("电台-入口-前置有一行歌一行台", false,
+                      "list=\(p.playlist.tracks.map { $0.isRadio ? "台" : "歌" })")
+            return
+        }
+        let fileTitles = view.refreshContextMenu(over: fileRow).map { $0.title }
+        ctx.check("电台-入口-本地歌那一行不出电台四项（置灰一排看不懂的入口不如不给）",
+                  !fileTitles.contains("修改地址…") && !fileTitles.contains("移入分类")
+                    && !fileTitles.contains("重试这个电台")
+                    && !fileTitles.contains { $0.hasPrefix("自定义台名") || $0.hasPrefix("修改台名") },
+                  fileTitles.joined(separator: "/"))
+        let radioItems = view.refreshContextMenu(over: radioRow)
+        ctx.check("电台-入口-台那一行四项齐全且都有真动作",
+                  radioItems.contains(where: { $0.title == "修改台名「城市之声」…" && $0.action != nil })
+                    && radioItems.contains(where: { $0.title == "修改地址…" && $0.action != nil })
+                    && radioItems.contains(where: { $0.title == "重试这个电台" && $0.action != nil })
+                    && radioItems.contains(where: { $0.title == "移入分类" && $0.submenu != nil }),
+                  radioItems.map { $0.title }.joined(separator: "/"))
+        let choices = view.radioMoveChoices(over: radioRow)
+        ctx.check("电台-入口-「移入分类」子菜单把勾打在当前位置上",
+                  choices.first { $0.title == "未分类" }?.state == .off
+                    && choices.first(where: { $0.representedObject as? String == entryID })?.state == .on,
+                  choices.map { "\($0.title):\($0.state == .on ? "勾" : "空")" }.joined(separator: "/"))
+        ctx.check("电台-入口-点子菜单那一项真把台移回未分类",
+                  view.clickRadioMoveItem(named: "未分类", over: radioRow)
+                    && stations.categoryID(of: keyA) == nil && p.radioCount(in: entryID) == 0,
+                  "n=\(p.radioCount(in: entryID))")
+        let radioPageMenu = panel.makeGroupMenu(for: .radio).items.map { $0.title }
+        let catMenu = panel.makeGroupMenu(for: .radioCategory(entryID)).items
+        let uncatMenu = panel.makeGroupMenu(for: .radioCategory(RadioStations.uncategorizedID)).items
+        ctx.check("电台-入口-左栏电台页给新建分类，分类页给改名与删除",
+                  radioPageMenu.contains("新建电台分类…")
+                    && catMenu.contains(where: { $0.title.hasPrefix("重命名分类「入口类」") && $0.isEnabled })
+                    && catMenu.contains(where: { $0.title.hasPrefix("删除分类「入口类」") && $0.isEnabled }),
+                  catMenu.map { $0.title }.joined(separator: "/"))
+        ctx.check("电台-入口-未分类那一行的改名与删除是灰的（默认入口不能没）",
+                  uncatMenu.contains(where: { $0.title == "重命名分类…" && !$0.isEnabled })
+                    && uncatMenu.contains(where: { $0.title == "删除分类…" && !$0.isEnabled }))
+        let madeByPanel = panel.createRadioCategoryThroughUI(named: "面板建的")
+        ctx.check("电台-入口-左栏三个分类动作走的是与菜单项同一个入口",
+                  madeByPanel != nil && panel.groupTitles.contains("面板建的")
+                    && panel.renameRadioCategoryThroughUI(id: madeByPanel?.id ?? "", to: "面板改的名") == nil
+                    && panel.groupTitles.contains("面板改的名")
+                    && panel.deleteRadioCategoryThroughUI(id: madeByPanel?.id ?? "") != nil
+                    && !panel.groupTitles.contains("面板改的名"),
+                  "titles=\(panel.groupTitles)")
+
+        // MARK: m3u 与属性面板
+        p.switchGroup(.main)
+        guard let named = trackOn("a.example.com") else {
+            ctx.check("电台-入口-m3u 前置：台还在列", false); return
+        }
+        _ = p.setRadioName(named, to: "导出带这名")
+        let list = Playlist()
+        list.add(named)
+        let m3u = dir.appendingPathComponent("alias.m3u")
+        _ = list.exportAsM3U(to: m3u)
+        let text = (try? String(contentsOf: m3u, encoding: .utf8)) ?? ""
+        ctx.check("电台-m3u 导出至少携带自定义台名",
+                  text.contains("#EXTINF:-1,导出带这名") && text.contains("http://a.example.com/live"),
+                  text.replacingOccurrences(of: "\n", with: " | "))
+        let extraLines = p.propertyExtraLines(for: named)
+        ctx.check("电台-属性面板说清台名来路与分类（没在播就不编状态）",
+                  extraLines.contains { $0.0 == "电台台名" && $0.1.contains("自定义") }
+                    && extraLines.contains { $0.0 == "电台分类" }
+                    && !extraLines.contains { $0.0 == "电台状态" || $0.0 == "连接质量" }
+                    && !extraLines.contains { $0.1.contains("0 k") },
+                  extraLines.map { $0.0 }.joined(separator: "/"))
+
+        // 收摊：档案、列表、历史、收藏都擦干净，不给下一段留现场
+        p.stop()
+        p.switchGroup(.main)
+        p.clearPlaylist()
+        p.groups.clear(.recentRadio)
+        for key in [hitAddr, keyA, newAddr, oldKey] {
+            let t = Track(radio: URL(string: key)!)
+            if p.isFavorite(t) { _ = p.toggleFavorite(t) }
+        }
+        stations.restore(aliases: [:], categories: [], assigned: [:])
+        p.persistNow()
+        let after = LibraryStore.load()
+        ctx.check("电台-收尾-档案与存档都擦干净不留给下一段",
+                  after.radioAliases.isEmpty && after.radioCategories.isEmpty
+                    && after.radioAssignments.isEmpty && after.trackPaths.isEmpty
+                    && after.recentRadioKeys.isEmpty && p.playlist.isEmpty
+                    && categoryRows() == 1 && stations.isEmpty,
+                  "台名=\(after.radioAliases.count) 分类=\(after.radioCategories.count)")
+    }
+
+    // MARK: - 连接质量台账（F11：时间由调用处递进来）
+
+    /// 需求要「统计窗口说清楚、每场会话正确重置」，而窗口进退拿真时钟验就是碰运气。
+    /// RadioQuality 自己不读时钟（方法都带 `now:`），所以这里能给一串已知时刻，
+    /// 把三十秒窗口与「一次见底只记一笔」钉死
+    private func checkQuality(_ ctx: SelfTestContext) {
+        var q = RadioQuality()
+        ctx.check("电台-质量-没在连的电台不编一句统计",
+                  q.session == 0 && q.summary(now: 100) == "没有正在连的电台", q.summary(now: 100))
+        q.startSession(7)
+        ctx.check("电台-质量-新一页从零开始且只记住是哪一页",
+                  q.session == 7 && q.totalUnderruns == 0 && q.totalReconnects == 0
+                    && q.windowUnderruns(now: 100) == 0)
+        q.noteBuffer(seconds: 0.5, now: 100)
+        ctx.check("电台-质量-半秒缓冲不算不足（水线只用来显示）",
+                  q.bufferedSeconds == 0.5 && !q.isBufferLow)
+        q.noteBuffer(seconds: RadioQuality.lowBufferSeconds - 0.1, now: 100)
+        ctx.check("电台-质量-低于水线就该说缓冲不足", q.isBufferLow,
+                  "水线=\(RadioQuality.lowBufferSeconds)s")
+        q.noteBuffer(seconds: -1, now: 100)
+        ctx.check("电台-质量-缓冲读数不会是负的", q.bufferedSeconds == 0 && q.isBufferLow)
+        q.noteUnderrun(now: 101)
+        q.noteUnderrun(now: 101.05)
+        q.noteUnderrun(now: 101.1)
+        ctx.check("电台-质量-一次见底只记一笔欠载（反复报不能刷数字）",
+                  q.totalUnderruns == 1 && q.windowUnderruns(now: 101.1) == 1,
+                  "n=\(q.totalUnderruns)")
+        ctx.check("电台-质量-见底时那句写明在等数据",
+                  q.summary(now: 101.1).contains("已经排空"), q.summary(now: 101.1))
+        q.noteBuffer(seconds: 0.5, now: 102)
+        q.noteUnderrun(now: 103)
+        ctx.check("电台-质量-缓过来又见底算新的一笔",
+                  q.totalUnderruns == 2 && q.windowUnderruns(now: 103) == 2,
+                  "n=\(q.totalUnderruns)")
+        q.noteReconnect(now: 103.5)
+        ctx.check("电台-质量-欠载与重连分开记账",
+                  q.totalReconnects == 1 && q.totalUnderruns == 2
+                    && q.windowReconnects(now: 103.5) == 1)
+        ctx.check("电台-质量-那句质量话把窗口与本会话都点名（统计窗口不含糊其辞）",
+                  q.summary(now: 104).contains("近 30 秒")
+                    && q.summary(now: 104).contains("本次收听累计"),
+                  q.summary(now: 104))
+        ctx.check("电台-质量-不把码率当质量（那句里一个码率有关的字都没有）",
+                  RadioQuality.windowSeconds == 30
+                    && !q.summary(now: 104).contains("kbps")
+                    && !q.summary(now: 104).contains("码率")
+                    && !q.summary(now: 104).contains("音质"),
+                  q.summary(now: 104))
+        ctx.check("电台-质量-窗口外的旧账不算「近期」（累计仍留着）",
+                  q.windowUnderruns(now: 132.5) == 1 && q.windowUnderruns(now: 133.5) == 0
+                    && q.windowReconnects(now: 133.5) == 0 && q.totalUnderruns == 2,
+                  "32.5s 前=\(q.windowUnderruns(now: 132.5)) 33.5s 前=\(q.windowUnderruns(now: 133.5))")
+        // 先让它缓过来：`starved` 还挂着的时候再报一笔会被「一次见底只记一笔」挡掉，
+        // 那一笔根本进不了窗口，就验不到清窗口这一步
+        q.noteBuffer(seconds: 1.0, now: 380)
+        q.noteUnderrun(now: 400)
+        ctx.check("电台-质量-报一笔时顺手把过期的清出窗口（不靠 filter 堆看运气）",
+                  q.windowUnderruns(now: 400) == 1 && q.totalUnderruns == 3,
+                  "窗口=\(q.windowUnderruns(now: 400)) 累计=\(q.totalUnderruns)")
+        q.startSession(8)
+        ctx.check("电台-质量-换台把上一场的账整本翻页重记",
+                  q.session == 8 && q.totalUnderruns == 0 && q.totalReconnects == 0
+                    && q.windowUnderruns(now: 400) == 0 && q.bufferedSeconds == 0,
+                  "累计=\(q.totalUnderruns)")
+        // 未知码率不伪造：解不出来就一个字不写，不拿 0 凑一条「0 kbps」给用户看
+        let unknown = RadioStreamDecoder.Info()
+        let known = RadioStreamDecoder.Info(sampleRate: 44_100, channels: 2, bitRateKbps: 64, codec: "AAC")
+        ctx.check("电台-质量-未知码率不伪造（空文案而不是 0k）",
+                  unknown.bitRateText.isEmpty && unknown.sampleRateText.isEmpty
+                    && known.bitRateText == "64k" && known.sampleRateText == "44.1k",
+                  "unknown=\"\(unknown.bitRateText)\" known=\(known.bitRateText)")
+    }
+
+    // MARK: - 本地 HTTP 流按剧本演（F11 验收：不依赖公网）
+
+    /// 需求写死了「用可控本地 HTTP 流测失败与慢速」。这里走的仍是 URLSession → ICY 拆包 →
+    /// FFmpeg → playerNode 那条真链路，只是服务器在 127.0.0.1 上，能把「推得比realtime慢」、
+    /// 「推够一点就掐」、「只回 503」这些公网给不了的条件摆出来。
+    /// 本机造不出 ADTS AAC 或服务器起不来时整段 SKIP（不是本机错，不让整套变红）
+    private func checkLocalStream(_ ctx: SelfTestContext) {
+        let dir = tempDir(ctx)
+        let p = ctx.player
+        let view = ctx.main.playlistView
+        let stations = p.radioStations
+        let wav = dir.appendingPathComponent("localstream.wav")
+        let aac = dir.appendingPathComponent("localstream.aac")
+        func finishUp() {
+            p.stop()
+            p.switchGroup(.main)
+            p.clearPlaylist()
+            p.groups.clear(.recentRadio)
+            stations.restore(aliases: [:], categories: [], assigned: [:])
+            ctx.pump(0.2)
+        }
+        guard ctx.writeWave(wav, sampleRate: 44_100, channels: 2, bits: 16, freqs: [440, 660]) else {
+            ctx.check("电台-本地流-写得出素材", false, "writeWave 失败")
+            return
+        }
+        if !ctx.fm.fileExists(atPath: aac.path) {
+            _ = ctx.convert(source: wav, fileFmt: "adts", dataFmt: "aac", to: aac)
+        }
+        guard let body = try? Data(contentsOf: aac), !body.isEmpty else {
+            ctx.emit("[selftest] SKIP 电台-本地 HTTP 流（本机 afconvert 造不出 ADTS AAC）")
+            return
+        }
+        let srv = LocalRadioStream(file: aac)
+        var cfg = LocalRadioStream.Config()
+        cfg.metaint = 4_096                    // 要 ICY 元数据：台名与「正在播」分离就靠它
+        cfg.title = "TT - 本地台"
+        cfg.bytesPerSecond = 64_000            // 推得比 128 kbps 的 AAC 快，正常不该卡
+        srv.config = cfg
+        guard let stream = srv.start() else {
+            ctx.emit("[selftest] SKIP 电台-本地 HTTP 流（本地服务器起不来）")
+            return
+        }
+        defer { srv.stop() }
+        let key = stream.absoluteString
+        func station() -> Track? { p.playlist.tracks.first { $0.isRadio } }
+
+        // ---- 一、出声、ICY 分离、已知值报得出、未知值不伪造 ----
+        p.clearPlaylist()
+        stations.setAlias(key: key, raw: "本地测试台")
+        if let note = p.addRadio(key, playNow: true) {
+            ctx.check("电台-本地流-加得进来", false, note)
+            finishUp()
+            return
+        }
+        let heard = ctx.waitUntil(20) { p.isRadio && p.isPlaying && p.engine.radioHasSound }
+        let scene = "状态=\(p.radioStateText) isRadio=\(p.isRadio) isPlaying=\(p.isPlaying) "
+            + "有声=\(p.engine.radioHasSound) 连接=\(srv.connections) 推出=\(srv.servedBytes)B"
+        ctx.check("电台-本地流-本地 HTTP 流真能出声（URLSession→ICY→FFmpeg→节点）", heard, scene)
+        guard heard else { finishUp(); return }
+        let onAir = ctx.waitUntil(6) { p.radioStateText == "直播中" }
+        let titled = ctx.waitUntil(8) { !p.radioNowPlaying.isEmpty }
+        let measured = ctx.waitUntil(6) { (station()?.sampleRate ?? 0) > 0 }
+        ctx.check("电台-本地流-连上后状态走到直播中", onAir, p.radioStateText)
+        ctx.check("电台-本地流-ICY 标题只进「正在播」（不覆盖用户起的台名）",
+                  titled && p.radioNowPlaying == "TT - 本地台"
+                    && station()?.title == "本地测试台"
+                    && stations.alias(for: key) == "本地测试台",
+                  "正在播=\(p.radioNowPlaying) 台名=\(station()?.title ?? "nil")")
+        ctx.check("电台-本地流-编码与采样率报得出流里的真值",
+                  measured && station()?.formatName.uppercased().contains("AAC") == true
+                    && station()?.sampleRate == 44_100,
+                  "codec=\(station()?.formatName ?? "nil") sr=\(station()?.sampleRate ?? 0)")
+        if let t = station() {
+            let lines = t.propertyLines
+            ctx.check("电台-本地流-未知码率不伪造（要么真值要么整行不写）",
+                      !lines.contains { $0.1.contains("unknown") || $0.1.contains("0 kbps") }
+                        && (t.bitRateKbps > 0) == lines.contains(where: { $0.0 == "码率" }),
+                      lines.map { "\($0.0)=\($0.1)" }.joined(separator: "/"))
+            let extra = p.propertyExtraLines(for: t)
+            ctx.check("电台-属性面板-正在播时才写状态、正在播与连接质量",
+                      extra.contains { $0.0 == "电台状态" && $0.1 == "直播中" }
+                        && extra.contains { $0.0 == "正在播放" && $0.1.contains("TT - 本地台") }
+                        && extra.contains { $0.0 == "电台分类" && $0.1.contains("未分类") }
+                        && extra.contains { $0.0 == "连接质量" },
+                      extra.map { $0.0 }.joined(separator: "/"))
+        }
+        let quality = p.radioQualityText
+        ctx.check("电台-本地流-连接质量那句只说可测量（近 30 秒、缓冲、欠载、重连）",
+                  quality.contains("近 30 秒") && quality.contains("缓冲")
+                    && !quality.contains("kbps") && !quality.contains("码率"), quality)
+        ctx.check("电台-本地流-台账认得这是哪一场且缓冲读数已排进去",
+                  p.engine.radioQuality.session != 0 && p.radioBufferedSeconds >= 0,
+                  "会话=\(p.engine.radioQuality.session) 缓冲=\(p.radioBufferedSeconds)s")
+        // 频谱是「解码→EQ→mixer→输出」这条通路唯一的证词。不能单点读 `bars`：
+        // `SpectrumView` 在窗口 occlusion 不可见时会 `analyzer.setEnabled(false)` 把 bars 抹成 0，
+        // 而我们要验的是引擎真的把 PCM 推到了 tap，不是 UI 此刻可见不可见（
+        // `ctx.spectrumEnergy` 就是为这个准备的：测量期间临时 enable、测完还原、多次取 max）
+        let streamEnergy = ctx.spectrumEnergy(p)
+        ctx.check("电台-本地流-PCM 真过了 EQ/mixer（频谱亮）", streamEnergy > 0.005,
+                  "max=\(String(format: "%.3f", streamEnergy))")
+        ctx.snapshot(ctx.main.window, named: "shot_radio_local_stream")
+
+        // ---- 二、暂停不算网络差，恢复就是重连上又出声 ----
+        let underrunBefore = p.engine.radioQuality.totalUnderruns
+        let sessionBefore = p.engine.radioQuality.session
+        p.togglePlay()
+        let paused = ctx.waitUntil(5) { !p.isPlaying }
+        ctx.pump(0.6)
+        ctx.check("电台-本地流-按个暂停不算网络差（不记欠载也不换会话）",
+                  paused && p.engine.radioQuality.totalUnderruns == underrunBefore
+                    && p.engine.radioQuality.session == sessionBefore
+                    && p.radioStateText == "未连接",
+                  "欠载=\(underrunBefore)→\(p.engine.radioQuality.totalUnderruns) 状态=\(p.radioStateText)")
+        p.togglePlay()
+        let resumed = ctx.waitUntil(20) {
+            p.isPlaying && p.radioStateText == "直播中" && p.engine.radioHasSound
+        }
+        ctx.check("电台-本地流-恢复就是重连上又出声（同一场收听）",
+                  resumed && p.engine.radioQuality.session == sessionBefore,
+                  "resumed=\(resumed) 会话=\(p.engine.radioQuality.session)/\(sessionBefore)")
+
+        // ---- 三、慢速：排得没声音快才叫欠载，界面得说出来 ----
+        let slow = p.radioBufferedSeconds
+        cfg.bytesPerSecond = 1_500
+        srv.config = cfg
+        _ = p.retryRadio(station() ?? Track(radio: stream))     // 新连接才按新剧本推
+        // 重试是「先停再装载」：会话号要等淡出走完、真开新流那一步才翻页，当场读还是上一页
+        let pageTurned = ctx.waitUntil(10) { p.engine.radioQuality.session != sessionBefore }
+        var stallText = ""
+        var stallSummary = ""
+        let stalled = ctx.waitUntil(25) {
+            guard p.engine.radioQuality.totalUnderruns >= 1, p.engine.radioBufferLow else { return false }
+            stallText = p.radioStateText
+            stallSummary = p.radioQualityText
+            return true
+        }
+        ctx.check("电台-本地流-手动重试另起一页台账（不是接着上一页刷数字）",
+                  pageTurned && p.engine.radioQuality.session > sessionBefore,
+                  "会话=\(sessionBefore)→\(p.engine.radioQuality.session)")
+        ctx.check("电台-本地流-推得比realtime慢时真会排空（欠载有凭据）",
+                  stalled && !stallSummary.isEmpty, "慢速前缓冲=\(slow)s 状态=\(stallText)")
+        ctx.check("电台-本地流-慢到排空时界面不说「直播中」而说缓冲不足",
+                  stallText == "缓冲不足，正在等数据…"
+                    && stallSummary.contains("已经排空"),
+                  "状态=\(stallText) 质量=\(stallSummary)")
+        cfg.bytesPerSecond = 64_000
+        srv.config = cfg
+        // 上一场已经攒下至少一笔欠载，这一场翻页后必须从空白页开始记（需求：每场会话正确重置）
+        let stallTotal = p.engine.radioQuality.totalUnderruns
+        let stallSession = p.engine.radioQuality.session
+        _ = p.retryRadio(station() ?? Track(radio: stream))
+        var freshTotal = -1
+        let repaged = ctx.waitUntil(10) {
+            guard p.engine.radioQuality.session != stallSession else { return false }
+            freshTotal = p.engine.radioQuality.totalUnderruns
+            return true
+        }
+        let recovered = ctx.waitUntil(20) { p.isPlaying && p.radioStateText == "直播中"
+            && p.engine.radioHasSound }
+        ctx.check("电台-本地流-翻页后上一场攒的欠载没被带过来",
+                  repaged && stallTotal >= 1 && freshTotal == 0,
+                  "上一场欠载=\(stallTotal) 新一页=\(freshTotal)")
+        ctx.check("电台-本地流-网络跟得上又不卡了（水线以上就不再喊缓冲不足）",
+                  recovered && !p.engine.radioBufferLow,
+                  "状态=\(p.radioStateText) 缓冲=\(p.radioBufferedSeconds)s")
+
+        // ---- 四、服务器只回 503：按退避重连、记进台账、停止后不作数 ----
+        srv.failWith(status: 503)
+        let before503 = srv.connections
+        _ = p.retryRadio(station() ?? Track(radio: stream))
+        var reconnectText = ""
+        let backed = ctx.waitUntil(25) {
+            if srv.connections - before503 >= 3, p.radioStateText.contains("重连") {
+                reconnectText = p.radioStateText
+                return true
+            }
+            return false
+        }
+        ctx.check("电台-本地流-服务器 503 时按退避一再重连（不是第次就报错）",
+                  backed, "连接+\(srv.connections - before503) 状态=\(reconnectText.isEmpty ? p.radioStateText : reconnectText)")
+        ctx.check("电台-本地流-重连中的那句写明是第几次", reconnectText.contains("重连中")
+                  && reconnectText.contains("次"), reconnectText)
+        ctx.check("电台-本地流-自动重连也记进同一场的账（用户看到的是这一次听了几回）",
+                  p.engine.radioQuality.totalReconnects >= 2,
+                  "重连=\(p.engine.radioQuality.totalReconnects) 质量=\(p.radioQualityText)")
+        let frozen = srv.connections
+        let frozenSession = p.engine.radioQuality.session
+        p.stop()
+        ctx.pump(9.5)          // 比最长那档退避（8 s）还久
+        ctx.check("电台-本地流-显式停止后不再自动重连（晚到的退避与回调都不作数）",
+                  srv.connections == frozen && p.radioStateText == "未连接" && !p.isPlaying
+                    && p.engine.radioQuality.session == frozenSession,
+                  "连接次数 \(frozen)→\(srv.connections) 状态=\(p.radioStateText)")
+
+        // ---- 五、403：重连多少次都是一个结果，当场说人话 ----
+        let before403 = srv.connections
+        srv.failWith(status: 403)
+        _ = p.retryRadio(station() ?? Track(radio: stream))
+        let refused = ctx.waitUntil(10) { p.radioStateText.contains("账号") }
+        ctx.pump(3)
+        ctx.check("电台-本地流-403 当场说「要账号或密码」而不走五次退避",
+                  refused && srv.connections - before403 == 1
+                    && p.radioStateText.contains("403"),
+                  "状态=\(p.radioStateText) 连接+\(srv.connections - before403)")
+
+        // ---- 六、推一半掉线：自己接上，仍算同一场 ----
+        cfg.bytesPerSecond = 64_000
+        cfg.metaint = 0
+        cfg.closeAfterBytes = 60_000
+        srv.config = cfg
+        let beforeCut = srv.connections
+        _ = p.retryRadio(station() ?? Track(radio: stream))
+        let cutSession = p.engine.radioQuality.session
+        let cut = ctx.waitUntil(25) { srv.connections - beforeCut >= 2 }
+        ctx.check("电台-本地流-服务器中途掉线后自己接上（不用用户动手）",
+                  cut && srv.lastDropBy == "self",
+                  "连接+\(srv.connections - beforeCut) 掉线由=\(srv.lastDropBy.isEmpty ? "没断" : srv.lastDropBy)")
+        ctx.check("电台-本地流-掉线重连算同一场收听（不换页）",
+                  p.engine.radioQuality.session == cutSession
+                    && p.engine.radioQuality.totalReconnects >= 1,
+                  "会话=\(p.engine.radioQuality.session) 重连=\(p.engine.radioQuality.totalReconnects)")
+        cfg.closeAfterBytes = nil
+        srv.config = cfg
+        let steadyPage = p.engine.radioQuality.session
+        _ = p.retryRadio(station() ?? Track(radio: stream))
+        // 要等真翻页（open 之后）才起算：旧链那一页还在按 60_000 字节一掐，拿它当基线
+        // 测不出任何事。翻页后排下去的旧退避定时器应该全部作废
+        var steadyScene = ""
+        let steadyOnAir = ctx.waitUntil(30) {
+            let ok = p.engine.radioQuality.session != steadyPage
+                && p.isPlaying && p.radioStateText == "直播中" && p.engine.radioHasSound
+            steadyScene = "会话=\(steadyPage)→\(p.engine.radioQuality.session)"
+                + " isPlaying=\(p.isPlaying) 状态=\(p.radioStateText)"
+                + " 有声=\(p.engine.radioHasSound) 连接=\(srv.connections)"
+            return ok
+        }
+        // 「不再掉线」的凭据是新这一页上线后连接数冻住：`lastDropBy` 说的是
+        // 「最近一次掉线是谁掐的」，剧本不掐了它就一直停在上一次，不能当成「现在有没有断」
+        let steadyFrom = srv.connections
+        let steadyReconnects = p.engine.radioQuality.totalReconnects
+        ctx.pump(6)           // 比上一档「推够 6 万字节就掐」需要的时间长得多
+        ctx.check("电台-本地流-改回正常剧本后不再掉线（旧退避定时器不会回来掐新流）",
+                  steadyOnAir && srv.connections == steadyFrom
+                    && p.engine.radioQuality.totalReconnects == steadyReconnects,
+                  "\(steadyScene) 连接=\(steadyFrom)→\(srv.connections)"
+                    + " 重连=\(steadyReconnects)→\(p.engine.radioQuality.totalReconnects)"
+                    + " 掉线由=\(srv.lastDropBy)")
+
+        // ---- 七、入口：改地址时旧连接先停（真流版） ----
+        let beforeMove = srv.connections
+        let otherAddr = "http://127.0.0.1:\(srv.port)/other"
+        let playing = station() ?? Track(radio: stream)
+        let moved = view.applyRadioAddress(track: playing, to: otherAddr)
+        let movedOn = ctx.waitUntil(20) { p.isPlaying && p.engine.radioHasSound
+            && station()?.url.path == "/other" }
+        ctx.check("电台-入口-改地址走真入口：旧连接先停、新地址接着听",
+                  moved == nil && movedOn && srv.connections > beforeMove
+                    && stations.alias(for: otherAddr) == "本地测试台"
+                    && stations.alias(for: key) == nil,
+                  "note=\(moved ?? "nil") 连接+\(srv.connections - beforeMove) 现址=\(station()?.url.path ?? "nil")")
+
+        finishUp()
+        // 停止会像本地文件那样留着「已装载但停住」的电台会话（再按播放就是重连这个台），
+        // 所以「擦干净」的凭据是没在播、状态回「未连接」，而不是 isRadio 被抹掉
+        ctx.check("电台-本地流-收尾-台与档案都擦干净且没偷偷连着",
+                  p.playlist.isEmpty && stations.snapshotAliases.isEmpty && !p.isPlaying
+                    && p.radioStateText == "未连接",
+                  "list=\(p.playlist.count) 台名=\(stations.snapshotAliases.count)"
+                    + " 状态=\(p.radioStateText)")
+    }
+
     // MARK: - 真拉流（选做）
 
     /// 只有设了 `TTPLAYER_RADIO_URL` 才真出网。
@@ -526,8 +1280,9 @@ struct RadioSuite: SelfTestSuite {
         let state = p.radioStateText
         let now = p.radioNowPlaying
         let elapsed = p.currentTime
-        // 频谱是这条通路的证词：PCM 真过了 EQ/mixer，bars 才会亮
-        let lit = p.engine.spectrum.bars.contains { $0 > 0.005 }
+        // 频谱是这条通路的证词：PCM 真过了 EQ/mixer，bars 才会亮（同样走 spectrumEnergy，
+        // 单点读数会被窗口可见性与 tap 冷启动带跑）
+        let lit = ctx.spectrumEnergy(p) > 0.005
         // 暂停即断流（直播不补放暂停期间的内容）：时钟也得停下，
         // 否则“恢复”只是时钟又在走而已（实测过这个假象：不重连也能“续上”）
         let beforePause = p.currentTime

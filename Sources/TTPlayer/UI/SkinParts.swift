@@ -575,3 +575,70 @@ final class TransparencySliderView: NSView {
         onChange?(v)
     }
 }
+
+// MARK: - ReplayGain 前置增益滑块（右键菜单内嵌控件）
+
+/// “透明度滑块”那一套写法的前置增益版：-12…+12 dB，右侧实时显示数值。
+/// `apply` 把「设值 + 刷新文字 + 回调」收成一个口子，自检拖它与用户拖滑块走同一段代码
+final class GainSliderView: NSView {
+    /// 需求定的硬边界（requirements F02）：滑块不能拖出这个范围
+    static let range: ClosedRange<Float> = -12...12
+    var onChange: ((Float) -> Void)?
+    private let slider = NSSlider()
+    private let label = NSTextField(labelWithString: "前置增益")
+    private let readout = NSTextField(labelWithString: "")
+
+    init(decibels: Float) {
+        super.init(frame: NSRect(x: 0, y: 0, width: 240, height: 28))
+        label.font = NSFont.systemFont(ofSize: 12)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+
+        slider.minValue = Double(Self.range.lowerBound)
+        slider.maxValue = Double(Self.range.upperBound)
+        slider.target = self
+        slider.action = #selector(changed)
+        slider.translatesAutoresizingMaskIntoConstraints = false
+        slider.controlSize = .small
+        addSubview(slider)
+
+        readout.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        readout.alignment = .right
+        readout.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(readout)
+
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            slider.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 8),
+            slider.centerYAnchor.constraint(equalTo: centerYAnchor),
+            readout.leadingAnchor.constraint(equalTo: slider.trailingAnchor, constant: 6),
+            readout.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            readout.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        // 开场就要对上当前设好的数值：菜单每次重新拼，拖过一半重开菜单不能又跑回 0
+        set(decibels)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// 设值并回报（夹到边界，报出去的也是夹好的那个数）
+    func apply(_ db: Float) {
+        let v = min(max(db, Self.range.lowerBound), Self.range.upperBound)
+        set(v)
+        onChange?(v)
+    }
+
+    /// 只刷新控件（不走回调）：初始化用这一条，避免建控件时就把新值往回抛一次
+    private func set(_ db: Float) {
+        let v = min(max(db, Self.range.lowerBound), Self.range.upperBound)
+        slider.doubleValue = Double(v)
+        readout.stringValue = String(format: "%+.1f dB", v)
+    }
+
+    @objc private func changed() {
+        let v = Float(slider.doubleValue)
+        readout.stringValue = String(format: "%+.1f dB", v)
+        onChange?(v)
+    }
+}

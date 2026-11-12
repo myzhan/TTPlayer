@@ -35,6 +35,47 @@ final class FFmpegDecoder: PCMAudioDecoder {
     let totalFrames: Int64
     let formatName: String
 
+    /// 无缝播放（F01）要用的「FFmpeg 已经替我们裁了多少」这份账。
+    ///
+    /// 本机 FFmpeg 9 实测（数字见 GaplessSuite 的「参考」行）：
+    /// - mp3（lame 出品、带 LAME 无缝信息）：延迟只写在**第一个包的 side data** 上
+    ///   （实测 `skip=1105`，而 `initial_padding` 无论解码器侧还是流参数侧都是 0），
+    ///   `libavcodec/decode.c` 的 `discard_samples()` 在解码器内部就把它丢干净（首帧只剩
+    ///   47 样本，产出恰 == 容器 duration）。所以我们**一处都不能再减**。
+    ///   但它平移 `frame->pts` 的前提是 `avctx->pkt_timebase` 已设：不设就只报一句
+    ///   「Could not update timestamps for skipped samples」，时间戳停在丢之前的位置，
+    ///   与实交样本差一个延迟（就是本解码器曾经过多 1105 帧的根因）——init 里必须设。
+    /// - m4a（aac）：`initial_padding` 报 1024，可第一帧 pts 就是 0（时间戳本来就没挪），
+    ///   130 帧 × 1024 中尾部不满一帧的部分已由解码器丢弃，产出恰 == duration。
+    ///   → 报上来的延迟**不能**当可听基准（拿它当基准就是凭空丢头 23 ms）。
+    /// - wav / flac：三个数都是 0，首帧 pts 也是 0，可听区间就是整个文件。
+    ///
+    /// 结论：可听基准只能从「真正交出来的第一帧的 pts」拿，不能拿哪个报上来的延迟数；
+    /// 所以 init 里先解一帧把基准定下来（见 `primeAudibleBase`）。
+    struct GaplessInfo {
+        /// 编码器插在最前面的 priming 样本数（解码侧 FFmpeg 已自己丢掉）
+        let encoderDelay: Int
+        /// 编码器补在最后面的 padding 样本数（解码侧 FFmpeg 已自己丢掉，容器 duration 也不含它）
+        let trailingPadding: Int
+        /// 不连续点之后要跳过的样本数（seek 用，本解码器按帧顺序交付，不参与可听区间计算）
+        let seekPreroll: Int
+        /// 流参数侧（`AVStream.codecpar`）报的延迟与尾部。mp3 这边两边都是 0（延迟在包
+        /// side data 里），aac 两边都是 1024（解码器自己丢、但时间戳不挪）
+        let streamDelay: Int
+        let streamTrailing: Int
+        /// 第一帧解码输出带的 pts 折算到输出时基：mp3 上它 == 被丢掉的 priming 长度
+        /// （正是因为设了 `pkt_timebase`），也就是可听基准
+        var firstOutPTS: Int64 = -1
+        /// 顺序解到底真正产出的帧数（`countProducedFrames` 填，只有自检会付这笔钱）
+        var producedFrames: Int64 = -1
+    }
+
+    /// 打开时就已知的部分；`firstOutPTS` / `producedFrames` 要解过才有值
+    private(set) var gapless: GaplessInfo
+
+    /// 可听第 0 帧落在哪个 pts 坐标上（校准后的真实基准，`seek` 与自检都看这个）
+    var audibleBase: Int64 { ptsBase }
+
     // MARK: - FFmpeg 上下文（init 全部成功后才赋值，deinit 统一释放）
 
     private var fmt: UnsafeMutablePointer<AVFormatContext>?
@@ -63,10 +104,16 @@ final class FFmpegDecoder: PCMAudioDecoder {
     private var stageR = [Float](repeating: 0, count: FFmpegDecoder.stageCap)
     private var stageCount = 0     // 暂存里有效帧
     private var stageCursor = 0    // 已消费帧
-    /// 下一帧待交付样本的绝对输出帧号（顺序读的定位锚）
+    /// 下一帧待交付样本的绝对输出帧号（顺序读的定位锚）。坐标是「可听第 N 帧」：
+    /// FFmpeg 丢掉 priming 时会连时间戳一起往后挪，所以 pts 不能直接当帧号用
     private var nextOutPos: Int64 = 0
-    /// 无 pts 时的顺序位置计数
+    /// 无 pts 时的顺序位置计数（同样是可听坐标）
     private var runningOutPos: Int64 = 0
+    /// 可听第 0 帧落在哪个 pts 坐标上（实测 = 编码器 delay）。seek 时把它加回去才能
+    /// 落准：容器里的第 A 个样本属于可听第 A − ptsBase 帧
+    private var ptsBase: Int64 = 0
+    /// 认过一次基准就不再改（seek 后的首帧 pts 不是第 0 帧的）
+    private var ptsCalibrated = false
     /// seek 后要丢到的目标帧（-1 = 无需丢弃）
     private var discardUntil: Int64 = -1
     private var flushSent = false
@@ -131,6 +178,11 @@ final class FFmpegDecoder: PCMAudioDecoder {
         guard avcodec_parameters_to_context(codecCtx, par) >= 0 else {
             cleanup(); throw DecodeError.cannotDecode(reason: "参数复制失败")
         }
+        // 把包的时基交给解码器：它丢掉 priming / padding 时靠这个把 `frame->pts` 一起挪过去。
+        // 不设（本机实测）mp3 会只报一句「Could not update timestamps for skipped samples」，
+        // 样本丢了 1105 个而时间戳不动——我们拿 pts 推可听帧号就会一直比实交样本多 1105，
+        // 衔接与 seek 两头都偏
+        codecCtx.pointee.pkt_timebase = tb
         ret = avcodec_open2(codecCtx, dec, nil)
         guard ret >= 0 else { cleanup(); throw DecodeError.cannotDecode(reason: FFmpeg.errstr(ret)) }
 
@@ -178,6 +230,29 @@ final class FFmpegDecoder: PCMAudioDecoder {
         self.archiveIO = io
         self.totalFrames = FFmpegDecoder.computeTotal(st: st, fmtDuration: fmtCtx.pointee.duration,
                                                       outTB: self.outTB)
+        self.gapless = GaplessInfo(encoderDelay: Int(codecCtx.pointee.initial_padding),
+                                   trailingPadding: Int(codecCtx.pointee.trailing_padding),
+                                   seekPreroll: Int(codecCtx.pointee.seek_preroll),
+                                   streamDelay: Int(par.pointee.initial_padding),
+                                   streamTrailing: Int(par.pointee.trailing_padding))
+        // 先拿容器/解码器报的编码延迟当基准（没解过也能 seek 得准）；
+        // 真解出第一帧后会用实测的 pts 基准覆写一次（见 `emitFrame`）
+        self.ptsBase = av_rescale_q(Int64(codecCtx.pointee.initial_padding),
+                                    AVRational(num: 1, den: inRate), self.outTB)
+        // 上面那个推算在 mp3（报 0，真基准 1105）与 aac（报 1024，真基准 0）两边都是错的，
+        // 而基准只错在「第一帧解出来之前」——所以开完文件就立即拿它推一次，不要等到第一次 seek
+        primeAudibleBase()
+    }
+
+    /// 解一帧把可听基准定下来（同时把这一帧留在暂存里，下一次 `read(from: 0)` 直接拿它）。
+    /// 解不动（坏文件）就放弃：后面真交付第一帧时 `emitFrame` 会自己认基准。
+    /// 上限 64 次：某些编码要几个包才出第一帧，但坏文件不能在这无限转
+    private func primeAudibleBase() {
+        var tries = 0
+        while !ptsCalibrated && tries < 64 {
+            tries += 1
+            if !fillStage() { return }
+        }
     }
 
     deinit {
@@ -211,7 +286,9 @@ final class FFmpegDecoder: PCMAudioDecoder {
     private func seek(to frame: Int64) {
         guard let fmt, let cc else { return }
         let target = max(0, frame)
-        let ts = target == 0 ? Int64(0) : av_rescale_q(target, outTB, timeBase)
+        // 可听帧号 → 容器时间戳：把第 0 帧那份偏移加回去（mp3 上不加就会落后一个
+        // encoder delay）；回到开头时直接 seek 0，让 demuxer 自己从头重新丢 priming
+        let ts = target == 0 ? Int64(0) : av_rescale_q(target + ptsBase, outTB, timeBase)
         av_seek_frame(fmt, streamIndex, ts, AVSEEK_FLAG_BACKWARD)
         avcodec_flush_buffers(cc)
         configureSwr()
@@ -221,6 +298,7 @@ final class FFmpegDecoder: PCMAudioDecoder {
         nextOutPos = target
         runningOutPos = target
         discardUntil = target
+        ptsCalibrated = true      // seek 之后的首帧 pts 不是第 0 帧的，基准不能再重认
     }
 
     // MARK: - 读 PCM
@@ -254,6 +332,26 @@ final class FFmpegDecoder: PCMAudioDecoder {
         }
         buffer.frameLength = AVAudioFrameCount(produced)
         return AVAudioFrameCount(produced)
+    }
+
+    /// 顺序解到底，数一数真正产出了多少帧。自检验「FFmpeg 已经裁到位、我们没有重复裁」
+    /// 要靠它：可听终点（`totalFrames`）与真实产出帧数必须对得上。
+    /// 会把整曲读一遍，只在自检里用；播放路径永远只按窗口读。
+    func countProducedFrames() -> Int64 {
+        guard let fmt = AVAudioFormat(standardFormatWithSampleRate: sampleRate,
+                                      channels: AVAudioChannelCount(channelCount)) else { return 0 }
+        var total: Int64 = 0
+        var pos: Int64 = 0
+        let chunk = 8_192
+        while total < 200_000_000 {      // 坏文件不能无限数下去（~76 分钟上限）
+            guard let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(chunk)) else { break }
+            let got = read(into: buf, frames: AVAudioFrameCount(chunk), from: pos)
+            if got == 0 { break }
+            pos += Int64(got)
+            total += Int64(got)
+        }
+        gapless.producedFrames = total
+        return total
     }
 
     /// 标准 FFmpeg 解码流水：receive 帧，没帧就 send 包；EOF 后冲 swr 尾。
@@ -296,12 +394,29 @@ final class FFmpegDecoder: PCMAudioDecoder {
         let inCount = Int(frame.pointee.nb_samples)
         guard inCount > 0 else { return false }
 
-        let blockStart: Int64
+        // 时间戳只用来当「顺序计数器」的校对：FFmpeg 在解码器里丢掉 priming 时会把
+        // pts 一起往后挪（实测 lame 的 mp3 第一帧 pts = 576 样本），直接拿它当帧号会
+        // 和「已经交付了多少帧」对不上——轻则每块都误判成位置不一致而重复 seek
+        // （把上一块的尾巴重播一遍），重则段尾永远差那么几十毫秒接不上。
+        // 所以：可听帧号 = pts 坐标 − 基准（基准 = 第 0 帧的 pts，没解过就先拿报上来的
+        // 编码延迟算），无缝衔接与 CUE 区间都只看可听帧号。
+        let ptsCoord: Int64
         if frame.pointee.pts != FFmpegDecoder.noPTS {
-            blockStart = av_rescale_q(frame.pointee.pts, timeBase, outTB)
+            ptsCoord = av_rescale_q(frame.pointee.pts, timeBase, outTB)
         } else {
-            blockStart = runningOutPos
+            ptsCoord = runningOutPos + ptsBase
         }
+        if !ptsCalibrated {
+            ptsCalibrated = true
+            gapless.firstOutPTS = ptsCoord
+            // 实测基准无条件盖掉开文件时推算的那个，**包括 0**：aac 那边 FFmpeg 报
+            // initial_padding = 1024，可它交付的第一帧 pts 就是 0（延迟只在容器里记着，
+            // 时间戳没跟着挪）。此时若因为「pts 不大于 0」而留着 1024 当基准，可听坐标
+            // 就从 −1024 起算，seek 又往容器坐标上多加 1024 —— 两头各错一次，
+            // 等于凭空丢头 23 ms 且每次跳转都偏 23 ms
+            ptsBase = ptsCoord
+        }
+        let blockStart = ptsCoord - ptsBase
 
         let inData = frame.pointee.extended_data
         let got = convert(swr: swr, in: inData, inCount: Int32(inCount))

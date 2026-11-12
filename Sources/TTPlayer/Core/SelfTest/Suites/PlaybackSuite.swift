@@ -27,9 +27,12 @@ struct PlaybackSuite: SelfTestSuite {
         let ct = p.currentTime
         ctx.check("播放-推进", p.isPlaying && ct > 0.3 && ct < 6.0,
                   "playing=\(p.isPlaying) t=\(String(format: "%.2f", ct))")
-        let bars = p.engine.spectrum.bars
-        ctx.check("播放-频谱活跃", bars.max() ?? 0 > 0.05,
-                  "max=\(String(format: "%.3f", bars.max() ?? 0))")
+        // 这里验的是「解码 → 混音 → tap → 分析」整条链路真能出声，不是 UI 可见性：
+        // 单点读 bars.max() 会撞两个假象（tap 冷启动第一帧、窗口 occlusion 让 SpectrumView
+        // 把 analyzer 关掉并清零），实测同一份二进制读到过 0.458 也读到过 0.000。
+        let energy = ctx.spectrumEnergy(p)
+        ctx.check("播放-频谱活跃", energy > 0.05,
+                  "max=\(String(format: "%.3f", energy))")
         // 歌词跟着同名 .lrc 走，而带词的那首未必排在第一行（封面素材会抢位），
         // 所以显式跳到 demo01 再验（loadLyric 是同步的，切完就能读）
         if let lyricRow = p.playlist.tracks.firstIndex(where: {
@@ -138,26 +141,42 @@ struct PlaybackSuite: SelfTestSuite {
         p.switchGroup(.main)
     }
 
-    /// 删除正在播放行 → 引擎接手新当前行、不隔空跳过一首（bugreport P2#4）
+    /// 删除正在播那一行 → 该曲继续播到结束、不跳曲、不把别的行当当前曲（requirements F03）。
+    /// bugreport P2#4 当时修的是「引擎接手新当前行」，新规格明确不要那种跳曲行为
     private func checkRemoveCurrentHandsOff(_ ctx: SelfTestContext) {
         let p = ctx.player
         p.clearPlaylist()
         _ = p.addFiles(ctx.libraryURLs)
         guard p.playlist.count >= 3 else {
-            ctx.check("删除当前行-引擎接手下一首", false, "list=\(p.playlist.count)"); return
+            ctx.check("删除当前行-仍播同一曲", false, "list=\(p.playlist.count)"); return
         }
         let removed = p.playlist.tracks[1]
+        let nextTrack = p.playlist.tracks[2]
         p.setMode(.order)
         p.playRowAt(1)
         _ = ctx.waitUntil(4.0) { p.isPlaying && p.currentTime > 0.2 }
-        let expectNext = p.playlist.tracks[2].url.lastPathComponent   // 删 index 1 后 C 顶上来
+        let removedAt = p.currentTime
         p.removeTracks(at: IndexSet(integer: 1))
-        ctx.check("删除当前行-列表指向下一首",
-                  p.playlist.currentTrack?.url.lastPathComponent == expectNext,
-                  "cur=\(p.playlist.currentTrack?.url.lastPathComponent ?? "nil") expect=\(expectNext)")
-        let handed = ctx.waitUntil(3.0) { p.isPlaying && p.currentTime > 0.1 }
-        ctx.check("删除当前行-引擎接手新当前行", handed,
-                  "playing=\(p.isPlaying) t=\(String(format: "%.2f", p.currentTime))")
+        ctx.pump(0.3)
+        ctx.check("删除当前行-仍播同一曲", p.currentTrack === removed && p.isPlaying,
+                  "cur=\(p.currentTrack?.fileName ?? "nil") playing=\(p.isPlaying)")
+        ctx.check("删除当前行-进度不重置", p.currentTime >= removedAt,
+                  "t=\(String(format: "%.2f", p.currentTime)) start=\(String(format: "%.2f", removedAt))")
+        ctx.check("删除当前行-不把别的行当当前曲",
+                  p.playlist.currentTrack?.url.lastPathComponent != nextTrack.url.lastPathComponent
+                    && p.playlist.index(ofKey: removed.identityKey) == nil,
+                  "sel=\(p.playlist.currentTrack?.url.lastPathComponent ?? "nil")")
+        ctx.check("删除当前行-下一曲还是它",
+                  p.queue.pending.first?.track.identityKey == nextTrack.identityKey,
+                  "next=\(p.queue.pending.first?.track.url.lastPathComponent ?? "nil")")
+        // 播完这一曲就该轮到原来的下一条
+        p.seek(to: max(0, p.duration - 0.2))
+        _ = ctx.waitUntil(4.0) { p.currentTrack?.identityKey == nextTrack.identityKey }
+        ctx.check("删除当前行-播完不隔空跳过一首",
+                  p.currentTrack?.identityKey == nextTrack.identityKey && p.isPlaying,
+                  "cur=\(p.currentTrack?.url.lastPathComponent ?? "nil") "
+                  + "playing=\(p.isPlaying) t=\(String(format: "%.2f", p.currentTime)) "
+                  + "dur=\(String(format: "%.2f", p.duration)) note=\(p.gaplessNote)")
         p.stop()
         p.setMode(.listLoop)
         // 把删掉的那行加回来，保证 trackPaths 回到基线

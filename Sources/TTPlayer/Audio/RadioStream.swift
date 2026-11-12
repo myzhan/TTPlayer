@@ -230,16 +230,18 @@ final class RadioStreamDecoder {
     }
 
     /// 读回调的落点：从环缓冲取最多 `want` 字节到 `dest`。
-    /// 没数据时挂起等待；EOF 或中断且取空返回 0（FFmpeg 视为结束）。
+    /// 没数据时挂起等待；EOF 或中断且取空返回 `AVERROR_EOF`——**不能回 0**：
+    /// FFmpeg n9 的 `fill_buffer` 只把 `AVERROR_EOF` 和负数当结束，回 0 算
+    /// 「这趟没读到」并接着重试，断流后的解码线程就会 100% CPU 原地空转而不退
     fileprivate func consume(_ dest: UnsafeMutablePointer<UInt8>?, _ want: Int32) -> Int32 {
-        guard let dest, want > 0 else { return 0 }
+        guard let dest, want > 0 else { return Int32(cff_averror_eof()) }
         cond.lock()
         while ring.isEmpty, !eof, !aborted {
             cond.wait()
         }
         if ring.isEmpty {   // eof 或 aborted 且无数据
             cond.unlock()
-            return 0
+            return Int32(cff_averror_eof())
         }
         let n = min(Int(want), ring.count)
         _ = ring.withUnsafeBytes { src in memcpy(dest, src.baseAddress!, n) }
@@ -400,7 +402,8 @@ final class RadioStreamDecoder {
     // MARK: C 回调（不捕获上下文，靠 opaque 找回 self）
 
     private static let readCB: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutablePointer<UInt8>?, Int32) -> Int32 = { opq, buf, size in
-        guard let opq else { return 0 }
+        // opaque 丢了就没有任何数据可给了，只能报 EOF：回 0 会让 FFmpeg 反复重试而空转
+        guard let opq else { return Int32(cff_averror_eof()) }
         let me = Unmanaged<RadioStreamDecoder>.fromOpaque(opq).takeUnretainedValue()
         return me.consume(buf, size)
     }
@@ -551,6 +554,11 @@ final class RadioPlayer: NSObject {
     private var decoder: RadioStreamDecoder?
     private var demuxer: ICYDemuxer?
     private var attempt = 0
+    /// 连接代号：`open()`（换台、重试、暂停后又按播放）与 `stop()` 各推进一格。
+    /// 退避定时器登记的是它被排下去时那一格，过期的定时器一律不作数：不然用户在
+    /// 断线退避当中点了「重试这个电台」，新流刚连上，旧定时器到点又会把它掐掉重连
+    /// ——听着就是「好好的又咔一下」（F11 要的「退避与过期回调防护」）
+    private var generation = 0
     /// 证书不可信时已经换过一次明文（用户重新点播放会复位）
     private var fallbackTried = false
     private var wantsPlayback = false
@@ -594,6 +602,7 @@ final class RadioPlayer: NSObject {
     func open(_ url: URL) {
         currentURL = url
         sync {
+            generation += 1        // 之前排下去的退避定时器当场作废
             closed = false
             wantsPlayback = true
             attempt = 0
@@ -613,6 +622,7 @@ final class RadioPlayer: NSObject {
 
     func stop() {
         sync {
+            generation += 1
             closed = true
             wantsPlayback = false
             teardown()
@@ -679,8 +689,9 @@ final class RadioPlayer: NSObject {
         }
         setState(.reconnecting(attempt: attempt))
         let delay = RadioPlayer.retryDelay(attempt: attempt)
+        let gen = generation
         queue.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, self.wantsPlayback, !self.closed else { return }
+            guard let self, self.generation == gen, self.wantsPlayback, !self.closed else { return }
             self.start()
         }
     }

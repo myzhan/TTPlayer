@@ -253,7 +253,258 @@ final class SelfTestContext {
         return rep.colorAt(x: 20, y: 10)?.usingColorSpace(.deviceRGB)
     }
 
+    // MARK: - 真实输出链取流
+
+    /// 采集引擎真排给音频图的 PCM（左声道，最多 seconds 秒）。
+    /// 位置类与衔接类断言不能只信 `currentTime`：那个数是从渲染时钟算出来的，
+    /// 排错了内容也能报出一个好看的秒数。拿真排出去的数据才能证「这里真的在放那一段」
+    func captureLeftChannel(_ p: PlayerController, seconds: Double) -> (samples: [Float], sampleRate: Double) {
+        final class Box { var data: [Float] = []; let lock = NSLock() }
+        let box = Box()
+        let fmt = p.engine.playerConnectionFormat
+        p.engine.beginCapture { buf in
+            guard let ch = buf.floatChannelData else { return }
+            let n = Int(buf.frameLength)
+            box.lock.lock()
+            box.data.append(contentsOf: UnsafeBufferPointer(start: ch[0], count: n))
+            box.lock.unlock()
+        }
+        pump(seconds)
+        p.engine.endCapture()
+        return (box.data, fmt?.sampleRate ?? 44_100)
+    }
+
+    /// 从**淡出那一层**（fadeNode）取一段 PCM 算 RMS（F09）。
+    /// 为什么不能拿 `captureLeftChannel`：那个 tap 在 playerNode 上，而睡眠淡出发生在
+    /// eq 之后的 fadeNode——在上游量只会量到「数值改了、声音没变」。fadeNode 在用户
+    /// 音量（mainMixer）上游，拿它量到的比值就是淡出系数本身
+    func fadeRMS(_ p: PlayerController, seconds: Double) -> Double {
+        final class Box { var data: [Float] = []; let lock = NSLock() }
+        let box = Box()
+        p.engine.beginFadeCapture { buf in
+            guard let ch = buf.floatChannelData else { return }
+            let n = Int(buf.frameLength)
+            box.lock.lock()
+            box.data.append(contentsOf: UnsafeBufferPointer(start: ch[0], count: n))
+            box.lock.unlock()
+        }
+        pump(seconds)
+        p.engine.endFadeCapture()
+        // 头 5% 抖掉：tap 装上去的第一块偶尔赶上格式转换的补零
+        let skip = box.data.count * 5 / 100
+        let body = box.data.dropFirst(skip)
+        guard body.count > 441 else { return -1 }   // 连 10 ms 都没采到就当没声音
+        var s = 0.0
+        for v in body { s += Double(v) * Double(v) }
+        return (s / Double(body.count)).squareRoot()
+    }
+
+    /// 同一条解码通路从文件的某一秒开始取一段参考 PCM（拿它与上者比内容）
+    func referenceLeftChannel(_ url: URL, from seconds: Double, frames: Int) -> [Float] {
+        guard let dec = PCMDecoders.decoder(for: url),
+              let fmt = AVAudioFormat(standardFormatWithSampleRate: dec.sampleRate,
+                                      channels: AVAudioChannelCount(dec.channelCount)),
+              let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: 4_096) else { return [] }
+        var out: [Float] = []
+        out.reserveCapacity(frames)
+        var pos = Int64(seconds * dec.sampleRate)
+        while out.count < frames {
+            buf.frameLength = 0
+            let want = min(4_096, frames - out.count)
+            let got = dec.read(into: buf, frames: AVAudioFrameCount(want), from: pos)
+            guard got > 0, let ch = buf.floatChannelData else { break }
+            out.append(contentsOf: UnsafeBufferPointer(start: ch[0], count: Int(got)))
+            pos += Int64(got)
+        }
+        return out
+    }
+
+    /// 在 `center ± window` 秒里逐点滑过，取最像的那一个位置的最大相关度。
+    /// 音高探针只能答「在哪一秒」，这个能答「是不是这一秒的这一小段」：相位对纯正弦太敏感
+    /// （差一个周期就重新相关），所以窗口要给足、步长要给小（8 帧 ≈ 0.18 ms，200 Hz 上只差 13°）。
+    /// 参考段只解一次，滑窗全在内存里走，不逐偏移重新开文件
+    func bestSimilarity(_ captured: [Float], url: URL, center: Double, frames: Int,
+                        window: Double = 0.3, step: Int = 8) -> Double {
+        guard frames > 32, step > 0, captured.count >= frames,
+              let dec = PCMDecoders.decoder(for: url),
+              let fmt = AVAudioFormat(standardFormatWithSampleRate: dec.sampleRate,
+                                      channels: AVAudioChannelCount(dec.channelCount)),
+              let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: 4_096) else { return 0 }
+        let slip = Int(max(0, window) * dec.sampleRate)
+        let span = frames + 2 * slip
+        var ref: [Float] = []
+        ref.reserveCapacity(span)
+        var pos = max(0, Int64(center * dec.sampleRate) - Int64(slip))
+        while ref.count < span {
+            buf.frameLength = 0
+            let want = min(4_096, span - ref.count)
+            let got = dec.read(into: buf, frames: AVAudioFrameCount(want), from: pos)
+            guard got > 0, let ch = buf.floatChannelData else { break }
+            ref.append(contentsOf: UnsafeBufferPointer(start: ch[0], count: Int(got)))
+            pos += Int64(got)
+        }
+        guard ref.count >= frames else { return 0 }
+        var best = 0.0
+        var off = 0
+        while off <= ref.count - frames {
+            best = max(best, similarity(captured, ref, offset: off, count: frames))
+            off += step
+        }
+        return best
+    }
+
+    /// 两段同样长的 PCM 有多像（归一化互相关，-1…1）。恒定静音对静音也给 0，
+    /// 避免「两边都是 0」被当成匹配通过
+    func similarity(_ a: [Float], _ b: [Float]) -> Double {
+        similarity(a, b, offset: 0, count: min(a.count, b.count))
+    }
+
+    /// 滑窗版本：`a` 的前 `count` 个对 `b` 从 `offset` 起的 `count` 个，不复制数组
+    func similarity(_ a: [Float], _ b: [Float], offset: Int, count: Int) -> Double {
+        guard count > 32, offset >= 0, a.count >= count, b.count >= offset + count else { return 0 }
+        var sa = 0.0, sb = 0.0, saa = 0.0, sbb = 0.0, sab = 0.0
+        for i in 0..<count {
+            let x = Double(a[i]), y = Double(b[offset + i])
+            sa += x; sb += y; saa += x * x; sbb += y * y; sab += x * y
+        }
+        let d = Double(count)
+        let va = saa - sa * sa / d, vb = sbb - sb * sb / d
+        guard va > 1e-9, vb > 1e-9 else { return 0 }
+        return (sab - sa * sb / d) / (va.squareRoot() * vb.squareRoot())
+    }
+
+    /// 一段 PCM 里某个频率的正交相关幅度（0…1）。「这段声音到底是哪一秒的内容」拿它判，
+    /// 不拿相位比对：差一帧就全乱。取 0.3 s 窗就有 ~3 Hz 频率分辨率，分段单音之间分得很开
+    func toneEnergy(_ samples: [Float], sampleRate: Double, freq: Double) -> Double {
+        guard samples.count > 32, sampleRate > 0, freq > 0 else { return 0 }
+        var re = 0.0, im = 0.0
+        for (i, v) in samples.enumerated() {
+            let phase = 2 * Double.pi * freq * Double(i) / sampleRate
+            let x = Double(v)
+            re += x * cos(phase)
+            im += x * sin(phase)
+        }
+        return 2 * (re * re + im * im).squareRoot() / Double(samples.count)
+    }
+
+    /// 找一个命令行工具的绝对路径（brew 装在 /opt/homebrew，Intel 在 /usr/local，
+    /// 系统自带的在 /usr/bin）。找不到返回 nil，由调用方标 SKIP
+    func locateTool(_ name: String) -> String? {
+        for dir in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
+            let p = dir + "/" + name
+            if FileManager.default.isExecutableFile(atPath: p) { return p }
+        }
+        return nil
+    }
+
+    /// 跑一个本机命令行工具（造 zip/tar、转素材用），成功返回 true。参数不给 shell，
+    /// 带空格的路径也不用转义。
+    ///
+    /// stdin 必须给 `/dev/null`：不继承终端。ffmpeg 这类工具会开一个读按键的线程，前台跑时
+    /// 子进程读到 tty 会被 SIGTTIN 停住 —— 停住的子进程永不退出，`waitUntilExit` 就把主线程
+    /// 卡在自检看门狗里（实测只打得一行套件头就 150 s 超时）
+    func runTool(_ exe: String, _ args: [String], cwd: URL? = nil) -> Bool {
+        guard FileManager.default.isExecutableFile(atPath: exe) else { return false }
+        let t = Process()
+        t.executableURL = URL(fileURLWithPath: exe)
+        t.arguments = args
+        if let cwd { t.currentDirectoryURL = cwd }
+        t.standardInput = FileHandle.nullDevice
+        t.standardOutput = FileHandle.nullDevice
+        t.standardError = FileHandle.nullDevice
+        do {
+            try t.run()
+            t.waitUntilExit()
+            return t.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
+
     // MARK: - 素材生成与解码探针
+
+    /// 造「分段单音」的 WAV：左声道第 i 段 = baseFreq + i*stepFreq，右声道静音，每段长 blockSeconds 秒。
+    /// 恢复位置这类断言得知道「真放出来的是哪一段」，而现成素材是全程恒频（处处一样），
+    /// 拿它只能证「有声音」证不了「位置对」。段长给到 0.5 s 量级就能把位置钉在半秒以内
+    func writeStepWave(_ url: URL, seconds: Int, sampleRate: Int = 44_100,
+                       baseFreq: Double = 200, stepFreq: Double = 100,
+                       blockSeconds: Double = 1) -> Bool {
+        let frames = sampleRate * seconds
+        func u16(_ v: UInt16) -> Data { var x = v.littleEndian; return withUnsafeBytes(of: &x) { Data($0) } }
+        func u32(_ v: UInt32) -> Data { var x = v.littleEndian; return withUnsafeBytes(of: &x) { Data($0) } }
+        var audio = Data(capacity: frames * 4)
+        for i in 0..<frames {
+            let t = Double(i) / Double(sampleRate)
+            let block = Int(t / blockSeconds)
+            let local = t - Double(block) * blockSeconds
+            let f = baseFreq + stepFreq * Double(block)
+            let l = Int16(0.5 * sin(2 * Double.pi * f * local) * 32_767)
+            audio.append(contentsOf: withUnsafeBytes(of: l.littleEndian) { Data($0) })
+            audio.append(contentsOf: withUnsafeBytes(of: Int16(0).littleEndian) { Data($0) })
+        }
+        let fmt = u16(1) + u16(2) + u32(UInt32(sampleRate)) + u32(UInt32(sampleRate * 4)) + u16(4) + u16(16)
+        var body = Data("WAVE".utf8)
+        body.append(Data("fmt ".utf8)); body.append(u32(UInt32(fmt.count))); body.append(fmt)
+        body.append(Data("data".utf8)); body.append(u32(UInt32(audio.count))); body.append(audio)
+        let out = Data("RIFF".utf8) + u32(UInt32(body.count)) + body
+        return (try? out.write(to: url)) != nil
+    }
+
+    /// 无缝衔接（F01）素材的几何参数：生成器与套件共用这一份，避免两处各写各的。
+    /// 阶梯音负责「这一段是哪一块」（半秒粒度），满幅短促负责「到底差了几帧」（帧粒度）。
+    /// 点击必须晚于引擎的预排窗口（~0.7 s），否则采集接不上头一个标记
+    static let seamBlock = 0.5
+    static let seamBaseFreq = 200.0
+    static let seamStepFreq = 100.0
+    static let seamClickAt = 0.9
+    static let seamClickEvery = 2.0
+    static let seamClickFrames = 512
+    static let seamClickFreq = 7_833.0
+
+    /// 造「每 0.5 s 换一个音高 + 每 2 s 一个满幅短促」的立体声 WAV（右声道静音）。
+    /// `baseBlock` 决定这一段从第几个音高块开起：把同一条连续信号拆成前后两半时，
+    /// 后半要从 `baseBlock = 4` 接着排，接起来才能当「没拆过的整段」看。
+    /// 阶梯音幅度给到 0.3：标记的 RMS 是 0.67，两者在 64 样本窗上分得很开
+    func writeClickLadder(_ url: URL, seconds: Double, baseBlock: Int,
+                          sampleRate: Int = 44_100) -> Bool {
+        let frames = Int(seconds * Double(sampleRate))
+        guard frames > 0 else { return false }
+        let block = SelfTestContext.seamBlock
+        let clickFrames = SelfTestContext.seamClickFrames
+        // 每个标记的起点：0.9 s 处一个，以后每隔 2 s 一个
+        var clicks: [Int] = []
+        var at = Int(SelfTestContext.seamClickAt * Double(sampleRate))
+        while at < frames - clickFrames {
+            clicks.append(at)
+            at += Int(SelfTestContext.seamClickEvery * Double(sampleRate))
+        }
+        func u16(_ v: UInt16) -> Data { var x = v.littleEndian; return withUnsafeBytes(of: &x) { Data($0) } }
+        func u32(_ v: UInt32) -> Data { var x = v.littleEndian; return withUnsafeBytes(of: &x) { Data($0) } }
+        var audio = Data(capacity: frames * 4)
+        var next = 0
+        for i in 0..<frames {
+            let t = Double(i) / Double(sampleRate)
+            let k = Int(t / block)
+            let local = t - Double(k) * block
+            let f = SelfTestContext.seamBaseFreq
+                + SelfTestContext.seamStepFreq * Double(baseBlock + k)
+            var v = 0.3 * sin(2 * Double.pi * f * local)
+            if next < clicks.count, i >= clicks[next] + clickFrames { next += 1 }
+            if next < clicks.count, i >= clicks[next] {
+                v = 0.95 * sin(2 * Double.pi * SelfTestContext.seamClickFreq
+                               * Double(i - clicks[next]) / Double(sampleRate))
+            }
+            let s = Int16(max(-1.0, min(1.0, v)) * 32_767)
+            audio.append(contentsOf: withUnsafeBytes(of: s.littleEndian) { Data($0) })
+            audio.append(contentsOf: withUnsafeBytes(of: Int16(0).littleEndian) { Data($0) })
+        }
+        let fmt = u16(1) + u16(2) + u32(UInt32(sampleRate)) + u32(UInt32(sampleRate * 4)) + u16(4) + u16(16)
+        var body = Data("WAVE".utf8)
+        body.append(Data("fmt ".utf8)); body.append(u32(UInt32(fmt.count))); body.append(fmt)
+        body.append(Data("data".utf8)); body.append(u32(UInt32(audio.count))); body.append(audio)
+        let out = Data("RIFF".utf8) + u32(UInt32(body.count)) + body
+        return (try? out.write(to: url)) != nil
+    }
 
     /// 造 hi-res / 多声道 WAV（FR-FMT-09 的素材）：位深、声道数、声道掩码按需要给。
     /// 不走 afconvert：它转不出 6 声道 PCM，而“多声道能不能播”正是要验的东西。
@@ -399,6 +650,7 @@ final class SelfTestContext {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/afconvert")
         task.arguments = ["-f", fileFmt, "-d", dataFmt, source.path, out.path]
+        task.standardInput = FileHandle.nullDevice
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
         do {

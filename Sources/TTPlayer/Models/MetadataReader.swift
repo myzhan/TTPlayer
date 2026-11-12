@@ -16,6 +16,9 @@ enum MetadataReader {
         return queue
     }()
 
+    /// 排队中 + 正在解析的条目数：只给自检用（上一套收摊时等到归零再走），不参与任何业务判断
+    static var pendingCount: Int { queue.operationCount }
+
     /// 标签缺失时的占位值。界面不必原样展示（菜单栏那种一行字的位置就只显示歌名）
     static let unknownArtist = "未知艺术家"
     static let unknownAlbum = "未知专辑"
@@ -59,6 +62,9 @@ enum MetadataReader {
         if track.cue == nil {
             applyTags(info.tags, to: track)
         }
+        // ReplayGain 则不管是不是分轨都要读：专辑增益本来就是整张唱盘共用一份，
+        // CUE 分轨拆出来的几首靠的正是镜像里那一份（曲目增益对整盘而言也是那一份）
+        track.replayGainTags = ReplayGainTags(tags: info.tags)
         // 封面照旧要读（整盘镜像里那张 attached_pic 就是这一盘的封面）
         if track.cover == nil, let data = info.coverData {
             attachEmbeddedCover(data, to: track, name: "")

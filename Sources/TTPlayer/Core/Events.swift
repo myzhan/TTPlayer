@@ -16,10 +16,26 @@ extension NSNotification.Name {
     static let ttVolumeChanged = NSNotification.Name("TTVolumeChanged")
     /// 播放列表内容发生变化
     static let ttPlaylistChanged = NSNotification.Name("TTPlaylistChanged")
+    /// 待播队列发生变化（排队、移除、重排、清空、当前条目前进）
+    static let ttQueueChanged = NSNotification.Name("TTQueueChanged")
+    /// 自建歌单变了（新建/改名/删除，或某一张的条目与次序）：左栏那一列与存档要跟上
+    static let ttUserListsChanged = NSNotification.Name("TTUserListsChanged")
     /// 歌词行变化，userInfo: ["line": String, "next": String, "start": Double, "end": Double]
     static let ttLyricChanged = NSNotification.Name("TTLyricChanged")
     /// 电台状态或「正在播」变化，userInfo: ["state": String, "title": String]
     static let ttRadioChanged = NSNotification.Name("TTRadioChanged")
+    /// 输出设备变化（用户切换、设备拔出/接回、系统默认换了），userInfo: ["summary": String]
+    static let ttOutputChanged = NSNotification.Name("TTOutputChanged")
+    /// 媒体库扫描状态变化（开始/进度/完成/取消），userInfo: ["note": String] 给界面的一句话
+    static let ttLibraryChanged = NSNotification.Name("TTLibraryChanged")
+    /// 媒体库条目变了（新增/修改/失效/恢复/摘掉），userInfo: ["changed": [String], "removed": [String]]
+    /// 只说库，不说列表：歌单与待播队列要不要跟着变由各自的档案决定
+    static let ttLibraryEntriesChanged = NSNotification.Name("TTLibraryEntriesChanged")
+    /// 睡眠定时器状态变了（设档/取消/心跳走了一格/到点停止），userInfo: ["summary": String]
+    static let ttSleepChanged = NSNotification.Name("TTSleepChanged")
+    /// 电台台名/分类/归属变了（起改名、建/改/删分类、移入分类、改地址）：
+    /// 电台那几页都是 [默认] 里地址的投影，左栏那一列与当前页要跟着重排（F11）
+    static let ttRadioStationsChanged = NSNotification.Name("TTRadioStationsChanged")
 }
 
 enum TimeFormat {

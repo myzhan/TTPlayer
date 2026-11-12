@@ -3,7 +3,7 @@
 #
 # 用法：
 #   ./scripts/selftest.sh                 冒烟档（debug）：lyric + playlist + spectrum，几秒
-#   ./scripts/selftest.sh all             全量 311 项（debug），发布门槛
+#   ./scripts/selftest.sh all             全量（debug），发布门槛
 #   ./scripts/selftest.sh all release     release 二进制全量
 #   ./scripts/selftest.sh ui import       只跑指定套件（逗号或空白分隔，按给出的顺序执行）
 #   ./scripts/selftest.sh release ui      构型也可以写在前面
@@ -87,6 +87,10 @@ SHOTS=${TTPLAYER_SHOTDIR:-$PROBE/shots}
 mkdir -p "$PROBE" "$SHOTS"
 rm -f "$PROBE/tt_selftest.txt"
 
+echo "→ 预热一次启动（冷页缓存的第一轮不算数，见 PerfSuite 注释）"
+TTPLAYER_SELFTEST=1 TTPLAYER_SILENT_OUTPUT=1 TTPLAYER_SUITE=__warmup TTPLAYER_TESTDIR="$TESTDIR" \
+    TTPLAYER_PROBE="$PROBE/warmup" TTPLAYER_SHOTDIR="$PROBE/warmup" "$bin" >/dev/null 2>&1 || true
+
 # 自检靠 TTPLAYER_TESTDIR 把存档重定向到测试曲库；真实存档前后必须逐字节相同
 state="$HOME/Library/Application Support/TTPlayer/state.json"
 before=$(shasum "$state" 2>/dev/null | awk '{print $1}')
@@ -112,7 +116,9 @@ echo "报告：$PROBE/selftest.log（镜像 tt_selftest.txt）  截图：$SHOTS"
 if [[ $code -eq 0 ]]; then
     echo "✓ 自检通过"
 elif [[ $code -eq 2 ]]; then
-    echo "✗ 套件名不认识（可用：lyric playlist spectrum playback cover cue format decoder import radio ui perf system / smoke / all）"
+    echo "✗ 超时或被看门狗干掉（退出码 2 也是套件名不认识，可用："
+    echo "  lyric playlist spectrum playback cover cue gapless gain device sleep shift format decoder import radio"
+    echo "  archive lists search scene queue perf library ui system / smoke / all）"
 else
     echo "✗ 有断言失败（退出码 $code）"
 fi

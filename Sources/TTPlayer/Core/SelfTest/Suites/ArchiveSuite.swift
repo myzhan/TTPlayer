@@ -37,6 +37,7 @@ struct ArchiveSuite: SelfTestSuite {
         checkDuplicateAdd(ctx, root: root, stage: stage)
         checkEmptyReject(ctx, root: root, stage: stage)
         checkEntryReaderModes(ctx, root: root, stage: stage)
+        checkTinyEntryProbe(ctx, root: root, stage: stage)
         checkRestoreFromKeys(ctx, root: root, stage: stage)
         check7zFixture(ctx)
         checkEncryptedZipFixture(ctx)
@@ -242,27 +243,89 @@ struct ArchiveSuite: SelfTestSuite {
         ctx.check("归档-外层缺失平稳跳过", missing.isEmpty, "n=\(missing.count)")
     }
 
-    /// EntryReader 两种模式都能过（cached 走 Data，超大条目重放路径单测不了就 SKIP）
+    /// EntryReader 的读取会话（cached 模式）：位置记在每个 cursor 自己头上，
+    /// 读到尾巴回 `AVERROR_EOF`。两种模式都能过（超大条目的重放路径单测不了就 SKIP）
     private func checkEntryReaderModes(_ ctx: SelfTestContext, root: URL, stage: URL) {
         let zip = root.appendingPathComponent("reader.zip")
         try? FileManager.default.removeItem(at: zip)
         guard runTool("/usr/bin/zip", ["-q", "-j", zip.path, "01 - alpha.wav"], cwd: stage) else {
-            ctx.check("归档-EntryReader cached 模式 read/seek", false, "zip 造不出来"); return
+            ctx.check("归档-读取会话 cached 模式 read/seek", false, "zip 造不出来"); return
         }
         guard let reader = Archive.reader(archive: zip, entry: "01 - alpha.wav") else {
-            ctx.check("归档-EntryReader cached 模式 read/seek", false, "reader 打不开"); return
+            ctx.check("归档-读取会话 cached 模式 read/seek", false, "reader 打不开"); return
         }
         // seek 到中段再读，头/尾都能拿到才对得上；size 就是 cached Data.count
+        let cur = reader.cursor()
         var small = [UInt8](repeating: 0, count: 44)
-        let n0 = reader.seek(to: 0, whence: 0)
-        let r0 = small.withUnsafeMutableBytes { reader.read(into: $0.baseAddress, count: 44) }
-        let mid = max(0, reader.size - 44)
-        let n1 = reader.seek(to: mid, whence: 0)
-        let r1 = small.withUnsafeMutableBytes { reader.read(into: $0.baseAddress, count: 44) }
-        let sizeQuery = reader.seek(to: 0, whence: 0x10000)
-        ctx.check("归档-EntryReader cached 模式 read/seek",
+        let n0 = cur.seek(to: 0, whence: 0)
+        let r0 = small.withUnsafeMutableBytes { cur.read(into: $0.baseAddress, count: 44) }
+        let mid = max(0, cur.size - 44)
+        let n1 = cur.seek(to: mid, whence: 0)
+        let r1 = small.withUnsafeMutableBytes { cur.read(into: $0.baseAddress, count: 44) }
+        let sizeQuery = cur.seek(to: 0, whence: 0x10000)
+        ctx.check("归档-读取会话 cached 模式 read/seek",
                   n0 == 0 && r0 == 44 && n1 == mid && r1 == 44 && sizeQuery == reader.size,
                   "n0=\(n0) r0=\(r0) n1=\(n1) r1=\(r1) sz=\(sizeQuery) size=\(reader.size)")
+
+        // 越过条目尾：必须回负数（AVERROR_EOF）。回 0 会让 FFmpeg n9 的 fill_buffer
+        // 不打 eof_reached 标记，上层当成「这趟没读到」接着重试，线程就空转不退
+        let tail = cur.seek(to: cur.size, whence: 0)
+        let past = small.withUnsafeMutableBytes { cur.read(into: $0.baseAddress, count: 44) }
+        ctx.check("归档-读到尾巴回 EOF 而不是 0",
+                  tail == cur.size && past < 0, "tail=\(tail) past=\(past)")
+
+        // 两边同时打开同一条目：各读各的位置，互不把对方顶回头
+        //（媒体库页在探元数据、用户同时在播同一归档里的歌，就是这个形状）
+        let a = reader.cursor()
+        let b = reader.cursor()
+        func first8(_ c: EntryReader.Cursor) -> [UInt8] {
+            var buf = [UInt8](repeating: 0, count: 8)
+            _ = buf.withUnsafeMutableBytes { c.read(into: $0.baseAddress, count: 8) }
+            return buf
+        }
+        let offA = a.seek(to: 0, whence: 0)
+        let offB = b.seek(to: 4, whence: 0)
+        let ra = first8(a)
+        let rb = first8(b)
+        let head = (try? Data(contentsOf: stage.appendingPathComponent("01 - alpha.wav"))) ?? Data()
+        // 取两个不重叠的开头偏移（RIFF 头与 fmt 块）：内容不同才能证明位置没互相踩
+        let wantA = Array(head.prefix(8))
+        let wantB = Array(head.dropFirst(4).prefix(8))
+        ctx.check("归档-同一条目两会话位置互不干扰",
+                  offA == 0 && offB == 4 && ra == wantA && rb == wantB && ra != rb,
+                  "offA=\(offA) offB=\(offB) ra=\(ra) wantA=\(wantA) rb=\(rb) wantB=\(wantB)")
+    }
+
+    /// 比 AVIO 缓冲（32 KB）还短的条目，在归档里也能在有限时间内探完
+    /// ——回归：EOF 回 0 时 `fill_buffer` 不置 eof_reached，探测线程 100% CPU 原地转圈，
+    /// 短条目恰好一趟就读完、最容易撞上；卡住的还是共用的解析工人线程，后面全遭殃
+    private func checkTinyEntryProbe(_ ctx: SelfTestContext, root: URL, stage: URL) {
+        let tiny = stage.appendingPathComponent("tiny.wav")
+        // 0.2 s @ 8 kHz 立体声 16 bit ≈ 6.4 KB：整份塞不满一次缓冲填充
+        guard ctx.writeWave(tiny, sampleRate: 8_000, channels: 2, bits: 16,
+                            freqs: [700, 1_050], seconds: 0.2) else {
+            ctx.check("归档-小条目探测不空转", false, "素材写不出来"); return
+        }
+        let zip = root.appendingPathComponent("tiny.zip")
+        try? FileManager.default.removeItem(at: zip)
+        guard runTool("/usr/bin/zip", ["-q", "-j", zip.path, "tiny.wav"], cwd: stage) else {
+            ctx.check("归档-小条目探测不空转", false, "zip 造不出来"); return
+        }
+        guard let entry = Archive.makeEntryURL(archive: zip, entry: "tiny.wav") else {
+            ctx.check("归档-小条目探测不空转", false, "条目 URL 造不出来"); return
+        }
+        // 探测放后台线程 + 限时等：真空转的话不能把自检一起拖到看门狗里
+        let sem = DispatchSemaphore(value: 0)
+        var info: ProbeInfo?
+        DispatchQueue.global(qos: .userInitiated).async {
+            info = FFmpegProbe.probe(entry)
+            sem.signal()
+        }
+        let done = sem.wait(timeout: .now() + 20) == .success
+        let dur = info?.durationSeconds ?? -1
+        ctx.check("归档-小条目探测不空转", done && dur > 0.15 && dur < 0.3,
+                  "done=\(done) dur=\(String(format: "%.3f", dur))")
+        try? FileManager.default.removeItem(at: tiny)
     }
 
     /// testlib 里有 demo_archive.7z 就真测，没有就 SKIP
@@ -300,12 +363,15 @@ struct ArchiveSuite: SelfTestSuite {
     // MARK: - 工具
 
     /// 起一个 CLI 工具（zip/tar）；返回是否 0 退出。executableURL 不存在时静默 false。
+    /// stdin 不继承终端（见 `SelfTestContext.runTool` 的注释），否则子进程读到 tty
+    /// 会被 SIGTTIN 停住，`waitUntilExit` 就把主线程卡在自检看门狗里
     private func runTool(_ exe: String, _ args: [String], cwd: URL? = nil) -> Bool {
         guard FileManager.default.isExecutableFile(atPath: exe) else { return false }
         let t = Process()
         t.executableURL = URL(fileURLWithPath: exe)
         t.arguments = args
         if let cwd { t.currentDirectoryURL = cwd }
+        t.standardInput = FileHandle.nullDevice
         t.standardOutput = FileHandle.nullDevice
         t.standardError = FileHandle.nullDevice
         do {
