@@ -77,6 +77,10 @@ struct AppState: Codable {
     var radioCategories: [RadioCategory] = []
     /// 地址 → 分类 id。没归类的台不在这里占位
     var radioAssignments: [String: String] = [:]
+    /// 用户亲手删掉的内置电台（F11 出厂那几台的身份键）。种入只认这一份黑名单：
+    /// 「不需要就自己删」得真能删掉，否则每天启动又被塞回来，就成了删不掉的僵尸条目。
+    /// 旧档没这一项 = 谁也没删过，首次升级上来会补种一台（跟新装同一个行为）
+    var declinedRadioKeys: [String] = []
 
     // MARK: 宽容解码
     // 逐字段 decodeIfPresent：旧版 state.json 缺少新增字段时不能整档解码失败，
@@ -90,7 +94,7 @@ struct AppState: Codable {
         case outputDeviceUID, outputDeviceName
         case libraryFolders, libraryKeys
         case sleepFade, lyricShifts
-        case radioAliases, radioCategories, radioAssignments
+        case radioAliases, radioCategories, radioAssignments, declinedRadioKeys
     }
 
     /// 显式写默认构造：定义了 init(from:) 后 struct 的成员构造不再合成
@@ -133,6 +137,7 @@ struct AppState: Codable {
         radioAliases = try c.decodeIfPresent([String: String].self, forKey: .radioAliases) ?? [:]
         radioCategories = try c.decodeIfPresent([RadioCategory].self, forKey: .radioCategories) ?? []
         radioAssignments = try c.decodeIfPresent([String: String].self, forKey: .radioAssignments) ?? [:]
+        declinedRadioKeys = try c.decodeIfPresent([String].self, forKey: .declinedRadioKeys) ?? []
     }
 }
 

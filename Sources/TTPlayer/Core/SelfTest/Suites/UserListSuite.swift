@@ -487,10 +487,23 @@ struct UserListSuite: SelfTestSuite {
         ctx.check("歌单-存档记下在看的这张", LibraryStore.load().viewListID == id,
                   "id=\(LibraryStore.load().viewListID)")
         p.switchGroup(.main)
+        // 把内存里的现场抹干但不写盘：盘上仍是「6 条 [默认] + 停在歌单页」，这才是冷启动的样子
+        // （不抹的话上一段留下的可见列表会把旧次序的毛病掩住，测不出真命题）
+        p.playlist.removeAll()
         p.restoreFromState()
         ctx.check("歌单-重启后回到在看的这一页",
                   p.activeGroup == .playlist(id) && p.userLists.name(of: id) == "重启还在这",
                   "group=\(p.activeGroup) name=\(p.userLists.name(of: id) ?? "nil")")
+        // 停在歌单页重启：存档写的就是 [默认] 那一页的内容，切回去得一条不少。
+        // 旧次序先切页再装存档：切页那一刻可见列表还是空的，mainSnapshot 就被当成
+        // 「这一页没歌」带走，下一次 persistNow 会把曲库写空（A/B 实测：旧次序回来 0 条）
+        let archived = LibraryStore.load().trackPaths
+        p.switchGroup(.main)
+        let back = Set(p.playlist.tracks.map { $0.identityKey })
+        ctx.check("歌单-停在歌单页重启也不冲掉 [默认] 那一页",
+                  !archived.isEmpty && archived.allSatisfy { back.contains($0) },
+                  "存档 \(archived.count) 条，回来 \(p.playlist.count) 条")
+        p.switchGroup(.playlist(id))
 
         // 存档里那张已经被删掉了：启动只能回 [默认]，不能开出一张无主的空页
         var dangling = LibraryStore.load()

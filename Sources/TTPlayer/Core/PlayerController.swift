@@ -16,6 +16,8 @@ final class PlayerController {
     let userLists = UserPlaylists.shared
     /// 电台档案（F11）：自定义台名与分类，全部按地址身份存
     let radioStations = RadioStations.shared
+    /// 用户亲手删掉的内置电台（身份键）：种入只认这一份黑名单，见 `seedPresetRadios`
+    private(set) var declinedRadios: Set<String> = []
     /// 当前在看的列表组（左栏那一列名字）
     private(set) var activeGroup: GroupKind = .main
     /// 切去派生组时把 [默认] 组的现场留在这里：曲目对象带着已解析的元数据，切回来不用重读
@@ -149,23 +151,44 @@ final class PlayerController {
         return nil
     }
 
-    /// 添加一台内置电台（菜单「内置电台」/「添加网络电台」那个下拉）。
-    /// 不另开一条通路：地址依旧走 `addRadio` 做归一化与去重，台名由 `RadioPresets`
-    /// 按地址兜底（所以这一台加过又删、或者从来没加过，存档里都不会多出一条别名）
-    /// - Returns: nil = 办好了；否则一句人话（内置地址解不开只可能是代码写错了）
+    /// 出厂电台默认入表（F11）：入口埋得深等于没有，新装/升级后第一次启动就在列表里。
+    /// 三条边界：
+    /// - 只在用户没删过时入表：删过的那台在 `declinedRadios` 里，以后每次启动都不回来，
+    ///   否则「用户删掉」这个动作会被第二天的又一次种入抵消，变成删不掉的僵尸条目；
+    /// - 不开播（`playNow: false`）：启动时正在恢复上次的播放现场，抢播会替用户开声、
+    ///   把他上次听的那一首顶掉；
+    /// - 走 `addRadio` 同一条口子：同一地址已在表里（用户自己粘过）就复用那一条，不再塞第二行。
+    /// - Returns: 本次真正入表了几台（自检按这个数断言幂等）
     @discardableResult
-    func addPresetRadio(_ preset: RadioPreset, playNow: Bool = true) -> String? {
-        guard preset.url != nil else {
-            let note = "内置电台地址写错了：\(preset.address)"
-            lastImportProblem = note
-            Diagnostics.error("未入表：\(note)")
-            return note
+    func seedPresetRadios() -> Int {
+        var seeded = 0
+        for preset in RadioPresets.all {
+            guard preset.url != nil else {
+                let note = "内置电台地址写错了：\(preset.address)"
+                lastImportProblem = note
+                Diagnostics.error("未入表：\(note)")
+                continue
+            }
+            guard !declinedRadios.contains(preset.identityKey),
+                  !playlist.tracks.contains(where: { $0.identityKey == preset.identityKey })
+            else { continue }
+            // 已经不在可见列表里但用户在别处见过它（[默认] 留档）：那也算已在表，不重复塞
+            if activeGroup != .main, mainSnapshot.contains(where: { $0.identityKey == preset.identityKey }) {
+                continue
+            }
+            if addRadio(preset.address, playNow: false) == nil { seeded += 1 }
         }
-        guard addRadio(preset.address, playNow: playNow) == nil else {
-            return lastImportProblem
-        }
-        Diagnostics.log("内置电台「\(preset.name)」已入表")
-        return nil
+        if seeded > 0 { Diagnostics.log("出厂电台默认入表 \(seeded) 台（不需要可在列表里删掉）") }
+        return seeded
+    }
+
+    /// 记下「用户把这些内置电台删掉了」：只有出厂那几台会在黑名单里占位，
+    /// 用户自己粘进来的台删了就删了，本来也不会被种回来
+    private func noteDeclinedRadios(_ keys: Set<String>) {
+        let hit = RadioPresets.all.filter { keys.contains($0.identityKey) }.map { $0.identityKey }
+        guard !hit.isEmpty else { return }
+        declinedRadios.formUnion(hit)
+        Diagnostics.log("内置电台已被用户删掉，下次启动不再自动入表：\(hit.count) 台")
     }
 
     /// 按 identityKey 去重入表（CUE 分轨的 url 都指向同一份镜像，只能靠这个键区分）
@@ -231,6 +254,9 @@ final class PlayerController {
             reloadActiveGroup()
         }
         if !dropped.isEmpty {
+            // 逐行删除是对这一台的表态：删掉的内置电台记下来，下次启动不再被种回来
+            // （在台这一页「清空」也算表态，那边单独记一笔）
+            noteDeclinedRadios(dropped)
             queue.dropTracks(keys: dropped)
             notifyQueueChanged()
         }
@@ -267,6 +293,9 @@ final class PlayerController {
             // 不动别的分类）；「最近听的台」是历史不是列表，不清
             let gone = Set(derivedKeys(for: activeGroup))
             mainSnapshot.removeAll { gone.contains($0.identityKey) }
+            // 把台这一页清空 = 这些台都不要了：内置的那台也得记进黑名单，
+            // 否则下次启动又被种回来，看着就是「电台删不掉」
+            noteDeclinedRadios(gone)
             playlist.removeAll()
             reloadActiveGroup()       // 就留在这一组：空表 + 中央一句提示
         } else if activeGroup.isDerived {
@@ -654,6 +683,9 @@ final class PlayerController {
         guard !keys.isEmpty else { return }
         // 1) [默认] 留档（电台也在这份里：在投影页删台本来就是真删台）
         mainSnapshot.removeAll { keys.contains($0.identityKey) }
+        // 在搜索结果里删掉内置台也是一次表态：不能因为这一行是从另外一页搜出来的，
+        // 下次启动它又自己长回来
+        noteDeclinedRadios(keys)
         // 2) 收藏与两份历史
         groups.remove(keys: Array(keys), from: .favorites)
         groups.remove(keys: Array(keys), from: .recent)
@@ -1923,6 +1955,9 @@ final class PlayerController {
         // 就会拿到刚搬过来的台名（台名按地址存，这一段得先走）
         radioStations.replaceKeys([oldKey: newKey])
         let moved = applyKeyMap([oldKey: newKey])
+        // 改地址就是把这一台从「出厂那台」挪走了：旧身份得进黑名单，否则下次启动
+        // 种入会把它又塞回来，列表里同时多出改过的新台与原装的旧台
+        noteDeclinedRadios([oldKey])
         // 两个方向都不能断档：「最近听的台」里这一条换了写法仍然排在原位
         radioStationsChanged()
         Diagnostics.log("电台地址变更 \(track.url.absoluteString) → \(newKey)："
@@ -2704,6 +2739,8 @@ final class PlayerController {
         // 就是谁都没起过名字，回到按地址显示（正常迁移）
         radioStations.restore(aliases: state.radioAliases, categories: state.radioCategories,
                               assigned: state.radioAssignments)
+        // 内置电台的黑名单先回来：种入要拿它判「这台用户删过没有」
+        declinedRadios = Set(state.declinedRadioKeys)
         // 存档条目可能是普通音频路径，也可能是 `cue路径#track=N`（分轨重新解析即可拿到起止点）
         let restored = LibraryStore.tracks(fromArchiveEntries: state.trackPaths)
         groups.restore(recent: state.recentKeys, favorites: state.favoriteKeys,
@@ -2744,11 +2781,19 @@ final class PlayerController {
             }
         }
         activeGroup = .main
-        // 上次停在某张歌单：按稳定 ID 找回来（那张没了就留在 [默认]，switchGroup 里守住）
-        if !state.viewListID.isEmpty { switchGroup(.playlist(state.viewListID)) }
         if !restored.isEmpty {
             _ = addTracks(restored)
         }
+        // 出厂电台默认入表（F11）：必须站在 [默认] 这一页上、且赶在切回上次在看的那页
+        // 之前——`addRadio` 里那句 switchGroup(.main) 会把页面拽回 [默认]（实测：旧次序下
+        // 「重启后回到在看的这一页」拿到 group=main），而电台页列的就是 mainSnapshot 这份投影，
+        // 留在歌单页上种会把用户的页面抢走
+        _ = seedPresetRadios()
+        // 存档条目先装完再切页：旧次序先切页再装，切页那一刻可见列表还是空的，
+        // mainSnapshot 就被当成「这一页没歌」带走，下一次 persistNow 会把曲库写空
+        // （实测：旧次序下「歌单-停在歌单页重启也不冲掉 [默认] 那一页」回来 0 条）
+        // 上次停在某张歌单：按稳定 ID 找回来（那张没了就留在 [默认]，switchGroup 里守住）
+        if !state.viewListID.isEmpty { switchGroup(.playlist(state.viewListID)) }
         // 播放现场最后恢复：曲目对象与浏览页都到位了才谈得上「接着哪一首、播到哪一秒」。
         // 在看的歌单页整档里已经有稳定 ID 那一笔（跟 persistNow 一起写），以它为准；
         // 只有它没说话（停在 [默认]/收藏/最近/电台这些派生页）才让现场文件里的页面接管
@@ -2785,6 +2830,9 @@ final class PlayerController {
         state.radioAliases = radioStations.snapshotAliases
         state.radioCategories = radioStations.snapshotCategories
         state.radioAssignments = radioStations.snapshotAssigned
+        // 内置电台黑名单：用户删过哪几台得落盘，不然种入明天又把它塞回来（集合无序，
+        // 排好序再写，同一份黑名单每次落盘都是同一串字节）
+        state.declinedRadioKeys = declinedRadios.sorted()
         // 输出设备：UID 与实际设备名一起存。设备已经不在了还能把名字说出来，
         // 不至于提示里只剩一串 BuiltInHeadphoneOutputDevice
         state.outputDeviceUID = outputDeviceUID

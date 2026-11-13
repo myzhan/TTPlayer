@@ -4,9 +4,13 @@
 # 用法：
 #   ./scripts/selftest.sh                 冒烟档（debug）：lyric + playlist + spectrum，几秒
 #   ./scripts/selftest.sh all             全量（debug），发布门槛
+#   ./scripts/selftest.sh core            全量去掉取证三套（gapless/gain/radio），约全量一半
+#   ./scripts/selftest.sh affected        按本次 git 改动挑档：smoke / core / all
 #   ./scripts/selftest.sh all release     release 二进制全量
 #   ./scripts/selftest.sh ui import       只跑指定套件（逗号或空白分隔，按给出的顺序执行）
 #   ./scripts/selftest.sh release ui      构型也可以写在前面
+#
+# 拿不准时间花在哪了，加 TTPLAYER_TIMING=1：跑完多打一段「最慢 25 条 + 分套件余额」。
 #
 # 跑打包版（二进制不在 .build 里，给 TTPLAYER_BIN 就跳过编译）：
 #   TTPLAYER_BIN=build/TTPlayer.app/Contents/MacOS/TTPlayer ./scripts/selftest.sh all
@@ -34,6 +38,55 @@ fi
 # 不点套件名就是冒烟档：改纯逻辑与绘制时用它，不碰音频设备与窗口
 suites=${(j:,:)args}
 [[ -n "$suites" ]] || suites=smoke
+
+# ---- affected：按改动落在哪一层挑档，把与改动无关的取证套件剔出去 ----
+# 三档只由「有没有碰到音频取证那一层」决定，不去拆「只跑了 gain 还是只跑了 radio」：
+# 取证三套互相依赖输出链，拆细就得在这里再写一份 SuiteID.all 的顺序表，漂移不起。
+# 认不认识的路径一律往保守那一档归（宁可多跑，不要漏跑）
+if [[ ${#args[@]} -eq 1 && ${args[1]} == affected ]]; then
+    if ! git rev-parse --git-dir >/dev/null 2>&1; then
+        echo "→ affected：这里不是 git 仓库，按全量跑"
+        suites=all
+    else
+        # 拿工作树相对 HEAD 的改动 + 未跟踪文件。要验分类器本身（不跑测试）就直接
+        # 把文件名单传进去：TTPLAYER_AFFECTED_FILES="a.swift b.md"
+        if [[ -n ${TTPLAYER_AFFECTED_FILES} ]]; then
+            changed=(${(s: :)TTPLAYER_AFFECTED_FILES})
+        else
+            changed=(${(f)"$(git diff --name-only HEAD; git ls-files --others --exclude-standard)"})
+        fi
+        touch_docs=0; touch_ui=0; touch_audio=0
+        for f in $changed; do
+            [[ -n $f ]] || continue
+            case $f in
+                *.md|docs/*|LICENSE|.gitignore|.gitmodules|.github/*)
+                    touch_docs=1 ;;                       # 文档/截图/CI：自检测不到它
+                Sources/TTPlayer/UI/*|Sources/TTPlayer/Windows/*|Sources/TTPlayer/Models/*)
+                    # Models 里的电台与响度文件例外：它们直接是取证三套的被测对象
+                    if [[ $f == *Radio* || $f == *ReplayGain* ]]; then
+                        touch_audio=1
+                    else
+                        touch_ui=1
+                    fi ;;
+                *)
+                    touch_audio=1 ;;                      # Audio/、PlayerController、SelfTest、
+                                                          # Package.swift、scripts/、3rd/ 与其余一切
+            esac
+        done
+        if   [[ $touch_audio -eq 1 ]]; then suites=all
+        elif [[ $touch_ui    -eq 1 ]]; then suites=core
+        else                                  suites=smoke
+        fi
+        echo "→ affected：改动 ${#changed[@]} 个文件 → 档 $suites（工作树干净时就是 smoke，这一档只用于迭代，不是发布门槛）"
+        for f in $changed; do [[ -n $f ]] && echo "   $f"; done
+    fi
+fi
+
+# 只看挑档结果不跑测试（验 affected / core 分类时用）
+if [[ -n ${TTPLAYER_DRYRUN} ]]; then
+    echo "→ 挑档：套件 $suites（$conf）"
+    exit 0
+fi
 
 if [[ -n ${TTPLAYER_BIN} ]]; then
     # 打包版：现成二进制，不重编（编译产物在 .build 里，换不出来这个）

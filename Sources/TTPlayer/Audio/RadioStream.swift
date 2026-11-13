@@ -465,6 +465,18 @@ final class RadioPlayer: NSObject {
         min(8, 2 * pow(2, Double(max(0, attempt - 1))))
     }
 
+    /// 自检把退避整体压到 1/8（2/4/8 s → 0.25/0.5/1 s）。电台那几套的凭据是
+    /// 「比最长一档退避还久的时间窗里没有新连接」，等的是真实时钟，全量光这几条就 30 s。
+    /// 压的是排定时器这一处：`retryDelay` 的出厂数值不跟着变（RadioSuite 直接断言
+    /// 2/4/8/8，改档位仍要过发布说明），自检拿 `retryWait(attempt:)` 算窗口也不会写死常数
+    static let retryScale: Double =
+        ProcessInfo.processInfo.environment["TTPLAYER_SELFTEST"] != nil ? 0.125 : 1
+
+    /// 排下去的真实等待（出厂档位 × 自检压缩比）：自检要「等得比它久」就拿这个数
+    static func retryWait(attempt: Int) -> Double {
+        retryDelay(attempt: attempt) * retryScale
+    }
+
     /// HTTP 应答码 → 该怎么收场（nil = 这个码可以听）
     ///
     /// 404 算临时：实测有流媒体服务器好好推流时也会偶发吐一个 404，
@@ -688,7 +700,7 @@ final class RadioPlayer: NSObject {
             return
         }
         setState(.reconnecting(attempt: attempt))
-        let delay = RadioPlayer.retryDelay(attempt: attempt)
+        let delay = RadioPlayer.retryWait(attempt: attempt)
         let gen = generation
         queue.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.generation == gen, self.wantsPlayback, !self.closed else { return }

@@ -413,7 +413,9 @@ final class SleepSuite: SelfTestSuite {
                   p.setSleepMinutes(15) == nil && p.sleepTimer.minutes == 15)
         p.cancelSleepTimer()
         p.stop()
-        ctx.waitUntil(6) { !p.isRadio }
+        // 不能等 `!isRadio`：电台 stop() 后 isRadio 照旧为真（AGENTS 坑 #10），
+        // 那一等就是白挂满 6 s；要「停下来」的凭据是不在播
+        ctx.waitUntil(6) { !p.isPlaying }
 
         // 退出即取消：只有淡出开关进档，倒计时本身一个字都不落盘
         p.setSleepFadeEnabled(true)

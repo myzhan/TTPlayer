@@ -62,10 +62,6 @@ final class PlaylistPanelController: NSObject, NSTextFieldDelegate {
     private var searchKeyword = ""
     /// 上次输入的电台地址（弹框预填，手滑取消也不丢）
     private var radioInput = ""
-    /// 弹框里那两个控件只在弹框期间活着（`runModal` 是同步的，属性只为把它们留到
-    /// 下拉回调那一刻）。用局部变量的话 target-action 拿不到地址栏
-    private var radioField: NSTextField?
-    private var radioPresetMenu: NSPopUpButton?
 
     private let controller = PlayerController.shared
 
@@ -802,8 +798,8 @@ final class PlaylistPanelController: NSObject, NSTextFieldDelegate {
     }
 
     /// 工具条「电台」键与主菜单「添加网络电台…」共用：弹输入框，地址交给 PlayerController 归一化。
-    /// 上面那一栏是内置电台：点一下只把地址填进输入框，加不加、什么时候加仍然是用户那一下 ——
-    /// 「手输」与「内置」走同一个入口、同一套校验，不各开一条通路
+    /// 出厂自带的那一台一启动就在列表里（见 `PlayerController.seedPresetRadios`），
+    /// 这个弹框只干「用户自己想再加一台」那一件事
     @objc func promptAddRadio() {
         let alert = NSAlert()
         alert.messageText = "添加网络电台"
@@ -811,24 +807,7 @@ final class PlaylistPanelController: NSObject, NSTextFieldDelegate {
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
         field.placeholderString = "http://example.com/live.mp3"
         field.stringValue = radioInput
-        radioField = field
-        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 30, width: 320, height: 25),
-                                  pullsDown: true)
-        popup.addItem(withTitle: "选一台内置电台（地址填到下面，可以改完再加）")
-        for preset in RadioPresets.all {
-            let row = NSMenuItem(title: preset.name, action: #selector(pickRadioPreset(_:)),
-                                 keyEquivalent: "")
-            row.target = self
-            row.representedObject = preset.address
-            row.toolTip = preset.address
-            popup.menu?.addItem(row)
-        }
-        popup.isEnabled = !RadioPresets.all.isEmpty
-        radioPresetMenu = popup
-        let box = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 58))
-        box.addSubview(popup)
-        box.addSubview(field)
-        alert.accessoryView = box
+        alert.accessoryView = field
         alert.addButton(withTitle: "添加并播放")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -843,11 +822,6 @@ final class PlaylistPanelController: NSObject, NSTextFieldDelegate {
             return
         }
         playlistView.scrollToCurrent()
-    }
-
-    /// 内置电台下拉那一项：只把地址填进输入框（台名不用填，`RadioPresets` 按地址兜底）
-    @objc private func pickRadioPreset(_ sender: NSMenuItem) {
-        radioField?.stringValue = sender.representedObject as? String ?? ""
     }
 
     @objc private func radioAction() { promptAddRadio() }

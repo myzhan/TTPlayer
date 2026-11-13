@@ -15,12 +15,16 @@ import AVFoundation
 /// 合成值。它算不到 EQ 某个频段被推高之后的瞬时峰值，所以菜单项的提示里写的是
 /// 「抵消不了均衡器引起的削波」，自检也把这条当成期望行为来验（不是当成缺陷）。
 struct ReplayGainSuite: SelfTestSuite {
-    /// 素材的公共几何：3 s 正弦（前 1 s 留给管线起步，测的是 1.0–2.0 s 这一秒）
+    /// 素材的公共几何：3 s 正弦（前 1 s 留给管线起步）。
+    /// 采集窗只取 0.3 s：这条正弦是 880 Hz，0.3 s 正好 264 个完整周期，窗口截断
+    /// 带来的 RMS 偏差上界约 1/(4π·264) ≈ 0.03%，而断言容差是 3%，差两个数量级。
+    /// 实测（debug、全量）把 span 从 1.0 s 砍到 0.3 s，16 条比值到小数点四位一字不差
     private static let amplitude = 0.2
     private static let freq = 880.0
     private static let seconds = 3.0
+    /// 跳过前 1 s：引擎预排窗口只有 0.7 s 上下，头一点还可能是上一次装载留下的旧增益缓冲
     private static let skip = 1.0
-    private static let span = 1.0
+    private static let span = 0.3
     /// -6.02 dB 就是线性 0.5000，+6.02 dB 就是 2.0000：取这两个数是为了让
     /// 「比值对不对」一眼能算，不用带一串无理数当容差
     private static let halfDB = -6.02
@@ -36,6 +40,8 @@ struct ReplayGainSuite: SelfTestSuite {
         try? ctx.fm.removeItem(at: root)
         try? ctx.fm.createDirectory(at: root, withIntermediateDirectories: true)
         let mat = makeMaterial(ctx, root: root)
+        // 先钉住「同条件重测拿得到同一个数」，`ratio` 才敢复用基准值（见 checkRepeatableBaseline）
+        checkRepeatableBaseline(ctx, mat: mat)
         checkTagsFromContainer(ctx, mat: mat)
         checkTrackModeAmplitude(ctx, mat: mat)
         checkAlbumFallback(ctx, mat: mat)
@@ -154,6 +160,10 @@ struct ReplayGainSuite: SelfTestSuite {
         var eqPreGain: Float?
         var muted = false
         var gapless = true
+
+        /// 缓存键：同一份素材 + 同一档条件才是同一个量，六个字段一个都不能漏
+        /// （`eqPreGain` 拿 -999 当「没设」哨兵：前置增益的实际范围是 −12…12，取不到这个数）
+        var key: String { "\(mode)/\(preamp)/\(limit)/\(eqPreGain ?? -999)/\(muted)/\(gapless)" }
     }
 
     /// 按条件播 `url`，从实际输出链上采一段左声道并算 RMS。返回 nil 是没播起来。
@@ -189,10 +199,21 @@ struct ReplayGainSuite: SelfTestSuite {
         return n > 0 ? (s2 / Double(n)).squareRoot() : 0
     }
 
-    /// 比值断言：期望值与实测值差多少个百分点
+    /// 比值断言：期望值与实测值差多少个百分点。
+    /// 基准那一跑只是一把尺子（同一条正弦在给定条件下的电平），实测与前面测过什么无关，
+    /// 所以同一 (素材, 条件) 只跑一次，其余复用——复用前提由 `checkRepeatableBaseline` 钉住
     private func ratio(_ ctx: SelfTestContext, _ name: String, _ url: URL,
                        baseline: Cond, test: Cond, want: Double, tol: Double = 0.03) {
-        guard let base = measure(ctx, url, baseline) else {
+        let key = "\(url.path)#\(baseline.key)"
+        // 只缓存量到的：基准那一跑失败时不写表，下一跑会重试（不要拿「没播起来」当一把尺子存下来）
+        let base: Double?
+        if let hit = store.values[key] {
+            base = hit
+        } else {
+            base = measure(ctx, url, baseline)
+            if let base { store.values[key] = base }
+        }
+        guard let base else {
             ctx.check(name, false, "基准没播起来"); return
         }
         guard let got = measure(ctx, url, test) else {
@@ -203,6 +224,27 @@ struct ReplayGainSuite: SelfTestSuite {
                         name, base, got, r, want))
         ctx.check(name, abs(r - want) <= want * tol,
                   String(format: "比值=%.4f 期望=%.4f 容差=%.0f%%", r, want, tol * 100))
+    }
+
+    /// 基准值缓存。套件是 struct、每轮 runner 现开一个，拿引用类型装才写得进去，
+    /// 也不会跨轮残留（上一轮的数扮成这一轮测出来的）
+    private final class BaselineStore { var values: [String: Double] = [:] }
+    private let store = BaselineStore()
+
+    /// 拿缓存之前必须先证「同一素材、同一档条件连测两次拿得到同一个数」。这一条挂了，
+    /// `ratio` 的复用就不合法（拿一把陈旧尺子去量），所以它跑在第一个 `ratio` 之前，
+    /// 而且这里故意不走缓存、真连播两趟
+    private func checkRepeatableBaseline(_ ctx: SelfTestContext, mat: Material) {
+        guard let url = need(ctx, mat.trackOnly, "基准可复用") else { return }
+        guard let first = measure(ctx, url, Cond()) else {
+            ctx.check("响度均衡-同条件重测一致（基准可复用的前提）", false, "第一趟没播起来"); return
+        }
+        guard let second = measure(ctx, url, Cond()) else {
+            ctx.check("响度均衡-同条件重测一致（基准可复用的前提）", false, "第二趟没播起来"); return
+        }
+        let drift = first > 0 ? abs(second - first) / first : 1
+        ctx.check("响度均衡-同条件重测一致（基准可复用的前提）", drift <= 0.01,
+                  String(format: "第一趟=%.5f 第二趟=%.5f 飘=%.2f%%", first, second, drift * 100))
     }
 
     // MARK: - 标签解析（纯逻辑，先把边界钉住）

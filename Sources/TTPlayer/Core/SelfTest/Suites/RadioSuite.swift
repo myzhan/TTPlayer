@@ -373,6 +373,12 @@ struct RadioSuite: SelfTestSuite {
     private func checkRetry(_ ctx: SelfTestContext) {
         let delays = [1, 2, 3, 9].map { RadioPlayer.retryDelay(attempt: $0) }
         ctx.check("电台-重连退避 2/4/8 封顶", delays == [2, 4, 8, 8], "\(delays)")
+        // 自检为了不把全量拖长，拿真实时钟等退避的地方只等出厂档位的 1/8。这一条钉住两件事：
+        // 出厂 `retryDelay` 没被污染，压的只是排下去的那一层（用户那边仍然是 2/4/8 s）
+        ctx.check("电台-自检只压排下去的等待，不压出厂档位",
+                  RadioPlayer.retryScale == 0.125
+                    && RadioPlayer.retryWait(attempt: 3) == RadioPlayer.retryDelay(attempt: 3) / 8,
+                  "scale=\(RadioPlayer.retryScale) 第 3 档排下去=\(RadioPlayer.retryWait(attempt: 3))s")
         ctx.check("电台-状态文案说人话",
                   RadioPlayer.State.connecting.displayText.contains("连接")
                     && RadioPlayer.State.reconnecting(attempt: 2).displayText.contains("第 2 次")
@@ -976,8 +982,8 @@ struct RadioSuite: SelfTestSuite {
 
     // MARK: - 内置电台（F11 的出厂内容）
 
-    /// 出厂那几台验三件事：清单本身写没写错、入表走的是不是同一条通路、台名的来路说不说得清。
-    /// 全程离线：菜单上那一下是真连网的，自检只断言那一行指得回清单，不 `sendAction` 点火
+    /// 出厂那几台验三件事：清单本身写没写错、默认入表那条路幂不幂等、用户删过之后还回不回得来。
+    /// 全程离线：种入走的是 addRadio，真连网只发生在「双击那一行」，自检不碰
     private func checkBuiltinStations(_ ctx: SelfTestContext) {
         let p = ctx.player
         let stations = p.radioStations
@@ -1009,23 +1015,23 @@ struct RadioSuite: SelfTestSuite {
                   key == Track(radio: url).identityKey && RadioURL.normalize(preset.address) == url,
                   key)
 
-        // MARK: 不自动塞曲库，点一下才入表
-        ctx.check("电台-内置-不自动出现在曲库里（也没往台名存档写别名）",
-                  builtinTrack() == nil && stations.alias(for: key) == nil
-                    && !stations.hasCustomName(for: url) && stations.snapshotAliases.isEmpty,
-                  "n=\(p.playlist.count) aliases=\(stations.snapshotAliases.count)")
+        // MARK: 默认入表（入口埋得深等于没有，出厂那台一启动就在列表里）
+        ctx.check("电台-内置-没删过时种入一次就入表，且不开播不抢页",
+                  p.seedPresetRadios() == 1 && builtinTrack() != nil
+                    && !p.isPlaying && p.activeGroup == .main,
+                  "n=\(p.playlist.count) isPlaying=\(p.isPlaying)")
+        ctx.check("电台-内置-再种一次不多塞一条（与手输同址同一个去重）",
+                  p.seedPresetRadios() == 0
+                    && p.playlist.tracks.filter { $0.identityKey == key }.count == 1,
+                  "n=\(p.playlist.count)")
+        ctx.check("电台-内置-入表不往台名存档写别名（台名按地址兜底）",
+                  stations.alias(for: key) == nil && !stations.hasCustomName(for: url)
+                    && stations.snapshotAliases.isEmpty,
+                  "aliases=\(stations.snapshotAliases.count)")
         ctx.check("电台-内置-同址新建的条目一出生就叫内置名",
                   Track(radio: url).title == preset.name
                     && stations.displayName(for: url) == preset.name,
                   Track(radio: url).title)
-        ctx.check("电台-内置-入表走 addRadio 同一条口子且不开播",
-                  p.addPresetRadio(preset, playNow: false) == nil
-                    && builtinTrack() != nil && !p.isPlaying && p.activeGroup == .main,
-                  "n=\(p.playlist.count) isPlaying=\(p.isPlaying)")
-        ctx.check("电台-内置-再点一次不多塞一条（与手输同址同一个去重）",
-                  p.addPresetRadio(preset, playNow: false) == nil
-                    && p.playlist.tracks.filter { $0.identityKey == key }.count == 1,
-                  "n=\(p.playlist.count)")
         guard let track = builtinTrack() else {
             ctx.check("电台-内置-入表后拿得到那一条", false, "列表里找不到内置台"); return
         }
@@ -1062,29 +1068,34 @@ struct RadioSuite: SelfTestSuite {
                   extra.contains { $0.0 == "电台台名" && $0.1.contains("内置台名")
                       && $0.1.contains(preset.name) && $0.1.contains("不占台名存档") },
                   extra.first { $0.0 == "电台台名" }?.1 ?? "没有那一行")
-        let rows = ctx.main.buildPopupMenu().items.first { $0.title == "内置电台" }?.submenu?.items ?? []
-        ctx.check("电台-内置-弹出菜单有「内置电台」一支且逐台一行、每行可点",
-                  rows.count == RadioPresets.all.count
-                    && rows.allSatisfy { $0.action == #selector(MainWindowController.addBuiltinRadio(_:))
-                        && $0.target != nil },
-                  "rows=\(rows.count) 清单=\(RadioPresets.all.count)")
-        ctx.check("电台-内置-菜单那一行按 tag 指得回清单（标题是台名、提示是地址）",
-                  rows.allSatisfy { RadioPresets.all.indices.contains($0.tag)
-                      && RadioPresets.all[$0.tag].name == $0.title
-                      && RadioPresets.all[$0.tag].address == ($0.toolTip ?? "") },
-                  rows.map { "\($0.tag)/\($0.title)" }.joined(separator: " "))
+        let items = ctx.main.buildPopupMenu().items
+        ctx.check("电台-内置-菜单里不再有「内置电台」那一支（默认就在列表里，入口是多余的）",
+                  !items.contains { $0.title == "内置电台" }
+                    && items.contains { $0.title == "添加网络电台…" },
+                  items.compactMap { $0.title.isEmpty ? nil : $0.title }.joined(separator: "|"))
 
-        // MARK: 删出列表也不留档
+        // MARK: 删过就不回来（「不需要就自己删」得真能删掉）
         if let idx = p.playlist.tracks.firstIndex(where: { $0.identityKey == key }) {
             p.removeTracks(at: IndexSet(integer: idx))
         }
         ctx.pump(0.1)
+        ctx.check("电台-内置-从列表删掉就进黑名单，再种一次也不回来",
+                  builtinTrack() == nil && p.seedPresetRadios() == 0 && builtinTrack() == nil,
+                  "n=\(p.playlist.count) 黑名单=\(p.declinedRadios.count)")
         p.persistNow()
         let after = LibraryStore.load()
         ctx.check("电台-内置-加过又删掉，存档里不会多出一条谁也没写过的别名",
-                  builtinTrack() == nil && stations.alias(for: key) == nil
+                  stations.alias(for: key) == nil
                     && after.radioAliases[key] == nil && after.radioAliases.isEmpty,
                   "aliases=\(after.radioAliases.count)")
+        ctx.check("电台-内置-黑名单落盘（下次启动才知道用户删过这一台）",
+                  after.declinedRadioKeys == [key],
+                  after.declinedRadioKeys.joined(separator: " / "))
+        let legacy = try? JSONDecoder().decode(AppState.self,
+                                               from: Data("{\"trackPaths\":[],\"volume\":0.42}".utf8))
+        ctx.check("电台-内置-旧档没这一项就是谁也没删过（升级后照样补种一台）",
+                  legacy?.declinedRadioKeys.isEmpty == true,
+                  "黑名单=\(legacy?.declinedRadioKeys.count ?? -1)")
 
         // 收摊：不给后面的段留现场（内置台在列表里挂着会让下一段以为已经入表）
         wipe()
@@ -1359,7 +1370,8 @@ struct RadioSuite: SelfTestSuite {
         let frozen = srv.connections
         let frozenSession = p.engine.radioQuality.session
         p.stop()
-        ctx.pump(9.5)          // 比最长那档退避（8 s）还久
+        ctx.pump(RadioPlayer.retryWait(attempt: RadioPlayer.maxAttempts) * 1.2 + 0.3)
+        // ↑ 比最长那档退避还久（自检里那一档已被压到 1/8，出厂仍是 8 s）
         ctx.check("电台-本地流-显式停止后不再自动重连（晚到的退避与回调都不作数）",
                   srv.connections == frozen && p.radioStateText == "未连接" && !p.isPlaying
                     && p.engine.radioQuality.session == frozenSession,
@@ -1370,7 +1382,8 @@ struct RadioSuite: SelfTestSuite {
         srv.failWith(status: 403)
         _ = p.retryRadio(station() ?? Track(radio: stream))
         let refused = ctx.waitUntil(10) { p.radioStateText.contains("账号") }
-        ctx.pump(3)
+        // 窗口比头两次退避加起来还长：真走了五次退避，这里一定能数出多余连接
+        ctx.pump(RadioPlayer.retryWait(attempt: RadioPlayer.maxAttempts) * 1.2 + 0.3)
         ctx.check("电台-本地流-403 当场说「要账号或密码」而不走五次退避",
                   refused && srv.connections - before403 == 1
                     && p.radioStateText.contains("403"),
@@ -1411,7 +1424,7 @@ struct RadioSuite: SelfTestSuite {
         // 「最近一次掉线是谁掐的」，剧本不掐了它就一直停在上一次，不能当成「现在有没有断」
         let steadyFrom = srv.connections
         let steadyReconnects = p.engine.radioQuality.totalReconnects
-        ctx.pump(6)           // 比上一档「推够 6 万字节就掐」需要的时间长得多
+        ctx.pump(3)           // 上一档「推够 6 万字节就掐」按 64_000 B/s 推，1 s 不到就该掐一次
         ctx.check("电台-本地流-改回正常剧本后不再掉线（旧退避定时器不会回来掐新流）",
                   steadyOnAir && srv.connections == steadyFrom
                     && p.engine.radioQuality.totalReconnects == steadyReconnects,

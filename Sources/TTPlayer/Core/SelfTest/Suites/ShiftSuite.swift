@@ -562,7 +562,9 @@ final class ShiftSuite: SelfTestSuite {
                   ctx.main.buildLyricShiftItem().submenu?.items.first {
                       $0.title.hasPrefix("延后") }?.isEnabled == false)
         p.stop()
-        _ = ctx.waitUntil(6) { !p.isRadio }
+        // 等「真的停了」，不能等 `!isRadio`：电台 stop() 是「装载着但停住」，isRadio 不会被
+        // 抹掉（AGENTS 坑 #10），拿它当条件就是白等满 6 s
+        _ = ctx.waitUntil(6) { !p.isPlaying }
         // 快捷键的归属：正在输入框里打字时 ⌥←/⌥→/⌥0 一律还给输入框。
         // 列表里故意留两条（有词 + 无词）：不带 Option 的 ←/→ 必须还是上一曲/下一曲。
         // 顺序要紧：待播队列是开唱那一下照列表建的，先播后加的那条不在队里，

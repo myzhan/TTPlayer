@@ -59,6 +59,14 @@ enum SuiteID: String, CaseIterable {
     /// 冒烟档：不碰音频设备、不开窗、不转码，几秒内跑完（改纯逻辑与绘制时用）
     static let smoke: [SuiteID] = [.lyric, .playlist, .spectrum]
 
+    /// 吃真实时钟的取证三套（幅度/无缝/电台退避）。改动不碰解码与输出链时它们测的还是
+    /// 同一件事，`core` 把它们拆出去单独跑，全量就能按「改到哪一层」分档而不是一律 240 s
+    static let timed: [SuiteID] = [.gapless, .gain, .radio]
+
+    /// 中档：除了取证三套之外的全部（顺原序，`.perf` 仍在 `.queue`/`.ui`/`.library` 之前）。
+    /// 改 UI / 曲库 / 列表 / 存档这一层时用它：一两分钟拿到完整回归，不拿真实音频链路陪跑
+    static let core: [SuiteID] = all.filter { !timed.contains($0) }
+
     var title: String {
         switch self {
         case .lyric: return "歌词解析与匹配"

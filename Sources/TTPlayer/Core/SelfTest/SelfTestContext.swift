@@ -13,6 +13,14 @@ final class SelfTestContext {
     private(set) var failures: [String] = []
     private(set) var total = 0
 
+    /// 计时档（`TTPLAYER_TIMING=1`）：拿住每条断言上一条到这一条之间花了多少墙钟。
+    /// 全量两百七十秒里到底是谁在吃时间，静态读代码只能猜个大概（`waitUntil` 提前返回、
+    /// 采集实际时长都不等于字面量），量一次就能指名道姓，也是「哪些断言可以合并不必单跑」的依据
+    static let timingEnabled = ProcessInfo.processInfo.environment["TTPLAYER_TIMING"] != nil
+    private(set) var timings: [(suite: String, name: String, ms: Double)] = []
+    private var timingSuite = ""
+    private var timingMark = Date()
+
     var player: PlayerController { PlayerController.shared }
 
     /// testlib 下全部支持的音频（按文件名自然序）
@@ -39,8 +47,20 @@ final class SelfTestContext {
 
     func check(_ name: String, _ ok: Bool, _ detail: String = "") {
         total += 1
+        if SelfTestContext.timingEnabled {
+            let now = Date()
+            timings.append((timingSuite, name, now.timeIntervalSince(timingMark) * 1000))
+            timingMark = now
+        }
         emit("[selftest] \(ok ? "PASS" : "FAIL") \(name) \(detail)")
         if !ok { failures.append(name) }
+    }
+
+    /// 开一套：计时分段与「这条之前」的基准点都从这里重起
+    func beginSuite(_ id: String) {
+        guard SelfTestContext.timingEnabled else { return }
+        timingSuite = id
+        timingMark = Date()
     }
 
     // MARK: - 套件前置

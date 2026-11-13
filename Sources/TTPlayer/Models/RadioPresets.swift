@@ -15,11 +15,12 @@ struct RadioPreset {
     var identityKey: String { url?.absoluteString ?? address }
 }
 
-/// 内置电台清单。
+/// 内置电台清单（出厂内容）。
 ///
-/// 只做「等着被点」的那一份：**不会自动塞进用户曲库** —— 列表是用户的地盘，
-/// 出厂台出现在两处入口（列表面板「添加网络电台」的下拉、弹出菜单「内置电台」），
-/// 点一下才走 `PlayerController.addRadio` 那条正常入口。
+/// 启动时由 `PlayerController.seedPresetRadios` 默认塞进 [默认] 列表：入口埋得深的东西
+/// 等于没有，用户不需要就在列表里把它删掉，删过的那台记进黑名单、以后每次启动都不再
+/// 塞回来（`AppState.declinedRadioKeys`）。这一份仍然只是「台名 + 地址表」，
+/// 既不自己写存档也不自己连网，入表一律走 `PlayerController.addRadio` 那条正常口子。
 ///
 /// 台名也不写进 `RadioStations.aliases`（那张表记的是用户自己起的名字）：
 /// 显示时按地址兜底，所以加过又删掉、或者从来没见过这个台，存档里都不会多出一条别名。
