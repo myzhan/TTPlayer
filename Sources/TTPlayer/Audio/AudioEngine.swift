@@ -882,12 +882,17 @@ final class AudioEngine {
         // 到货了就把缓冲时长报上去（高于水线时它顺手把「见底」那个状态摘掉）
         radioQuality.noteBuffer(seconds: radioBufferedSeconds, now: radioClock)
         let frames = Int64(buffer.frameLength)
-        playerNode.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+        // 用 `.dataConsumed` 而不是 `.dataPlayedBack`：后者要等音频真从设备放出去才回调，
+        // AVFAudio 只能为每一块排一个「未来某时刻触发」的派发定时器；电台连续播几小时
+        // 又不 reset，那些定时器连同 Command/回调块全堆在堆里（实测 ~3MB/min 只涨不落）。
+        // `.dataConsumed` 在渲染线程就地取走这块时回调，不需要定时器，也不漏——本地文件
+        // 那条 scheduleBuffer 走的就是它。递减背压的语义不变：块被节点取走即不再算 pending。
+        playerNode.scheduleBuffer(buffer, completionCallbackType: .dataConsumed) { [weak self] _ in
             DispatchQueue.main.async { self?.releaseRadioFrames(frames) }
         }
     }
 
-    /// 一块排完（真播出去了）：递减背压计数。排到归零就是需求说的「欠载」——
+    /// 一块被节点取走（渲染消费掉了）：递减背压计数。排到归零就是需求说的「欠载」——
     /// 节点里一块不剩而用户还想听，这比任何估算都直接（F11）。
     /// 只算下降沿：`RadioQuality.noteUnderrun` 自己在见底期间不重复计数
     private func releaseRadioFrames(_ frames: Int64) {
