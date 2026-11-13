@@ -76,10 +76,31 @@ final class RadioStations {
 
     func alias(for key: String) -> String? { aliases[key] }
 
-    /// 列表与标题该显示什么：自定义台名优先，没起过名字就用地址认得出的那段
+    /// 台名到底是谁给的：用户自定义 > 出厂内置 > 按地址。属性面板与「取消自定义」
+    /// 那句提示都要说清这一层，否则用户会以为内置台名也是自己存进去的
+    enum NameSource { case custom, builtin, address }
+
+    /// 列表与标题该显示什么：自定义台名优先，其次是内置台自带的名字，都没才按地址认出那段
     func displayName(for url: URL) -> String {
         if let name = aliases[url.absoluteString], !name.isEmpty { return name }
+        // 出厂台不占 aliases 那张表：用户没起过名字时也有个能看的台名，
+        // 而存档里不会因此多出一条「谁也没写过」的别名
+        if let preset = RadioPresets.name(for: url) { return preset }
         return RadioURL.displayName(for: url)
+    }
+
+    /// 台名是从哪儿来的（枚举只有三个取值，属性面板与自检按它说人话）
+    func nameSource(for url: URL) -> NameSource {
+        if hasCustomName(for: url) { return .custom }
+        return RadioPresets.name(for: url) == nil ? .address : .builtin
+    }
+
+    /// 取消自定义之后会落回哪儿：出厂台落回它自己的内置名，其余落回地址
+    func fallbackText(for url: URL) -> String {
+        switch nameSource(for: url) {
+        case .builtin: return "内置台名「\(RadioPresets.name(for: url) ?? "")」"
+        case .custom, .address: return "按地址显示"
+        }
     }
 
     /// 台名是不是用户自己起的（属性面板与自检要说清这一点）
@@ -89,7 +110,7 @@ final class RadioStations {
 
     // MARK: - 台名
 
-    /// 起/改自定义台名。空名字不是错误，是「取消自定义」：回到按地址显示，并把这一条从表里摘掉
+    /// 起/改自定义台名。空名字不是错误，是「取消自定义」：落回内置台名或地址，并把这一条从表里摘掉
     /// - Returns: nil = 处理好了；否则一句没改成的原因
     @discardableResult
     func setAlias(key: String, raw: String) -> String? {

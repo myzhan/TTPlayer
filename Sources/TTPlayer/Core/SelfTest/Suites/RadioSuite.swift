@@ -22,6 +22,7 @@ struct RadioSuite: SelfTestSuite {
         checkRadioAllFailStops(ctx)
         checkDecoder(ctx)
         checkStations(ctx)
+        checkBuiltinStations(ctx)
         checkQuality(ctx)
         checkLocalStream(ctx)
         checkLiveStream(ctx)
@@ -971,6 +972,130 @@ struct RadioSuite: SelfTestSuite {
                     && after.recentRadioKeys.isEmpty && p.playlist.isEmpty
                     && categoryRows() == 1 && stations.isEmpty,
                   "台名=\(after.radioAliases.count) 分类=\(after.radioCategories.count)")
+    }
+
+    // MARK: - 内置电台（F11 的出厂内容）
+
+    /// 出厂那几台验三件事：清单本身写没写错、入表走的是不是同一条通路、台名的来路说不说得清。
+    /// 全程离线：菜单上那一下是真连网的，自检只断言那一行指得回清单，不 `sendAction` 点火
+    private func checkBuiltinStations(_ ctx: SelfTestContext) {
+        let p = ctx.player
+        let stations = p.radioStations
+        func wipe() {
+            p.stop()
+            p.switchGroup(.main)
+            p.clearPlaylist()
+            p.groups.clear(.recentRadio)
+            stations.restore(aliases: [:], categories: [], assigned: [:])
+            ctx.pump(0.1)
+        }
+        wipe()
+        guard let preset = RadioPresets.all.first, let url = preset.url else {
+            ctx.check("电台-内置-清单里至少有一台且地址解得开", false,
+                      "\(RadioPresets.all.count) 台，第一台 url=\(RadioPresets.all.first?.address ?? "nil")")
+            return
+        }
+        let key = preset.identityKey
+        func builtinTrack() -> Track? { p.playlist.tracks.first { $0.identityKey == key } }
+
+        // MARK: 清单本身
+        let broken = RadioPresets.all.filter { $0.url == nil }.map { $0.address }
+        ctx.check("电台-内置-每台地址都归一化得开", broken.isEmpty, broken.joined(separator: " / "))
+        ctx.check("电台-内置-出厂那台的名字与地址钉死（改了要过发布说明）",
+                  RadioPresets.all.count == 1 && preset.name == "Whispering Solo Piano Radio"
+                    && preset.address == "https://pianosolo.streamguys1.com/live",
+                  "\(RadioPresets.all.count) 台：\(preset.name) / \(preset.address)")
+        ctx.check("电台-内置-键与 Track.identityKey 同一写法（才能跟手输的台去重）",
+                  key == Track(radio: url).identityKey && RadioURL.normalize(preset.address) == url,
+                  key)
+
+        // MARK: 不自动塞曲库，点一下才入表
+        ctx.check("电台-内置-不自动出现在曲库里（也没往台名存档写别名）",
+                  builtinTrack() == nil && stations.alias(for: key) == nil
+                    && !stations.hasCustomName(for: url) && stations.snapshotAliases.isEmpty,
+                  "n=\(p.playlist.count) aliases=\(stations.snapshotAliases.count)")
+        ctx.check("电台-内置-同址新建的条目一出生就叫内置名",
+                  Track(radio: url).title == preset.name
+                    && stations.displayName(for: url) == preset.name,
+                  Track(radio: url).title)
+        ctx.check("电台-内置-入表走 addRadio 同一条口子且不开播",
+                  p.addPresetRadio(preset, playNow: false) == nil
+                    && builtinTrack() != nil && !p.isPlaying && p.activeGroup == .main,
+                  "n=\(p.playlist.count) isPlaying=\(p.isPlaying)")
+        ctx.check("电台-内置-再点一次不多塞一条（与手输同址同一个去重）",
+                  p.addPresetRadio(preset, playNow: false) == nil
+                    && p.playlist.tracks.filter { $0.identityKey == key }.count == 1,
+                  "n=\(p.playlist.count)")
+        guard let track = builtinTrack() else {
+            ctx.check("电台-内置-入表后拿得到那一条", false, "列表里找不到内置台"); return
+        }
+        ctx.check("电台-内置-列表那一行显示内置台名而不是主机名",
+                  track.title == preset.name && track.isRadio, "title=\(track.title)")
+
+        // MARK: 台名的三种来路
+        ctx.check("电台-内置-没起过名字时来路是内置不是自定义",
+                  stations.nameSource(for: url) == .builtin
+                    && p.radioNameSourceText(for: url).contains("内置台名")
+                    && !stations.hasCustomName(for: url),
+                  p.radioNameSourceText(for: url))
+        ctx.check("电台-内置-用户起的名字优先于内置名",
+                  p.setRadioName(track, to: "深夜钢琴") == nil && track.title == "深夜钢琴"
+                    && stations.nameSource(for: url) == .custom,
+                  "title=\(track.title) 来路=\(p.radioNameSourceText(for: url))")
+        ctx.check("电台-内置-取消自定义落回内置名（不是落回地址）",
+                  p.setRadioName(track, to: "  ") == nil && track.title == preset.name
+                    && stations.alias(for: key) == nil
+                    && stations.fallbackText(for: url).contains("内置台名"),
+                  "title=\(track.title) 落回=\(stations.fallbackText(for: url))")
+        _ = p.addRadio("http://a.example.com/live", playNow: false)
+        ctx.pump(0.1)
+        let plain = URL(string: "http://a.example.com/live")!
+        ctx.check("电台-内置-出厂之外的台仍按地址（不会被误判成内置）",
+                  stations.nameSource(for: plain) == .address
+                    && p.radioNameSourceText(for: plain) == "按地址显示"
+                    && stations.fallbackText(for: plain) == "按地址显示",
+                  p.radioNameSourceText(for: plain))
+
+        // MARK: 属性面板与菜单入口
+        let extra = p.propertyExtraLines(for: track)
+        ctx.check("电台-内置-属性面板把台名来路说清（带上台名与「不占存档」）",
+                  extra.contains { $0.0 == "电台台名" && $0.1.contains("内置台名")
+                      && $0.1.contains(preset.name) && $0.1.contains("不占台名存档") },
+                  extra.first { $0.0 == "电台台名" }?.1 ?? "没有那一行")
+        let rows = ctx.main.buildPopupMenu().items.first { $0.title == "内置电台" }?.submenu?.items ?? []
+        ctx.check("电台-内置-弹出菜单有「内置电台」一支且逐台一行、每行可点",
+                  rows.count == RadioPresets.all.count
+                    && rows.allSatisfy { $0.action == #selector(MainWindowController.addBuiltinRadio(_:))
+                        && $0.target != nil },
+                  "rows=\(rows.count) 清单=\(RadioPresets.all.count)")
+        ctx.check("电台-内置-菜单那一行按 tag 指得回清单（标题是台名、提示是地址）",
+                  rows.allSatisfy { RadioPresets.all.indices.contains($0.tag)
+                      && RadioPresets.all[$0.tag].name == $0.title
+                      && RadioPresets.all[$0.tag].address == ($0.toolTip ?? "") },
+                  rows.map { "\($0.tag)/\($0.title)" }.joined(separator: " "))
+
+        // MARK: 删出列表也不留档
+        if let idx = p.playlist.tracks.firstIndex(where: { $0.identityKey == key }) {
+            p.removeTracks(at: IndexSet(integer: idx))
+        }
+        ctx.pump(0.1)
+        p.persistNow()
+        let after = LibraryStore.load()
+        ctx.check("电台-内置-加过又删掉，存档里不会多出一条谁也没写过的别名",
+                  builtinTrack() == nil && stations.alias(for: key) == nil
+                    && after.radioAliases[key] == nil && after.radioAliases.isEmpty,
+                  "aliases=\(after.radioAliases.count)")
+
+        // 收摊：不给后面的段留现场（内置台在列表里挂着会让下一段以为已经入表）
+        wipe()
+        p.persistNow()
+        let clean = LibraryStore.load()
+        // 拿「列表空 + 没在播 + 两份台名表都空」当凭据，不拿 `isRadio`：电台
+        // 停下后那个标记照旧为真（跟本地文件一样是「装载着但停住」）
+        ctx.check("电台-内置-收尾擦干净不留给下一段",
+                  p.playlist.isEmpty && !p.isPlaying && clean.radioAliases.isEmpty
+                    && stations.snapshotAliases.isEmpty,
+                  "n=\(p.playlist.count) isPlaying=\(p.isPlaying) aliases=\(clean.radioAliases.count)")
     }
 
     // MARK: - 连接质量台账（F11：时间由调用处递进来）

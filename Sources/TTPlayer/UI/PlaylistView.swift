@@ -861,7 +861,8 @@ final class PlaylistView: NSView {
         let prefill = named ? track.title : ""
         guard let raw = promptLine(title: named ? "修改台名" : "自定义台名",
                                    message: "名字记在这个地址上：下次添加同一家电台、重启、导进来都是这个名字。"
-                                        + "流里报的「正在播放」不会覆盖它；留空就是取消自定义，回到按地址显示。",
+                                        + "流里报的「正在播放」不会覆盖它；留空就是取消自定义，落回"
+                                        + controller.radioStations.fallbackText(for: track.url) + "。",
                                    placeholder: "台名（留空 = 取消自定义）",
                                    prefill: prefill) else { return }
         if let problem = applyRadioName(track: track, to: raw) { showNote(problem, title: "电台台名") }

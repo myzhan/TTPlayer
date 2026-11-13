@@ -501,6 +501,8 @@ struct QueueSuite: SelfTestSuite {
         ctx.check("待播首行带序号与曲名",
                   panel.firstCellText.hasPrefix("1. ") && !panel.firstCellText.isEmpty,
                   "cell=\(panel.firstCellText)")
+        // 重排之前拍一张：README 要那张「正在播 + 带序号的待播」的原样
+        ctx.snapshot(panel.window, named: "shot_queue_panel")
 
         // 拖动重排：把第 3 行拖到第 1 行的位置，其余次序顺移
         let before = pending.map { $0.track.identityKey }

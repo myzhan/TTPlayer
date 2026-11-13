@@ -149,6 +149,25 @@ final class PlayerController {
         return nil
     }
 
+    /// 添加一台内置电台（菜单「内置电台」/「添加网络电台」那个下拉）。
+    /// 不另开一条通路：地址依旧走 `addRadio` 做归一化与去重，台名由 `RadioPresets`
+    /// 按地址兜底（所以这一台加过又删、或者从来没加过，存档里都不会多出一条别名）
+    /// - Returns: nil = 办好了；否则一句人话（内置地址解不开只可能是代码写错了）
+    @discardableResult
+    func addPresetRadio(_ preset: RadioPreset, playNow: Bool = true) -> String? {
+        guard preset.url != nil else {
+            let note = "内置电台地址写错了：\(preset.address)"
+            lastImportProblem = note
+            Diagnostics.error("未入表：\(note)")
+            return note
+        }
+        guard addRadio(preset.address, playNow: playNow) == nil else {
+            return lastImportProblem
+        }
+        Diagnostics.log("内置电台「\(preset.name)」已入表")
+        return nil
+    }
+
     /// 按 identityKey 去重入表（CUE 分轨的 url 都指向同一份镜像，只能靠这个键区分）
     @discardableResult
     func addTracks(_ newTracks: [Track], playNow: Bool = false) -> Int {
@@ -1227,8 +1246,7 @@ final class PlayerController {
         // 电台（F11）：台名到底是谁起的、归在哪一类、流里报的「正在播」、
         // 以及连接质量都得在属性面板看得见；没报上来的参数不写零，只说已知的
         if track.isRadio {
-            lines.append(("电台台名", radioStations.hasCustomName(for: track.url)
-                ? "自定义（记在这个地址上）" : "按地址显示"))
+            lines.append(("电台台名", radioNameSourceText(for: track.url)))
             lines.append(("电台分类", radioCategoryName(for: track)))
             if playing {
                 lines.append(("电台状态", radioStateText))
@@ -1804,7 +1822,7 @@ final class PlayerController {
     /// 给某个地址起/改/取消自定义台名（右键「自定义台名…」）。
     ///
     /// 台名只按地址身份存：流里 ICY 报的 StreamTitle 只进「正在播」那一行，
-    /// 永远不会回写这张表；空名字不是错误，是「取消自定义」，回到按地址显示。
+    /// 永远不会回写这张表；空名字不是错误，是「取消自定义」，落回内置台名或地址。
     /// - Returns: nil = 办好了；否则一句原因
     @discardableResult
     func setRadioName(_ track: Track, to raw: String) -> String? {
@@ -1815,7 +1833,7 @@ final class PlayerController {
         radioStationsChanged()
         if currentTrack?.identityKey == key { postTrackChange() }
         Diagnostics.log(radioStations.alias(for: key) == nil
-                        ? "电台「\(RadioURL.displayName(for: track.url))」恢复按地址显示"
+                        ? "电台「\(radioStations.displayName(for: track.url))」落回\(radioStations.fallbackText(for: track.url))"
                         : "电台台名→「\(radioStations.alias(for: key) ?? "")」（记在地址上）")
         return nil
     }
@@ -1956,6 +1974,16 @@ final class PlayerController {
         notifyPlaylistChanged()
         NotificationCenter.default.post(name: .ttRadioStationsChanged, object: nil)
         scheduleSave()
+    }
+
+    /// 「电台台名」那一行怎么说：三种来路得分开，用户要知道这个字是自己写的还是出厂自带的
+    /// （内置名不进存档，用户起过名字之后才以自己的为准）
+    func radioNameSourceText(for url: URL) -> String {
+        switch radioStations.nameSource(for: url) {
+        case .custom: return "自定义（记在这个地址上）"
+        case .builtin: return "内置台名「\(RadioPresets.name(for: url) ?? "")」（不占台名存档）"
+        case .address: return "按地址显示"
+        }
     }
 
     /// 这个台在界面上的分类名（未归类时是「未分类」）：属性面板与自检读它

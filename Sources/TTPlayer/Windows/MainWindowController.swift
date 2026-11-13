@@ -442,6 +442,18 @@ final class MainWindowController: NSObject {
         add("添加文件…", #selector(addFiles), "o")
         add("添加文件夹…", #selector(addFolder), "O", [.command, .shift])
         add("添加网络电台…", #selector(addRadioStream), "")
+        // 内置电台：出厂自带的几台，点一下就入表开听（地址与台名都写死在 `RadioPresets` 里，
+        // 不自动塞进曲库也不写台名存档）
+        let builtinItem = menu.addItem(withTitle: "内置电台", action: nil, keyEquivalent: "")
+        let builtinMenu = NSMenu(title: "内置电台")
+        for (i, preset) in RadioPresets.all.enumerated() {
+            let row = builtinMenu.addItem(withTitle: preset.name,
+                                          action: #selector(addBuiltinRadio(_:)), keyEquivalent: "")
+            row.target = self
+            row.tag = i
+            row.toolTip = preset.address
+        }
+        builtinItem.submenu = builtinMenu
         menu.addItem(.separator())
         add("播放/暂停", #selector(togglePlay), " ")
         add("停止", #selector(stopPlay))
@@ -945,6 +957,21 @@ final class MainWindowController: NSObject {
     @objc private func addRadioStream() {
         if !listVisible { setListVisible(true) }
         playlistPanel.promptAddRadio()
+    }
+
+    /// 内置电台那一项（菜单子菜单）：走 `addPresetRadio` 那一个入口，与手输同一个校验。
+    /// 内置地址解不开只可能是代码里写错了，记一条日志就够，不再弹一层窗让用户重选。
+    /// 拆成单独方法是给自检留的口子：菜单那一行指到哪一台要能直接断言（自检不去点它，
+    /// 那一下是真连网的）
+    @objc func addBuiltinRadio(_ sender: NSMenuItem) {
+        guard RadioPresets.all.indices.contains(sender.tag) else { return }
+        let preset = RadioPresets.all[sender.tag]
+        if !listVisible { setListVisible(true) }
+        if let problem = controller.addPresetRadio(preset) {
+            Diagnostics.error("内置电台加不进去：\(problem)")
+            return
+        }
+        playlistView.scrollToCurrent()
     }
 
     /// ⌘F / 菜单与右键菜单那一项：展开列表的搜索框并把键盘交给它（F05）。

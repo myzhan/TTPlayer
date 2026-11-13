@@ -5,7 +5,7 @@
 ## TL;DR
 
 1. 编译必须 **0 error 0 warning**（debug 与 release 都过）
-2. 全量自检必须 **1368 PASS / 0 FAIL**（debug 全量实测 290 s，release / 打包版 268 s：gain 88 s、radio 42 s、gapless 38~48 s 是三大头；条数随功能增长，以当前仓库实跑为准；环境相关 SKIP 不算失败：本机一轮是 3 条——TTA 真码流不入库、归档 rar 本机无 CLI、本机拿不到「零输出设备」环境，APE 真引擎那条需 `brew install mac`。另：`性能-常驻内存` 与 `性能-启动/首帧` 只认热轮，连着构建的忙轮会虚高（实测：连着 `build_app.sh` 就跑的打包版报 199.3 MB 超 190 门槛，机器凉下来单跑 perf 同一个二进制是 145.9 MB），见 PerfSuite 注释）
+2. 全量自检必须 **1385 PASS / 0 FAIL**（debug 全量实测 291.5 s，release 实测 267.7 s：gain 88 s、radio 43 s、gapless 38 s 是三大头；条数随功能增长，以当前仓库实跑为准；环境相关 SKIP 不算失败：本机一轮是 3 条——TTA 真码流不入库、归档 rar 本机无 CLI、本机拿不到「零输出设备」环境，APE 真引擎那条需 `brew install mac`。另：`性能-常驻内存` 与 `性能-启动/首帧` 只认热轮，连着构建的忙轮会虚高（实测：连着 `build_app.sh` 就跑的打包版报 199.3 MB 超 190 门槛，机器凉下来单跑 perf 同一个二进制是 145.9 MB），见 PerfSuite 注释）
 3. 用户 `~/Library/Application Support/TTPlayer/state.json` **前后逐字节相同**（回归纪律；`scripts/selftest.sh` 自己用 shasum 校验，测试存档走 `TTPLAYER_TESTDIR`）
 4. 本文只留开发约定，不写版本历史——每版改了什么、靠什么验证，看 `git log` 与 GitHub Release
 5. 音频素材不入仓（除了 `testlib/` 现有的短样本）；FFmpeg 产物 `3rd/ffmpeg-build/` 走 `.gitignore`
