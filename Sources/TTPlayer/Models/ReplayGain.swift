@@ -133,15 +133,21 @@ struct ReplayGainDecision {
                 source = t.trackGain == nil ? .noTag : .albumToTrack
             }
         }
-        let tag = gain ?? 0
-        let total = tag + preamp
+        // 没有有效 Gain 标签就是「不动音量」：前置增益是标签链路上的偏移量，
+        // 没有标签可偏移时把它单独加上去，等于拿「响度均衡」去推一首没测过的曲子，
+        // 而文案却说「不动音量」（linear 会是 3.98 而不是 1）
+        guard let gain else {
+            return ReplayGainDecision(source: .noTag, tagdB: 0, totaldB: 0,
+                                      linear: 1, limited: false, peak: nil)
+        }
+        let total = gain + preamp
         var linear = Float(pow(10.0, total / 20.0))
         var limited = false
         if peakLimit, let peak, linear > 1 / Float(peak) {
             linear = 1 / Float(peak)
             limited = true
         }
-        return ReplayGainDecision(source: source, tagdB: tag, totaldB: total,
+        return ReplayGainDecision(source: source, tagdB: gain, totaldB: total,
                                   linear: linear, limited: limited, peak: peak)
     }
 

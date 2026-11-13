@@ -29,6 +29,7 @@ struct ReplayGainSuite: SelfTestSuite {
 
     func run(_ ctx: SelfTestContext) {
         checkTagParsing(ctx)
+        checkDecisionMath(ctx)
         let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("ttplayer-gain", isDirectory: true)
         // 上一轮（或上一次崩掉没收尾）留下的素材先扫干净：旧文件里的标签会扮成「这一轮造对了」
@@ -242,6 +243,69 @@ struct ReplayGainSuite: SelfTestSuite {
         ctx.check("响度均衡-0 dB 是标签不是缺失", zero.trackGain == 0 && !zero.isEmpty)
     }
 
+    // MARK: - 增益决定的算术（纯逻辑）
+
+    /// 幅度取证要文件、要播、要采，一轮好几秒；这几条只管 `decide` 的算术，
+    /// 盖的是真实录音不容易凑齐的组合（比如「没有标签却把前置增益推到 +12 dB」）
+    private func checkDecisionMath(_ ctx: SelfTestContext) {
+        let none = ReplayGainTags(tags: [:])
+        let trackOnly = ReplayGainTags(tags: ["replaygain_track_gain": "-6.02 dB"])
+        let albumOnly = ReplayGainTags(tags: ["replaygain_album_gain": "-6.02 dB"])
+        let peakOnly = ReplayGainTags(tags: ["replaygain_track_peak": "0.5"])
+        let bad = ReplayGainTags(tags: ["replaygain_track_gain": "99"])
+
+        func d(_ t: ReplayGainTags?, _ mode: ReplayGainMode, _ pre: Double,
+               limit: Bool = true, radio: Bool = false) -> ReplayGainDecision {
+            ReplayGainDecision.decide(tags: t, mode: mode, preamp: pre,
+                                      peakLimit: limit, isRadio: radio)
+        }
+
+        // 没有有效 Gain 就没有「标签 + 前置增益」这一步：preamp 单独加上去等于
+        // 拿响度均衡去推一首没测过的曲子，而文案还在说「不动音量」
+        let bare = d(none, .track, 12)
+        ctx.check("响度均衡决定-无标签时前置增益不掺和",
+                  bare.source == .noTag && bare.linear == 1 && bare.totaldB == 0
+                      && bare.summaryText.contains("不动音量"),
+                  "linear=\(bare.linear) total=\(bare.totaldB) text=\(bare.summaryText)")
+        let combos: [(String, ReplayGainDecision)] = [
+            ("tags 为 nil", d(nil, .track, 12)),
+            ("空标签", d(none, .album, 12)),
+            ("非法增益", d(bad, .track, 6)),
+            ("只有 Peak", d(peakOnly, .track, 6)),
+            ("专辑模式下只有专辑标签、曲目模式里没曲目标签", d(albumOnly, .track, -6)),
+        ]
+        let pushed = combos.filter { $0.1.linear != 1 || $0.1.source != .noTag }
+        ctx.check("响度均衡决定-五类「拿不出可用增益」都是单位增益", pushed.isEmpty,
+                  pushed.map { "\($0.0)→linear=\($0.1.linear)/\($0.1.source.rawValue)" }
+                      .joined(separator: " / "))
+        // 有标签时前置增益照旧与标签相加，正负两个方向都要对
+        let cancel = d(trackOnly, .track, 6.02)
+        ctx.check("响度均衡决定-有标签时前置增益与标签相加",
+                  abs(cancel.linear - 1.0) < 0.001 && abs(cancel.totaldB) < 0.001,
+                  "linear=\(cancel.linear) total=\(cancel.totaldB)")
+        let push = d(trackOnly, .track, 12, limit: false)
+        ctx.check("响度均衡决定-有标签时推得动也压得下",
+                  push.linear > 1.9 && push.linear < 2.0
+                      && d(trackOnly, .track, -6.02, limit: false).linear > 0.24
+                      && d(trackOnly, .track, -6.02, limit: false).linear < 0.26,
+                  "push=\(push.linear)")
+        // 回退链与限幅这两条老路不能被上面的 guard 改坏
+        let fallback = d(trackOnly, .album, 0)
+        ctx.check("响度均衡决定-专辑缺失退回曲目仍按曲目标签走",
+                  fallback.source == .albumToTrack && abs(fallback.linear - 0.5) < 0.001,
+                  "source=\(fallback.source.rawValue) linear=\(fallback.linear)")
+        let limited = d(ReplayGainTags(tags: ["replaygain_track_gain": "+12 dB",
+                                              "replaygain_track_peak": "0.5"]), .track, 0)
+        ctx.check("响度均衡决定-Peak 把过推压到不越满量程",
+                  limited.limited && abs(limited.linear - 2.0) < 0.001,
+                  "linear=\(limited.linear) limited=\(limited.limited)")
+        ctx.check("响度均衡决定-电台与关闭模式连前置增益也不加",
+                  d(trackOnly, .track, 12, radio: true).linear == 1
+                      && d(trackOnly, .off, 12).linear == 1
+                      && d(nil, .track, 12, radio: true).source == .radio,
+                  "radio=\(d(trackOnly, .track, 12, radio: true).linear) off=\(d(trackOnly, .off, 12).linear)")
+    }
+
     // MARK: - 标签真从容器里读出来
 
     private func checkTagsFromContainer(_ ctx: SelfTestContext, mat: Material) {
@@ -339,20 +403,23 @@ struct ReplayGainSuite: SelfTestSuite {
     // MARK: - 不该动的东西
 
     private func checkIgnoredCases(_ ctx: SelfTestContext, mat: Material) {
+        // 两趟都把前置增益推到 +6 dB：旧写法会把它当成「标签是 0 dB」接着加，
+        // 无标签与坏标签的曲子能拿到近 ×2 的推量，与「不动音量」的文案直接矛盾
         guard let bad = need(ctx, mat.badTag, "坏标签不动音量") else { return }
-        ratio(ctx, "响度均衡-坏标签文件不动音量", bad,
-              baseline: Cond(), test: Cond(mode: .track, preamp: 0), want: 1.0)
+        ratio(ctx, "响度均衡-坏标签文件不动音量（带前置增益也不动）", bad,
+              baseline: Cond(), test: Cond(mode: .track, preamp: 6), want: 1.0)
         guard let plain = need(ctx, mat.plain, "无标签文件不动音量") else { return }
-        ratio(ctx, "响度均衡-无标签文件不动音量", plain,
-              baseline: Cond(), test: Cond(mode: .album), want: 1.0)
+        ratio(ctx, "响度均衡-无标签文件不动音量（带前置增益也不动）", plain,
+              baseline: Cond(), test: Cond(mode: .album, preamp: 6), want: 1.0)
         // 需求点名「不自动分析」：没有标签的文件不能因为开了模式就被改响
         let p = ctx.player
         let before = p.volume
         let mutedBefore = p.isMuted
-        _ = measure(ctx, plain, Cond(mode: .track))
+        _ = measure(ctx, plain, Cond(mode: .track, preamp: 6))
         ctx.check("响度均衡-不改用户音量与静音", p.volume == before && p.isMuted == mutedBefore,
                   "volume=\(p.volume) muted=\(p.isMuted)")
         // 「不自动分析」要拿这曲子的决定来看：没有标签时它得说「不动音量」，线性是 1
+        // （拿带着 +6 dB 前置增益的档位来看，才能证「前置增益没有单独跑起来」）
         let bareTrack = p.playlist.tracks.first { $0.url.path == plain.path }
         let decision = bareTrack.map { p.replayGainDecision(for: $0) }
         ctx.check("响度均衡-不自家分析（无标签就是 nil 增益）",

@@ -9,7 +9,7 @@ import Foundation
 /// 里面一律写**稳定身份**，不写下标、不写 Track 对象：
 /// - 曲目：`Track.identityKey` 那一套写法（普通文件路径 / `cue路径#track=N` /
 ///   归档条目 URL / 电台完整地址）
-/// - 队列：逐条目写曲目身份 + 是否显式排队，次序就是数组次序（允许同一首歌出现多次）
+/// - 队列：逐条目写曲目身份 + 排队来路，次序就是数组次序（允许同一首歌出现多次）
 /// - 播放历史：条目**在队列里的下标**序列。条目 UUID 跨不了进程，下标序列配合
 ///   上面那份次序就能原样重建
 struct ResumeScene: Codable {
@@ -23,6 +23,10 @@ struct ResumeScene: Codable {
     var queueKeys: [String] = []
     /// 与 queueKeys 一一对应：true = 用户显式排进来的（「下一首播放」/「稍后播放」）
     var queueExplicit: [Bool] = []
+    /// 与 queueKeys 一一对应：true = 「下一首播放」插进来的那一条（能打断单曲循环）。
+    /// 旧档没这一项：那些显式排队的条目只能保守地当「稍后播放」重建，
+    /// 宁可少打断一次循环，也不拿 `queueExplicit` 猜回两种语义
+    var queueNext: [Bool] = []
     /// 队列当前位置（正在播的那一条在 queueKeys 里的下标）
     var queueIndex: Int = 0
     /// 播放历史：听过的条目下标，最近的在末尾（随机「上一首」沿它回退）
@@ -33,7 +37,7 @@ struct ResumeScene: Codable {
     // MARK: 宽容解码（与 AppState 同一规矩：缺字段用默认值，不能整档失败）
     private enum CodingKeys: String, CodingKey {
         case trackKey, position, wasPlaying, queueKeys, queueExplicit
-        case queueIndex, historyIndexes, group
+        case queueNext, queueIndex, historyIndexes, group
     }
 
     init() {}
@@ -45,6 +49,7 @@ struct ResumeScene: Codable {
         wasPlaying = try c.decodeIfPresent(Bool.self, forKey: .wasPlaying) ?? false
         queueKeys = try c.decodeIfPresent([String].self, forKey: .queueKeys) ?? []
         queueExplicit = try c.decodeIfPresent([Bool].self, forKey: .queueExplicit) ?? []
+        queueNext = try c.decodeIfPresent([Bool].self, forKey: .queueNext) ?? []
         queueIndex = try c.decodeIfPresent(Int.self, forKey: .queueIndex) ?? 0
         historyIndexes = try c.decodeIfPresent([Int].self, forKey: .historyIndexes) ?? []
         group = try c.decodeIfPresent(String.self, forKey: .group) ?? ""
@@ -52,6 +57,13 @@ struct ResumeScene: Codable {
 
     /// 现场里有没有东西可恢复（旧档、或首次运行时是空文件/没文件）
     var isEmpty: Bool { trackKey.isEmpty && queueKeys.isEmpty }
+
+    /// 第 i 条条目的来路：两份标记合成。下标越界与旧档（没 `queueNext`）
+    /// 都退到保守答案：当「稍后播放」而不是「下一首播放」
+    func source(at i: Int) -> QueueSource {
+        if queueNext.indices.contains(i), queueNext[i] { return .next }
+        return queueExplicit.indices.contains(i) && queueExplicit[i] ? .later : .basic
+    }
 
     /// 存档字段之间可能互相矛盾（进程被强杀时只写了一半、手工改过文件），
     /// 恢复前一律夹到合法范围，别把越界下标带进队列
@@ -65,6 +77,9 @@ struct ResumeScene: Codable {
         if s.queueExplicit.count != s.queueKeys.count {
             // 长度不匹配时按「都是自动带进来的基础条目」处理，不拿半截数组去对齐
             s.queueExplicit = Array(repeating: false, count: s.queueKeys.count)
+        }
+        if s.queueNext.count != s.queueKeys.count {
+            s.queueNext = Array(repeating: false, count: s.queueKeys.count)
         }
         return s
     }

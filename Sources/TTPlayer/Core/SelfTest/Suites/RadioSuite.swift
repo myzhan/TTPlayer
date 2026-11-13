@@ -19,6 +19,7 @@ struct RadioSuite: SelfTestSuite {
         checkFadeMath(ctx)
         checkICY(ctx)
         checkRetry(ctx)
+        checkRadioAllFailStops(ctx)
         checkDecoder(ctx)
         checkStations(ctx)
         checkQuality(ctx)
@@ -438,6 +439,61 @@ struct RadioSuite: SelfTestSuite {
         }
         ctx.check("电台-HTTP 状态码分得清能不能重连", badCodes.isEmpty,
                   badCodes.isEmpty ? "11 例" : "分错：\(badCodes.map { "\($0.0)→\($0.1 ?? "可听")" })")
+    }
+
+    // MARK: - 整串台都连不上要收手（跨台失败计数）
+
+    /// `.failed` 是 RadioPlayer 退避到上限之后的终态：控制层凭它跳下一台。
+    /// 每一台都失败时这个周期必须能攒到「上下文里每条都试过」，不然会在列表里
+    /// 无限打转。这里注入终态事件而不是真等五次退避：要验的是跨台计数，不是网络。
+    /// 地址用不可路由的内网段：真连那一路只会在后台慢慢超时，也不会插进这几步同步断言
+    private func checkRadioAllFailStops(_ ctx: SelfTestContext) {
+        let p = ctx.player
+        let savedMode = p.playMode
+        let savedList = p.playlist.tracks
+        p.stop()
+        p.clearPlaylist()
+        let r1 = Track(radio: URL(string: "http://10.255.255.1:81/a")!)
+        let r2 = Track(radio: URL(string: "http://10.255.255.1:82/b")!)
+        guard p.addTracks([r1, r2]) == 2 else {
+            ctx.check("电台-全失败素材能入表", false); return
+        }
+        p.setMode(.listLoop)
+        p.playRowAt(0)
+        _ = ctx.waitUntil(4) { p.isRadio && p.currentTrack?.identityKey == r1.identityKey }
+        // 第一条失败：该跳到第二条（这一步本身不能把周期清掉）
+        p.engine.onRadioState?(.failed("自检注入"))
+        let ontoSecond = p.currentTrack?.identityKey == r2.identityKey
+        // 两条都试过（上界 = 队列长度 2）：到这里就该收手，不能再绕回第一条
+        p.engine.onRadioState?(.failed("自检注入"))
+        let stoppedAt = p.currentTrack?.identityKey
+        let idx = p.queue.currentIndex
+        p.engine.onRadioState?(.failed("自检注入"))
+        ctx.check("电台-每台都连不上时在有限次后停下",
+                  ontoSecond && stoppedAt == r2.identityKey && p.queue.currentIndex == idx
+                    && !p.isPlaying,
+                  "跳过第二条=\(ontoSecond) cur=\(p.currentTrack?.fileName ?? "nil") idx=\(String(describing: p.queue.currentIndex))")
+        let stuck = p.queue.currentIndex
+        let why = p.playbackProblem ?? ""
+        ctx.check("电台-停下之后那句原因还在显示区",
+                  why.contains("自检注入"), why)
+        // 真连上过一次就得把周期归零：下一台失败时还能接着跳，而不是卡死在「已经全都试过」
+        p.engine.onRadioState?(.playing)
+        p.engine.onRadioState?(.failed("自检注入"))
+        ctx.check("电台-连上过一次就把失败周期归零",
+                  p.queue.currentIndex != stuck && p.currentTrack?.identityKey == r1.identityKey,
+                  "cur=\(p.currentTrack?.fileName ?? "nil") idx=\(String(describing: p.queue.currentIndex))")
+        // 用户重新点播也要能重开一轮：上一轮攒下的计数不能把这一次也拦死
+        p.stop()
+        p.play(track: r1)
+        p.engine.onRadioState?(.failed("自检注入"))
+        ctx.check("电台-手动重播重新开一轮失败周期",
+                  p.currentTrack?.identityKey == r2.identityKey,
+                  "cur=\(p.currentTrack?.fileName ?? "nil")")
+        p.stop()
+        p.clearPlaylist()
+        p.setMode(savedMode)
+        _ = p.addTracks(savedList)
     }
 
     // MARK: - 流式解码

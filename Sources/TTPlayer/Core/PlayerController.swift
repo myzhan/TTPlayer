@@ -935,6 +935,9 @@ final class PlayerController {
         } else {
             engine.play()
             setState(playing: true)
+            // 本曲重新排进节点之后才谈预取：恢复出来的、暂停过的那一曲开声之前
+            // 手上根本没有下一曲，播到结尾只能硬切（跟 startLoad 同一个次序）
+            schedulePrefetch()
         }
     }
 
@@ -1715,7 +1718,10 @@ final class PlayerController {
     // MARK: - 电台
 
     private func loadRadio(_ track: Track) {
-        consecutiveFailures = 0
+        // 不在这里清失败计数：自动推进到下一台时不能清掉它，否则每一台都连不上的列表
+        // 永远走不到 `selectNextAfterRadioFailure` 的上界，会在列表里无限打转。
+        // 用户发起的新点播（playRowAt / play / next / previous / stop）各自已经清零，
+        // 真正连上了也在 `.playing` 回调里清零
         playbackProblem = nil
         track.decodeProblem = nil
         markCurrentPlayed()
@@ -1750,6 +1756,8 @@ final class PlayerController {
         case .playing:
             playbackProblem = nil
             currentTrack?.decodeProblem = nil
+            // 连上了才算这一轮失败周期真正结束（与本地文件装载成功时同一口径）
+            consecutiveFailures = 0
             // 只认「用户还想听」那一次：停止后 engine.isRadio 依旧为真（再按播放就是重连这个台），
             // 单靠它挡不住从队列那边异步转过来的旧回调——不然按了停止，晚到的「直播中」
             // 会把播放状态重新点亮，而状态文字已经回到「未连接」（F11 的过期回调防护）
@@ -2214,6 +2222,7 @@ final class PlayerController {
         s.wasPlaying = isPlaying
         s.queueKeys = queue.items.map { $0.track.identityKey }
         s.queueExplicit = queue.items.map { $0.explicit }
+        s.queueNext = queue.items.map { $0.playNext }
         s.queueIndex = queue.currentIndex ?? 0
         let ids = queue.items.map { $0.id }
         s.historyIndexes = queue.history.compactMap { ids.firstIndex(of: $0) }
@@ -2292,14 +2301,15 @@ final class PlayerController {
         var items: [QueueItem] = []
         items.reserveCapacity(scene.queueKeys.count)
         for (i, key) in scene.queueKeys.enumerated() {
+            // 来路从两份标记合成：「下一首播放」与「稍后播放」在单曲循环里不等价，
+            // 恢复后不能把它们并成一种（只看 `explicit` 就会把刚追加的那条当成插队）
             items.append(QueueItem(track: track(forKey: key, resolver: &resolver),
-                                   explicit: scene.queueExplicit.indices.contains(i)
-                                    && scene.queueExplicit[i]))
+                                   source: scene.source(at: i)))
         }
         // 只有当前曲、没有待播序列的旧现场：拿 trackKey 补一段单条目上下文
         if items.isEmpty, !scene.trackKey.isEmpty {
             items = [QueueItem(track: track(forKey: scene.trackKey, resolver: &resolver),
-                               explicit: false)]
+                               source: .basic)]
         }
         guard !items.isEmpty else { return }
         queue.restoreScene(items: items, cursor: scene.queueIndex, history: scene.historyIndexes)
@@ -2318,7 +2328,13 @@ final class PlayerController {
             Diagnostics.log("恢复现场（电台）\(track.url.absoluteString)：地址已回来，待重连")
         } else {
             do {
-                try engine.load(url: track.url, from: track.playStart, to: track.playEnd)
+                // 跟 startLoad 同一条次序：先把增益递到引擎再搭装载，
+                // 顺序反了恢复后的第一句会按 1.0 出声（响度均衡到第二首才生效）
+                applyReplayGains()
+                // key 不能省：无缝衔接的交接与预取都靠曲目身份认人，
+                // 少了它恢复后的那一曲就没有「这是哪一条」的凭据
+                try engine.load(url: track.url, from: track.playStart, to: track.playEnd,
+                                key: track.identityKey)
             } catch {
                 let problem = AudioFormats.playbackProblem(for: track, error: error)
                 track.decodeProblem = problem
@@ -2353,6 +2369,8 @@ final class PlayerController {
             engine.play()
             setState(playing: true)
             startTimeTimer()
+            // 自动续播也是从「恢复出来的那一段」开声：下一曲同样要预取
+            schedulePrefetch()
         }
     }
 

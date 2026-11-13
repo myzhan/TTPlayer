@@ -5,7 +5,7 @@
 ## TL;DR
 
 1. 编译必须 **0 error 0 warning**（debug 与 release 都过）
-2. 全量自检必须 **1293 PASS / 0 FAIL**（debug 全量实测约 291 s：radio 46 s、gapless 48 s、gain 88 s 是三大头；条数随功能增长，以当前仓库实跑为准；环境相关 SKIP 不算失败：TTA 真码流不入库、APE 真引擎需 `brew install mac`、归档 rar 本机无 CLI、本机拿不到「零输出设备」环境。另：`性能-常驻内存` 与 `性能-启动/首帧` 只认热轮，连着构建的忙轮会虚高，见 PerfSuite 注释）
+2. 全量自检必须 **1368 PASS / 0 FAIL**（debug 全量实测 290 s，release / 打包版 268 s：gain 88 s、radio 42 s、gapless 38~48 s 是三大头；条数随功能增长，以当前仓库实跑为准；环境相关 SKIP 不算失败：本机一轮是 3 条——TTA 真码流不入库、归档 rar 本机无 CLI、本机拿不到「零输出设备」环境，APE 真引擎那条需 `brew install mac`。另：`性能-常驻内存` 与 `性能-启动/首帧` 只认热轮，连着构建的忙轮会虚高（实测：连着 `build_app.sh` 就跑的打包版报 199.3 MB 超 190 门槛，机器凉下来单跑 perf 同一个二进制是 145.9 MB），见 PerfSuite 注释）
 3. 用户 `~/Library/Application Support/TTPlayer/state.json` **前后逐字节相同**（回归纪律；`scripts/selftest.sh` 自己用 shasum 校验，测试存档走 `TTPLAYER_TESTDIR`）
 4. 本文只留开发约定，不写版本历史——每版改了什么、靠什么验证，看 `git log` 与 GitHub Release
 5. 音频素材不入仓（除了 `testlib/` 现有的短样本）；FFmpeg 产物 `3rd/ffmpeg-build/` 走 `.gitignore`
@@ -145,6 +145,8 @@ testlib/                    # 自检素材（.gitignore，运行时现射）
 11. **音频取证不能单点读一窗**：① 频谱——`SpectrumView` 按窗口 occlusion 驱动 `analyzer.setEnabled(false)`，窗口不可见时 PCM 再真 `bars` 也是 0，自检一律走 `ctx.spectrumEnergy`（测量期间临时 enable、多次取 max）；② 设备切换——换设备/重建输出链/拔插之后马上 `measure` 会撞上旧缓冲尾巴与重排期的咔哒（实测全量跑里 RMS 0.36 / 音高能量 0.008，单跑复现不出来），走 `DeviceSuite.measureSettled` 连采几窗取音高最强的一窗（拿到干净窗就 break，不白等）。
 12. **自绘 `TTButton` 用 anchor 约束前必须关 `translatesAutoresizingMaskIntoConstraints`**：不关的话 AppKit 会按它的初始 frame 补一组**必需**的 `minX/width/minY/height` 约束，顺着 `toggle.trailing == field.leading - 4` 这类兄弟关系把整条标题行的宽度锁死（放大镜那颗就曾经把搜索框钉在 264pt、把列表标题压成 4pt），而且**不打印冲突日志** —— 只能靠 dump `listWell.constraints` 的 description 才看得见。这类“宽度怎么改常量都不生效”的现象先查 autoresizing 约束，不要去猜“哪个控件自带固有宽度”。
 13. **搜索态里 `controller.playlist` 就是命中表**（F05 全局搜索）：任何“原列表还剩多少行”、“这首歌不在当前页”的断言都得先 `collapseSearch()` 退出后再读，否则会拿命中表当原列表，验证的是假命题。同理，面板把关键字交给控制器**之前**必须先 `playlistView.noteSceneBeforeSearch()`（那一刻表格装的还是原页），而 `sceneBeforeSearch` 只能在退出分支消费并置 nil，进分支干空会把刚采到的现场抹掉。
+14. **预取只能在当前曲已经排进节点之后发起**：`schedulePrefetch()` 要跟在 `engine.play()` 后面（`startLoad` 就是这个次序），不要搬到“装载完但还暂停”的入口上——实测在 `restorePlaybackScene` 里直接预取，恢复后开声采到的是本曲**从头**的声音（`现场-放出来的是那一段的真实 PCM` 拿到第 0 段而不是第 8 段，CUE 那条同样退到镜像第 0 段），因为此时 `feed` 还是空的，下一曲的段能抢在本曲之前排进节点。暂停后恢复、启动自动续播同样缺这一笔（补在开声那一步，`prepareNext` 自带同键去重，重复调用不会重开解码）。
+15. **两种用户意图不能拿一个共用布尔值加位置去猜**（F03 队列）：`insertNext`（「下一首播放」）与 `appendLater`（「稍后播放」）都只记 `explicit = true`，推进时再拿「紧邻当前项且 explicit」当插队判据，边界一重叠就分不开——上下文只剩一条、或当前曲就在基础序列末尾时，刚追加的稍后项正好坐在 `cursor+1`，单曲循环被它打断（实测 30/30）；反过来拿它往整个尾部扫又会把未播的基础条目跨过去、让它们永久消失。改法是给 `QueueItem` 记一条不可变的来路 `source: QueueSource`，`explicit`/`playNext` 都从它派生，插队只认「位置 + 来路」两个条件都得上。两条连带规矩：拖动重排只改次序不改来路（拖到最前面的稍后项不伪造插队意图），以及存档新增字段要成对加齐（`ResumeScene.queueNext` 的 `case` + `decodeIfPresent` + `sanitized` 长度对齐 + `source(at:)` 合成，旧档缺字段只能保守重建为 `.later`）。
 
 ## 变更前后必做的验证
 

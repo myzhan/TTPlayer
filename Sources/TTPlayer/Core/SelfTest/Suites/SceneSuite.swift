@@ -16,6 +16,7 @@ struct SceneSuite: SelfTestSuite {
         checkSnapshotShape(ctx)
         checkResumeIsRealAudio(ctx, root: root)
         checkAutoResumeBranches(ctx, root: root)
+        checkSceneSharesNormalLoadInit(ctx, root: root)
         checkQueueOrderAndGroup(ctx)
         checkCueSegmentTimeBase(ctx, root: root)
         checkArchiveEntry(ctx, root: root)
@@ -88,6 +89,7 @@ struct SceneSuite: SelfTestSuite {
         s.wasPlaying = true
         s.queueKeys = ["/tmp/a.wav", "/tmp/b.wav", "/tmp/a.wav"]
         s.queueExplicit = [false, true, true]
+        s.queueNext = [false, true, false]
         s.queueIndex = 2
         s.historyIndexes = [0, 2]
         s.group = "favorites"
@@ -96,9 +98,15 @@ struct SceneSuite: SelfTestSuite {
         ctx.check("现场-全字段往返",
                   back?.trackKey == s.trackKey && back?.position == 3.25
                     && back?.wasPlaying == true && back?.queueKeys == s.queueKeys
-                    && back?.queueExplicit == s.queueExplicit && back?.queueIndex == 2
+                    && back?.queueExplicit == s.queueExplicit && back?.queueNext == s.queueNext
+                    && back?.queueIndex == 2
                     && back?.historyIndexes == [0, 2] && back?.group == "favorites",
                   "bytes=\(data.count)")
+        // 来路得能合成：同一首歌重复排队的三条分别是基础/插队/稍后
+        ctx.check("现场-来路合成不串位",
+                  [0, 1, 2].map { s.source(at: $0) } == [.basic, .next, .later]
+                    && s.source(at: 9) == .basic,
+                  "src=\([0, 1, 2, 9].map { "\(s.source(at: $0))" })")
 
         // 旧版现场：只有当时存在的那几笔，新增字段必须缺省可用（不能整档解不开）
         let legacyJSON = "{\"trackKey\":\"/tmp/a.wav\",\"position\":2}"
@@ -108,6 +116,18 @@ struct SceneSuite: SelfTestSuite {
                     && legacy?.queueKeys.isEmpty == true && legacy?.wasPlaying == false
                     && legacy?.group == "",
                   "group=\(String(describing: legacy?.group))")
+        // 上一版的 resume.json 只写了 `queueExplicit`：新字段缺省可用，且插队意图只能
+        // 保守地当「稍后播放」重建（不能拿一个布尔值猜回两种语义）
+        let prevJSON = "{\"queueKeys\":[\"/tmp/a.wav\",\"/tmp/b.wav\"],"
+            + "\"queueExplicit\":[false,true]}"
+        let prev = try? JSONDecoder().decode(ResumeScene.self, from: Data(prevJSON.utf8))
+        if let old = prev {
+            ctx.check("现场-旧档的显式排队重建为稍后播放",
+                      old.queueNext.isEmpty && [0, 1].map { old.source(at: $0) } == [.basic, .later],
+                      "next=\(old.queueNext) src=\([0, 1].map { "\(old.source(at: $0))" })")
+        } else {
+            ctx.check("现场-旧档的显式排队重建为稍后播放", false, "那份写法解不开")
+        }
 
         // 进程被强杀时可能只写了一半、或者被手改过：矛盾字段要夹回合法范围
         var bad = ResumeScene()
@@ -116,12 +136,14 @@ struct SceneSuite: SelfTestSuite {
         bad.position = -3
         bad.historyIndexes = [-1, 0, 5]
         bad.queueExplicit = [true]
+        bad.queueNext = [true, false, true]        // 比 keys 长：半截数组不得拿去对齐
         let fixed = bad.sanitized
         ctx.check("现场-矛盾字段夹回合法范围",
                   fixed.queueIndex == 1 && fixed.position == 0
-                    && fixed.historyIndexes == [0] && fixed.queueExplicit == [false, false],
+                    && fixed.historyIndexes == [0] && fixed.queueExplicit == [false, false]
+                    && fixed.queueNext == [false, false],
                   "idx=\(fixed.queueIndex) pos=\(fixed.position) hist=\(fixed.historyIndexes) "
-                    + "flags=\(fixed.queueExplicit)")
+                    + "flags=\(fixed.queueExplicit) next=\(fixed.queueNext)")
         var nan = ResumeScene()
         nan.position = .nan
         ctx.check("现场-非法进度归零", nan.sanitized.position == 0)
@@ -324,6 +346,109 @@ struct SceneSuite: SelfTestSuite {
         p.setAutoResumePlay(false)
     }
 
+    // MARK: - 恢复路径与正常装载共用同一套初始化
+
+    /// 跳过开头一点采集毛刺后的 RMS（与 `ReplayGainSuite` 同一个口径）
+    private func rms(_ samples: [Float]) -> Double {
+        var s2 = 0.0
+        var n = 0
+        for v in samples.dropFirst(2_205) { s2 += Double(v) * Double(v); n += 1 }
+        return n > 0 ? (s2 / Double(n)).squareRoot() : 0
+    }
+
+    /// 恢复现场走的是 `engine.load` 那一条捷径。一旦它漏掉正常装载里的三件事
+    /// （先把增益递到引擎、按曲目身份装载、把下一曲排进预取），恢复出来的就是
+    /// 「听得见但响度均衡没生效、接下一曲还得硬切」的半成品。
+    /// 素材用 CUE 分轨而不是普通文件：普通文件的 `identityKey` 就是 `url.path`，
+    /// 拿它验「有没有把身份传给引擎」会测不出差别；分轨的身份是
+    /// `<cue 路径>#track=N`，与镜像路径不同，增益查不查得到一眼就能从幅度上看出。
+    /// 凭据是实际输出 PCM 的幅度比（与 `engine.replayGainLinear` 无关：那张表是在
+    /// 装载之前换的，当时排期流还是空的，只能等声音真出来才能验）
+    private func checkSceneSharesNormalLoadInit(_ ctx: SelfTestContext, root: URL) {
+        let p = ctx.player
+        let wave = root.appendingPathComponent("sceneGain.wav")
+        guard ctx.writeStepWave(wave, seconds: 6) else {
+            ctx.check("现场-增益与预取素材造得出来", false); return
+        }
+        let cue = root.appendingPathComponent("sceneGain.cue")
+        let text = """
+        TITLE "SceneGain"
+        FILE "sceneGain.wav" WAVE
+          TRACK 01 AUDIO
+            TITLE "Head"
+            INDEX 01 00:00:00
+          TRACK 02 AUDIO
+            TITLE "Tail"
+            INDEX 01 00:04:00
+        """
+        do {
+            try text.write(to: cue, atomically: true, encoding: .utf8)
+        } catch {
+            ctx.check("现场-增益与预取素材写得出来", false, "\(error)"); return
+        }
+        let segs = LibraryStore.tracks(in: [cue])
+        guard segs.count == 2, let head = segs.first, let tail = segs.last,
+              head.identityKey == "\(cue.path)#track=1" else {
+            ctx.check("现场-增益与预取展开两条分轨", false, "n=\(segs.count)"); return
+        }
+        p.setGaplessPlay(true)
+        p.setReplayGainMode(.off)
+        p.setReplayGainPreamp(0)
+        p.clearPlaylist()
+        guard p.addTracks(segs) == 2 else {
+            ctx.check("现场-增益与预取能入表", false); return
+        }
+        // 标签是后台解析的：等它落定再内存注入。列表不能清，清了就换一批对象，
+        // 恢复时重解出来的那些可没有这份注入标签（分轨的 url 是镜像，只能按身份认）
+        guard let inHead = p.playlist.tracks.first(where: { $0.identityKey == head.identityKey }),
+              let inTail = p.playlist.tracks.first(where: { $0.identityKey == tail.identityKey })
+        else {
+            ctx.check("现场-增益与预取拿到分轨条目", false); return
+        }
+        _ = ctx.waitUntil(4) { inHead.replayGainTags != nil }
+        inHead.replayGainTags = ReplayGainTags(tags: ["replaygain_track_gain": "-6.02 dB"])
+        var scene = ResumeScene()
+        scene.trackKey = inHead.identityKey
+        scene.queueKeys = [inHead.identityKey, inTail.identityKey]
+        scene.queueExplicit = [false, false]
+        scene.queueIndex = 0
+        scene.position = 1.0
+        scene.wasPlaying = false
+
+        // 一、基准：均衡关着走同一条恢复路径，采到的就是原曲响度
+        p.resetPlaybackContextForRestore()
+        p.restorePlaybackScene(scene)
+        p.togglePlay()
+        _ = ctx.waitUntil(3) { p.isPlaying }
+        let base = rms(ctx.captureLeftChannel(p, seconds: 0.5).samples)
+        p.stop()
+        ctx.check("现场-恢复路径的基准幅度采得到", base > 0.01, String(format: "base=%.5f", base))
+
+        // 二、先把上下文抹干净再开均衡：此刻队列为空、增益表为空且引擎已卸载，
+        // 能把 -6.02 dB 递进引擎的只剩「恢复」自己那一步
+        p.resetPlaybackContextForRestore()
+        p.setReplayGainMode(.track)
+        p.restorePlaybackScene(scene)
+        let want = p.replayGainDecision(for: inHead)
+        let cur = p.currentTrack
+        ctx.check("现场-恢复后的决定值就是半响度",
+                  abs(want.linear - 0.5) < 0.005 && cur?.identityKey == inHead.identityKey,
+                  "\(want.summaryText) 期望=0.5 cur=\(cur?.fileName ?? "nil") 同一个条目=\(cur === inHead)")
+        // 恢复那一步开声之后也要把下一曲排进预取：不然听得见「接不上」却查不到原因
+        p.togglePlay()
+        _ = ctx.waitUntil(3) { p.isPlaying }
+        let prepared = ctx.waitUntil(8) { p.nextPreparedKey == inTail.identityKey }
+        ctx.check("现场-恢复后开声就排上了下一曲的预取", prepared,
+                  "prepared=\(p.nextPreparedKey.isEmpty ? "空" : p.nextPreparedKey)")
+        let got = rms(ctx.captureLeftChannel(p, seconds: 0.5).samples)
+        let ratio = base > 0 ? got / base : 0
+        ctx.check("现场-恢复后第一句就按标签响度出声（实测幅度比 0.5）",
+                  abs(ratio - 0.5) < 0.5 * 0.06,
+                  String(format: "基准=%.5f 实测=%.5f 比值=%.4f", base, got, ratio))
+        p.stop()
+        p.setReplayGainMode(.off)
+    }
+
     // MARK: - 队列次序、重复条目、历史与浏览组
 
     private func checkQueueOrderAndGroup(_ ctx: SelfTestContext) {
@@ -358,6 +483,11 @@ struct SceneSuite: SelfTestSuite {
                   "n=\(p.queue.count) keys=\(p.queue.items.map { $0.track.fileName })")
         ctx.check("现场-显式排队标记回来", p.queue.items.map { $0.explicit } == s.queueExplicit,
                   "flags=\(p.queue.items.map { $0.explicit })")
+        // 来路也要原样回来：这一段的四条是「上下文两条 + 插队一条 + 稍后一条」，
+        // 同一条歌重复排队时三种来路各居其一，并成两种就看不住单曲循环了
+        ctx.check("现场-排队来路原样回来",
+                  p.queue.items.map { $0.source } == [.basic, .next, .basic, .later],
+                  "src=\(p.queue.items.map { "\($0.source)" })")
         ctx.check("现场-当前位置回来",
                   p.queue.currentIndex == s.queueIndex
                     && p.currentTrack?.identityKey == b.identityKey,
@@ -368,6 +498,10 @@ struct SceneSuite: SelfTestSuite {
                   "hist=\(hist) 期望=\(s.historyIndexes)")
         ctx.check("现场-浏览组回来", p.activeGroup == .favorites, p.activeGroup.name)
         ctx.check("现场-恢复后仍是暂停", !p.isPlaying)
+        // 恢复出来的那一条后面跟着的是「稍后播放」：单曲循环下它不该抢位
+        ctx.check("现场-恢复后稍后播放仍不打断单曲循环",
+                  p.queue.advanceOnFinish(mode: .singleLoop)?.track.identityKey == b.identityKey,
+                  "cur=\(String(describing: p.currentTrack?.fileName))")
         p.switchGroup(.main)
         p.stop()
     }

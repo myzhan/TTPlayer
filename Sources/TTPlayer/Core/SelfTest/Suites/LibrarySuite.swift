@@ -71,6 +71,7 @@ final class LibrarySuite: SelfTestSuite {
 
         checkFolderRules(ctx)
         checkFirstScan(ctx)
+        checkRemoveDuringScan(ctx)
         checkChanges(ctx)
         checkOffline(ctx)
         checkWatcher(ctx)
@@ -308,6 +309,49 @@ final class LibrarySuite: SelfTestSuite {
                   p.playlist.tracks.allSatisfy { !$0.missingOnDisk },
                   "missing=\(p.playlist.tracks.filter { $0.missingOnDisk }.count)")
         p.switchGroup(.main)
+        stopWatching()
+    }
+
+    // MARK: - ②b 扫描进行中就把它移除
+
+    /// 后台那一趟正在 `collectFolders` 里读盘时用户点了「移除目录」：过期收获不能
+    /// 再并回库里（旧写法会把那几条引用连同改动记账一起复活）。
+    /// 时序上不需赌时间窗口：`addFolder` 只把扫描丢给后台队列，结果靠
+    /// `DispatchQueue.main.async` 递回来，所以下一行就在同一拍里跑完的
+    /// `removeFolder` 一定赶在合并之前
+    private func checkRemoveDuringScan(_ ctx: SelfTestContext) {
+        let p = ctx.player
+        p.clearLibrary()
+        _ = p.addLibraryFolder(path(music))            // 异步那一趟已经在后台跑
+        let note = p.removeLibraryFolder(path(music))  // 同一拍里把它移出管理
+        settle(ctx)
+        ctx.check("媒体库-扫描中移除目录后条目不复活",
+                  p.libraryFolders.isEmpty && p.libraryKeys.isEmpty,
+                  "folders=\(p.libraryFolders) keys=\(p.libraryKeys.count) 例=\(p.libraryKeys.sorted().prefix(2))")
+        ctx.check("媒体库-扫描中移除时库里确实还是空的",
+                  note.contains("少了 0 条") && p.libraryScanNote.isEmpty,
+                  "note=\(note) 进度=\(p.libraryScanNote)")
+        // 其余仍被管理的目录该照常走完：拿另一片干净的地盘验一次正面案例
+        let d2Keys = Set([path(disk2.appendingPathComponent("portable.wav")),
+                          path(disk2.appendingPathComponent("live.wav"))])
+        _ = p.addLibraryFolder(path(disk2))
+        settle(ctx)
+        ctx.check("媒体库-过期扫描之后的目录照常被收",
+                  p.libraryFolders == [path(disk2)] && Set(p.libraryKeys) == d2Keys,
+                  "folders=\(p.libraryFolders) keys=\(p.libraryKeys)")
+        // 过期收获被丢掉之后，这片目录重新加回来应当是从零开始的一趟：引用全部报「新增」。
+        // 旧写法里过期收获已经把条目与改动记账一起并回来了：库里先有残留，
+        // 下一趟就只能报「什么都没变」（added=0）
+        _ = p.removeLibraryFolder(path(disk2))
+        _ = p.addLibraryFolder(path(music))
+        _ = p.removeLibraryFolder(path(music))
+        settle(ctx)
+        let revived = p.libraryKeys
+        let again = p.scanLibraryFolders([path(music)])
+        ctx.check("媒体库-移除再重新加回来是从零开始的一趟",
+                  revived.isEmpty && again.added.count == expectedMusicKeys().count
+                    && again.modified.isEmpty,
+                  "残留=\(revived.count) added=\(again.added.count) modified=\(again.modified.count)")
         stopWatching()
     }
 

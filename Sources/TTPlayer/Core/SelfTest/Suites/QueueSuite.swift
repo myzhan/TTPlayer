@@ -137,17 +137,94 @@ struct QueueSuite: SelfTestSuite {
                   single.advanceByUser(mode: .singleLoop)?.track.url.lastPathComponent == "m1.mp3",
                   "cur=\(String(describing: single.currentTrack?.url.lastPathComponent))")
 
-        // 显式排队优先于模式：单曲循环也先轮到排进来的曲子
+        // 显式排队优先于模式：「下一首播放」插进来的那条，单曲循环也先轮到它
         let prio = fresh()
         prio.insertNext(tracks(["queued.mp3"]))
-        ctx.check("显式排队优先于单曲循环",
+        ctx.check("「下一首播放」优先于单曲循环",
                   prio.advanceOnFinish(mode: .singleLoop)?.track.url.lastPathComponent == "queued.mp3",
                   "cur=\(String(describing: prio.currentTrack?.url.lastPathComponent))")
-        // 手动「下一首」同样先轮排队条目
+        // 手动「下一首」同样先轮插队那一条
         let prio2 = fresh()
         prio2.insertNext(tracks(["queued.mp3"]))
-        ctx.check("手动下一首也先轮排队条目",
+        ctx.check("手动下一首也先轮插队条目",
                   prio2.advanceByUser(mode: .listLoop)?.track.url.lastPathComponent == "queued.mp3")
+
+        // 「稍后播放」是队尾的一员，不是插队：它前面的基础条目一条都不能被跨过
+        // （旧写法拿 explicit 往整个尾部扫，稍后播放会把未播的 m2、m3 永久吞掉）
+        let later = fresh()
+        later.appendLater(tracks(["queued.mp3"]))
+        ctx.check("稍后播放不越过未播的基础条目",
+                  paths(later) == ["m2.mp3", "m3.mp3", "queued.mp3"], "pending=\(paths(later))")
+        var walked: [String] = []
+        while walked.count < 6,
+              let n = later.advanceOnFinish(mode: .order) {
+            walked.append(n.track.url.lastPathComponent)
+        }
+        ctx.check("顺序播完不把未播条目吞掉",
+                  walked == ["m2.mp3", "m3.mp3", "queued.mp3"]
+                    && later.advanceOnFinish(mode: .order) == nil,
+                  "walked=\(walked)")
+        let later2 = fresh()
+        later2.appendLater(tracks(["queued.mp3"]))
+        ctx.check("手动下一首按待播显示次序走而不是跳到队尾",
+                  later2.advanceByUser(mode: .order)?.track.url.lastPathComponent == "m2.mp3",
+                  "cur=\(String(describing: later2.currentTrack?.url.lastPathComponent))")
+
+        // 多曲插队 + 队尾追加混着排：推进次序必须等于面板显示次序
+        let mix = fresh()
+        mix.insertNext(tracks(["q1.mp3", "q2.mp3"]))
+        mix.appendLater(tracks(["tail.mp3"]))
+        ctx.check("插队与稍后各按位置生效",
+                  paths(mix) == ["q1.mp3", "q2.mp3", "m2.mp3", "m3.mp3", "tail.mp3"],
+                  "pending=\(paths(mix))")
+        var seq: [String] = []
+        while seq.count < 6, let n = mix.advanceOnFinish(mode: .listLoop) {
+            seq.append(n.track.url.lastPathComponent)
+        }
+        ctx.check("列表循环把每一条都播到不落地",
+                  seq == ["q1.mp3", "q2.mp3", "m2.mp3", "m3.mp3", "tail.mp3", "m1.mp3"],
+                  "seq=\(seq)")
+        // 单曲循环只为「插到最前面」的那条破例：追加到队尾的该让当前曲接着循环
+        let sl = fresh()
+        sl.appendLater(tracks(["queued.mp3"]))
+        ctx.check("单曲循环不因稍后播放中断",
+                  sl.advanceOnFinish(mode: .singleLoop)?.track.url.lastPathComponent == "m1.mp3",
+                  "cur=\(String(describing: sl.currentTrack?.url.lastPathComponent))")
+        // 上一例里稍后项落在队尾（m2、m3 还在它前面）；拿共用布尔值判的写法在
+        // 「下一位就是它」时两者分不开，这两例把那个重叠面钉死
+        let onlyOne = PlayQueue()
+        onlyOne.begin(tracks(["only.mp3"]), current: 0)
+        onlyOne.appendLater(tracks(["queued.mp3"]))
+        ctx.check("单曲循环-上下文只剩一条时稍后播放不打断循环",
+                  onlyOne.advanceOnFinish(mode: .singleLoop)?.track.url.lastPathComponent == "only.mp3",
+                  "cur=\(String(describing: onlyOne.currentTrack?.url.lastPathComponent)) "
+                    + "来路=\(onlyOne.items.map { "\($0.track.url.lastPathComponent):\($0.source)" })")
+        let atBaseEnd = PlayQueue()
+        atBaseEnd.begin(t, current: 2)                 // 当前曲就在基础序列末尾
+        atBaseEnd.appendLater(tracks(["queued.mp3"]))
+        ctx.check("单曲循环-基础序列末尾稍后播放不打断循环",
+                  atBaseEnd.advanceOnFinish(mode: .singleLoop)?.track.url.lastPathComponent == "m3.mp3",
+                  "cur=\(String(describing: atBaseEnd.currentTrack?.url.lastPathComponent))")
+        // 拖到待播第一位也只改显示次序，不伪造一次「下一首播放」
+        let dragLater = fresh()
+        dragLater.appendLater(tracks(["tail.mp3"]))
+        let tailID = dragLater.items.last?.id
+        let draggedUp = tailID.map { dragLater.movePending(id: $0, to: 1) } == true
+        ctx.check("拖到最前面的稍后条目不冒充插队",
+                  draggedUp && paths(dragLater) == ["tail.mp3", "m2.mp3", "m3.mp3"]
+                    && dragLater.advanceOnFinish(mode: .singleLoop)?.track.url.lastPathComponent == "m1.mp3",
+                  "pending=\(paths(dragLater)) 移动成功=\(draggedUp)")
+        // 反过来：「下一首播放」那条被拖到队尾就不再是插队（位置 + 来路缺一不可），
+        // 但在顺序/列表循环里照常轮到它
+        let dragNext = fresh()
+        dragNext.insertNext(tracks(["queued.mp3"]))
+        let qID = dragNext.items.first(where: { $0.playNext })?.id
+        let draggedDown = qID.map { dragNext.movePending(id: $0, to: 99) } == true
+        ctx.check("插队那条被拖到队尾后不再打断单曲循环",
+                  draggedDown && paths(dragNext) == ["m2.mp3", "m3.mp3", "queued.mp3"]
+                    && dragNext.advanceOnFinish(mode: .singleLoop)?.track.url.lastPathComponent == "m1.mp3"
+                    && dragNext.advanceOnFinish(mode: .listLoop)?.track.url.lastPathComponent == "m2.mp3",
+                  "pending=\(paths(dragNext)) 移动成功=\(draggedDown)")
 
         // 随机：会换曲子，且「上一首」沿实际播放历史回退
         let rnd = fresh()
@@ -159,6 +236,72 @@ struct QueueSuite: SelfTestSuite {
             last = nextName
         }
         ctx.check("随机播放-会换曲子", moved, "last=\(last)")
+
+        // 「会换曲子」顺序遍历也能过，所以拿可注入的随机源单独证一次：
+        // 摇到 2 就必须是 m3，而不是游标后面的 m2
+        let rnd2 = fresh()
+        rnd2.randomIndex = { _, _ in 2 }
+        ctx.check("随机播放按随机源选曲而不是顺序遍历",
+                  rnd2.advanceOnFinish(mode: .random)?.track.url.lastPathComponent == "m3.mp3",
+                  "cur=\(String(describing: rnd2.currentTrack?.url.lastPathComponent))")
+        // 预取问一次、交接再走一次：同一个随机源必须给同一个答案
+        let rnd3 = fresh()
+        rnd3.randomIndex = { count, cur in (cur + 2) % count }
+        let peeked = rnd3.peekOnFinish(mode: .random)?.track.url.lastPathComponent ?? "nil"
+        let taken = rnd3.advanceOnFinish(mode: .random)?.track.url.lastPathComponent ?? "nil"
+        ctx.check("随机预取候选与真实交接是同一首",
+                  peeked == "m3.mp3" && taken == peeked, "peek=\(peeked) take=\(taken)")
+        // 队尾那条「稍后播放」在随机里不当插队使：随机源指哪儿就是哪儿
+        let rnd4 = fresh()
+        rnd4.appendLater(tracks(["queued.mp3"]))
+        rnd4.randomIndex = { _, _ in 1 }
+        ctx.check("随机模式不把稍后播放当插队",
+                  rnd4.advanceOnFinish(mode: .random)?.track.url.lastPathComponent == "m2.mp3",
+                  "cur=\(String(describing: rnd4.currentTrack?.url.lastPathComponent))")
+        // 整个上下文只有一条时，随机只能重播它（不越界也不返回 nil）
+        let solo = PlayQueue()
+        solo.begin(tracks(["only.mp3"]), current: 0)
+        ctx.check("随机-单条目上下文只能重播它",
+                  solo.advanceOnFinish(mode: .random)?.track.url.lastPathComponent == "only.mp3")
+
+        // 手动「下一首」在随机模式下也照随机源摇：旧写法先无条件吃待播第一位，
+        // 实测 30/30 次从 m1 走到 m2，用户听来就是「随机没随机」
+        let rUser = fresh()
+        rUser.randomIndex = { _, _ in 2 }
+        ctx.check("随机-手动下一首照随机源选曲",
+                  rUser.advanceByUser(mode: .random)?.track.url.lastPathComponent == "m3.mp3",
+                  "cur=\(String(describing: rUser.currentTrack?.url.lastPathComponent))")
+        // 但插队那一条仍然优先于随机源（用户点过名）
+        let rPrio = fresh()
+        rPrio.insertNext(tracks(["queued.mp3"]))
+        rPrio.randomIndex = { _, _ in 2 }
+        ctx.check("随机-手动下一首先吃插队那条",
+                  rPrio.advanceByUser(mode: .random)?.track.url.lastPathComponent == "queued.mp3",
+                  "cur=\(String(describing: rPrio.currentTrack?.url.lastPathComponent))")
+        // 跳完一步先定选必须作废重算：拿上一游标摇出来的旧答案当预取，
+        // 接上的就不是显示的那一曲
+        let rPick = fresh()
+        rPick.randomIndex = { count, cur in (cur + 1) % count }
+        let peekBefore = rPick.peekOnFinish(mode: .random)?.track.url.lastPathComponent ?? "nil"
+        let jumpedTo = rPick.advanceByUser(mode: .random)?.track.url.lastPathComponent ?? "nil"
+        let peekAfter = rPick.peekOnFinish(mode: .random)?.track.url.lastPathComponent ?? "nil"
+        ctx.check("随机-手动下一首之后预取重算",
+                  peekBefore == "m2.mp3" && jumpedTo == "m2.mp3" && peekAfter == "m3.mp3",
+                  "先定=\(peekBefore) 跳到=\(jumpedTo) 重算=\(peekAfter)")
+        // 手动随机跳过去的那一条也算听过：「上一首」能沿历史回到原曲
+        let rHist = fresh()
+        rHist.markPlayed(rHist.current!)                 // 真播过 m1
+        rHist.randomIndex = { _, _ in 2 }
+        guard let landed = rHist.advanceByUser(mode: .random) else {
+            ctx.check("随机-手动下一首能落地", false); return
+        }
+        rHist.markPlayed(landed)
+        ctx.check("随机-手动跳完上一首回到原曲",
+                  landed.track.url.lastPathComponent == "m3.mp3"
+                    && rHist.history.count == 2
+                    && rHist.retreat(mode: .random)?.track.url.lastPathComponent == "m1.mp3"
+                    && rHist.history.count == 1,
+                  "hist=\(rHist.history.count) cur=\(String(describing: rHist.currentTrack?.url.lastPathComponent))")
 
         let hist = fresh()
         hist.markPlayed(hist.current!)                 // 真播过 m1

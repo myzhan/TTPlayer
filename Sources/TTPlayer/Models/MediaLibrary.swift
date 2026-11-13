@@ -255,6 +255,9 @@ final class MediaLibrary {
 
     /// 主线程阶段：合并进库、算差异、发通知
     private func finishScan(_ harvest: Harvest, label: String, folders scanned: [String]) {
+        // 后台那一趟跑着的这段时间里用户可能已经把某一片移出了库：过期的收获不能并回来，
+        // 否则 `removeFolder` 之后那些条目会在下一趟合并里复活（连改动记账一起补回去）
+        let harvest = pruning(harvest, stale: scanned.filter { !folders.contains($0) })
         let delta = merge(harvest, scanned: scanned)
         lastStats = harvest.stats
         isScanning = false
@@ -273,6 +276,23 @@ final class MediaLibrary {
                                             + "摘掉 \(delta.removed.count) 条，"
                                             + "失效 \(missingCount) 条"])
         if !extra.isEmpty { startScan(over: Array(extra), label: "目录变更") }
+    }
+
+    /// 把「已经不在库里的目录」从那趟收获里摘干净：条目、改动记账、在线状态、
+    /// 「看完一整片」的标记一概不留，`merge` 因此既不会把条目加回来，也不会去清它的记账。
+    /// `scanNow` 不走这里：它同步跑完，中间腾不出手去移除目录，自检还会拿它扫未注册的目录
+    private func pruning(_ h: Harvest, stale: [String]) -> Harvest {
+        guard !stale.isEmpty else { return h }
+        var out = h
+        for dir in stale {
+            out.byFolder[dir] = nil
+            out.covered.remove(dir)
+            out.offline.remove(dir)
+            let prefix = dir.hasSuffix("/") ? dir : dir + "/"
+            out.mtimes = out.mtimes.filter { !$0.key.hasPrefix(prefix) }
+        }
+        out.stats.entries = out.byFolder.values.reduce(0) { $0 + $1.count }
+        return out
     }
 
     /// 把一趟扫描的结果并进库。四类事件分开算，用户才问得出「到底哪一类变了」
