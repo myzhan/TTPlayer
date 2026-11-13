@@ -12,11 +12,8 @@ if [[ -n "$TTPLAYER_ARCHS" ]]; then
 fi
 
 # 前置：解码已全部交给 FFmpeg，静态库必须先编好（Package.swift 直接链 3rd/ffmpeg-build/lib）。
-# 没 submodule / 没产物就给一句话指引，别把错误拖到 swift build 的链接阶段。
-if [[ ! -f 3rd/ffmpeg-build/lib/libavformat.a ]]; then
-    echo "→ 未找到 FFmpeg 静态库，先跑 scripts/build_ffmpeg.sh 编一份"
-    zsh scripts/build_ffmpeg.sh
-fi
+# 每次校验部署目标和架构；构建脚本会复用有效缓存，不能只看一个 .a 是否存在。
+zsh scripts/build_ffmpeg.sh
 
 swift build -c $CONF "${ARCH_ARGS[@]}"
 BIN=$(swift build -c $CONF "${ARCH_ARGS[@]}" --show-bin-path)

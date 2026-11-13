@@ -166,7 +166,7 @@ final class MainWindowController: NSObject {
     }
 
     func showWindow() {
-        dock.layout()
+        dock.showGroup()
         window.makeKeyAndOrderFront(nil)
         if listVisible { playlistPanel.window.orderFront(nil) }
         if eqVisible { eqPanel.window.orderFront(nil) }

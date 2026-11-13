@@ -4,14 +4,19 @@
 # 只编本项目解码用到的解复用器/解码器/协议，编译时间从“全量几十分钟”压到几分钟；
 # 产物是静态 .a，直接静态链进 TTPlayer，App 不依赖外部 dylib。
 #
-# 幂等：commit 没变且库已存在就跳过；用 --force 强制重来。
+# 幂等：源码、脚本、架构及部署目标都一致且库齐全才跳过；用 --force 强制重来。
 # 交叉编译：设 TTPLAYER_ARCHS="arm64 x86_64" 时对每个架构各编一遍再 lipo 合并（发版用）。
 set -e
+SCRIPT_HASH=$(shasum -a 256 "$0" | awk '{print $1}')
 cd "$(dirname "$0")/.."
 
 SRC=3rd/ffmpeg
 PREFIX=$(pwd)/3rd/ffmpeg-build
 STAMP="$PREFIX/.built-commit"
+CONFIG_STAMP="$PREFIX/.built-config"
+# 与 Package.swift 的 .macOS(.v12) 一致，不能继承构建机器的系统版本。
+DEPLOYMENT_TARGET=12.0
+export MACOSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET"
 
 if [[ ! -f "$SRC/configure" ]]; then
     echo "错误：$SRC 不存在或未初始化子模块（git submodule update --init --depth 1 3rd/ffmpeg）" >&2
@@ -19,17 +24,22 @@ if [[ ! -f "$SRC/configure" ]]; then
 fi
 
 COMMIT=$(git -C "$SRC" rev-parse HEAD)
-NEED_BUILD=1
-if [[ "$1" != "--force" && -f "$STAMP" && -f "$PREFIX/lib/libavformat.a" ]]; then
-    if [[ "$(cat "$STAMP")" == "$COMMIT" ]]; then
-        NEED_BUILD=0
-    fi
-fi
-
 # 目标架构列表：默认本机；发版可传多架构
 ARCHS=(native)
 if [[ -n "$TTPLAYER_ARCHS" ]]; then
     ARCHS=(${=TTPLAYER_ARCHS})
+fi
+
+# 旧版只记 commit，macOS/架构/编译参数变化后会误用旧库。
+CONFIG_KEY="$COMMIT|$SCRIPT_HASH|${(j:,:)ARCHS}|$(uname -m)|macos=$DEPLOYMENT_TARGET"
+NEED_BUILD=1
+if [[ "$1" != "--force" && -f "$CONFIG_STAMP" && -f "$STAMP" ]]; then
+    if [[ "$(cat "$CONFIG_STAMP")" == "$CONFIG_KEY" && "$(cat "$STAMP")" == "$COMMIT" ]]; then
+        NEED_BUILD=0
+        for lib in avformat avcodec avutil swresample; do
+            [[ -f "$PREFIX/lib/lib$lib.a" ]] || NEED_BUILD=1
+        done
+    fi
 fi
 
 # ffmpeg 的 arch 名与 clang/universal 名对齐
@@ -116,6 +126,7 @@ COMPONENTS=(
 
 build_one() {
     local arch_arg=()
+    local compiler_flags="-mmacosx-version-min=$DEPLOYMENT_TARGET"
     local bdir="$PREFIX/.obj-$1"
     if [[ "$1" != "native" ]]; then
         # 交叉编译：单靠 --arch 不会让 clang 换 target；--disable-asm 避免同一份
@@ -126,9 +137,8 @@ build_one() {
             --arch="$(ffmpeg_arch "$1")"
             --enable-cross-compile --target-os=darwin
             --disable-asm
-            --extra-cflags="-arch $1"
-            --extra-ldflags="-arch $1"
         )
+        compiler_flags+=" -arch $1"
     fi
 
     rm -rf "$bdir"
@@ -136,6 +146,8 @@ build_one() {
     # 源码内 configure 会污染工作树，用 out-of-tree 构建：从独立目录调 ../configure
     ( cd "$bdir" && "$SRC_DIR_ABS/configure" \
         "${arch_arg[@]}" \
+        --extra-cflags="$compiler_flags" \
+        --extra-ldflags="$compiler_flags" \
         --prefix="$PREFIX" \
         --enable-static --disable-shared \
         --disable-doc --disable-programs --disable-debug \
@@ -158,6 +170,8 @@ if [[ $NEED_BUILD -eq 0 ]]; then
 fi
 
 mkdir -p "$PREFIX/lib" "$PREFIX/include"
+# 失败或中断后不得把半套产物当成可复用的完整构建。
+rm -f "$STAMP" "$CONFIG_STAMP"
 
 if [[ ${#ARCHS[@]} -eq 1 && "${ARCHS[1]}" == "native" ]]; then
     build_one native
@@ -185,4 +199,5 @@ else
 fi
 
 echo "$COMMIT" > "$STAMP"
+echo "$CONFIG_KEY" > "$CONFIG_STAMP"
 echo "FFmpeg 静态库编译完成：$PREFIX"

@@ -20,6 +20,7 @@ struct UISuite: SelfTestSuite {
         // 实测单套 RSS 峰值高十几 MB，会把「性能-常驻内存」那条挤到阈值边上
         autoreleasepool { checkShell(ctx) }
         autoreleasepool { checkPanels(ctx) }
+        autoreleasepool { checkHiddenGroup(ctx) }
         autoreleasepool { checkLyricWindow(ctx) }
         autoreleasepool { checkDropAndKeys(ctx) }
         autoreleasepool { checkListAndGroups(ctx) }
@@ -28,6 +29,32 @@ struct UISuite: SelfTestSuite {
     }
 
     // MARK: - 一、外壳与传输键
+
+    private func checkHiddenGroup(_ ctx: SelfTestContext) {
+        let dock = SkinDock(width: 480, originTopLeft: NSPoint(x: 100, y: 800))
+        let panels: [SkinPanel] = [.main, .playlist, .equalizer]
+        let windows = panels.map { SkinPanelWindow(width: 480, height: 200, title: "隐藏回归 \($0)") }
+        for (i, panel) in panels.enumerated() { dock.register(panel, windows[i], height: 200) }
+        var stayedHidden = 0
+        var restored = 0
+        for i in 0..<30 {
+            dock.showGroup()
+            windows[i % windows.count].makeKeyAndOrderFront(nil)
+            dock.hideGroup()
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: windows[i % windows.count])
+            dock.layout()
+            dock.setVisible(false, for: .equalizer)
+            dock.setVisible(true, for: .equalizer)
+            if windows.allSatisfy({ !$0.isVisible }) { stayedHidden += 1 }
+            dock.showGroup()
+            if windows.allSatisfy({ $0.isVisible }) { restored += 1 }
+        }
+        ctx.check("最小化-激活焦点布局与面板变更不弹回", stayedHidden == 30, "\(stayedHidden)/30")
+        ctx.check("最小化-明确恢复仍能显示整组", restored == 30, "\(restored)/30")
+        dock.hideGroup()
+        ctx.main.showWindow()
+    }
 
     private func checkShell(_ ctx: SelfTestContext) {
         let p = ctx.player

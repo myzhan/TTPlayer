@@ -25,6 +25,11 @@ swift build                                  # 应该 0 error 0 warning
 
 `build_app.sh` 会自动检查并调 `build_ffmpeg.sh`，首次 `zsh build_app.sh` 也能一把跑通，只是慢。
 
+FFmpeg 的最低部署版本固定为 macOS 12.0，与 `Package.swift` 的 `.macOS(.v12)` 保持一致；
+调整最低支持版本时必须同步修改 `scripts/build_ffmpeg.sh` 的 `DEPLOYMENT_TARGET`。
+静态库缓存同时校验源码 commit、构建脚本、架构和部署目标，打包时始终执行缓存校验。
+不要通过屏蔽链接警告或提高应用部署目标来迁就本机构建出的旧库。
+
 ## 常用命令
 
 | 目的 | 命令 |

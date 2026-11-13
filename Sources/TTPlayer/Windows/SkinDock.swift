@@ -176,6 +176,8 @@ final class SkinDock {
     private var observers: [NSObjectProtocol] = []
     private var layingOut = false
     private var raising = false
+    /// 用户主动隐藏与面板开关是两回事；激活/焦点/布局通知不得撤销隐藏。
+    private var groupHidden = false
     /// 布局变化后回调（用于持久化）
     var onGeometryChanged: (() -> Void)?
 
@@ -216,7 +218,7 @@ final class SkinDock {
 
     /// 按竖排顺序把可见面板依次置前（彼此不重叠，顺序只影响与其他软件的层级）
     func raiseGroup() {
-        guard !raising else { return }
+        guard !raising, !groupHidden else { return }
         raising = true
         defer { raising = false }
         for panel in order {
@@ -238,7 +240,7 @@ final class SkinDock {
         members[panel] = m
         if !visible { m.window.orderOut(nil) }
         layout()
-        if visible { m.window.makeKeyAndOrderFront(nil) }
+        if visible && !groupHidden { m.window.makeKeyAndOrderFront(nil) }
     }
 
     func isVisible(_ panel: SkinPanel) -> Bool { members[panel]?.visible ?? false }
@@ -288,7 +290,7 @@ final class SkinDock {
             if m.window.frame != frame {
                 m.window.setFrame(frame, display: true)
             }
-            if !m.window.isVisible { m.window.orderFront(nil) }
+            if !groupHidden && !m.window.isVisible { m.window.orderFront(nil) }
             top -= m.height + Self.gap
         }
         onGeometryChanged?()
@@ -313,6 +315,8 @@ final class SkinDock {
 
     /// 整组隐藏（主面板“关闭”= 千千静听的隐藏到后台）
     func hideGroup() {
+        // 先记状态：orderOut 本身也可能引发其他面板的焦点通知。
+        groupHidden = true
         for m in members.values where m.window.isVisible {
             m.window.orderOut(nil)
         }
@@ -320,6 +324,7 @@ final class SkinDock {
 
     /// 整组显示
     func showGroup() {
+        groupHidden = false
         layout()
     }
 
