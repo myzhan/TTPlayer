@@ -85,6 +85,10 @@ jobs:
           ZIP="TTPlayer-${TAG}-macOS-universal.zip"
           ditto -c -k --keepParent build/TTPlayer.app "$ZIP"
           shasum -a 256 "$ZIP" | tee "$ZIP.sha256"
+          # README 里那两处分发体积数字只能从这里的实测拿：本机是单架构 build，
+          # 拿去当通用二进制的体积会低报（历史坑）
+          echo "解压后体积：$(du -sh build/TTPlayer.app | cut -f1)"
+          echo "zip 字节数：$(stat -f%z "$ZIP")"
 
       - name: 生成发布说明
         run: |
