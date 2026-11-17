@@ -45,14 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func installKeyMonitor() {
         NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             guard let self else { return event }
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            // Cmd 组合（非输入框场景）与功能键交给播放器
-            if flags.contains(.command), flags.subtracting([.command, .shift]).isEmpty,
-               self.mainController.handleKey(event) {
-                return nil
-            }
-            if flags.isDisjoint(with: [.command, .option, .control]),
-               self.mainController.handleKey(event) {
+            if self.mainController.handleKey(event) {
                 return nil
             }
             return event
@@ -96,14 +89,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showAbout() {
         let alert = NSAlert()
         alert.icon = Self.applicationIcon()
-        alert.messageText = "千千静听 复刻版"
-        alert.informativeText = """
-        使用 Swift + AppKit 原生实现的音乐播放器。
-        致敬经典桌面播放器 TTPlayer（千千静听）。
-
-        空格 播放/暂停 · ←/→ 切歌 · F1~F4 播放方式
-        M 静音 · L 歌词窗口 · E 均衡器 · ⌘O 添加文件
-        """
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+        alert.messageText = "版本 \(version)"
+        alert.informativeText = "作者：myzhan"
         alert.runModal()
     }
 

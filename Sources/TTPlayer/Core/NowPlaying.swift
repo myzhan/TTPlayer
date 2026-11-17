@@ -13,6 +13,14 @@ import MediaPlayer
 ///
 /// 字段映射写成纯函数 `info(for:isPlaying:elapsed:)`，自检不去碰系统 API 也能验它。
 enum NowPlaying {
+    enum PlaybackCommand { case play, pause, toggle }
+    static func shouldToggle(_ command: PlaybackCommand, isPlaying: Bool) -> Bool {
+        switch command {
+        case .play: return !isPlaying
+        case .pause: return isPlaying
+        case .toggle: return true
+        }
+    }
     /// 媒体键/控制中心是否可用（裸二进制没有 bundleIdentifier，一律不接管）
     private static var available: Bool {
         Bundle.main.bundleIdentifier != nil
@@ -86,9 +94,11 @@ enum NowPlaying {
             }
         }
 
-        center.playCommand.addTarget(handler: handle { $0.togglePlay() })
+        center.playCommand.addTarget(handler: handle {
+            if shouldToggle(.play, isPlaying: $0.isPlaying) { $0.togglePlay() }
+        })
         center.pauseCommand.addTarget(handler: handle {
-            if $0.isPlaying { $0.togglePlay() }
+            if shouldToggle(.pause, isPlaying: $0.isPlaying) { $0.togglePlay() }
         })
         center.togglePlayPauseCommand.addTarget(handler: handle { $0.togglePlay() })
         center.nextTrackCommand.addTarget(handler: handle { $0.next() })

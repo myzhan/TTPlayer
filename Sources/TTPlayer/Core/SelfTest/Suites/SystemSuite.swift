@@ -9,6 +9,7 @@ struct SystemSuite: SelfTestSuite {
     func run(_ ctx: SelfTestContext) {
         checkNowPlaying(ctx)
         checkStatusItem(ctx)
+        ReviewFixes.run(ctx)
     }
 
     // MARK: - 控制中心字段映射（FR-SYS-07）

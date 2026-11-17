@@ -469,7 +469,7 @@ struct QueueSuite: SelfTestSuite {
             ctx.check("队列面板-曲库就位", false, "list=\(p.playlist.count)"); return
         }
         // 入口一：列表面板工具条第九键「队列」
-        ctx.check("列表工具条九键齐全（含队列）", main.playlistPanel.toolbarButtonCount == 9,
+        ctx.check("列表工具条七键齐全（含队列）", main.playlistPanel.toolbarButtonCount == 7,
                   "count=\(main.playlistPanel.toolbarButtonCount)")
         let first = p.playlist.tracks[0]
         p.setMode(.order)

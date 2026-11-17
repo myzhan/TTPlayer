@@ -2103,6 +2103,7 @@ final class PlayerController {
     // MARK: - 歌词
 
     private func loadLyric(for track: Track) {
+        MetadataReader.refreshExternalCover(track)
         lyric = Lyric.load(for: track)
         lyricIndex = -2
         updateLyricLine(force: true)
@@ -2672,6 +2673,7 @@ final class PlayerController {
     @discardableResult
     private func applyKeyMap(_ map: [String: String]) -> Int {
         guard !map.isEmpty else { return 0 }
+        TrackEdits.replaceKeys(map)
         var resolver = LibraryStore.EntryResolver()
         // 解不开的新位置（新目录在但中间那个文件还没到位）也照样留一条失效引用，
         // 不能让歌单里那一行因为改了个写法就静默消失
@@ -2721,8 +2723,29 @@ final class PlayerController {
 
     // MARK: - 持久化
 
+    func editDisplayInfo(_ track: Track, title: String, artist: String) {
+        if track.isRadio {
+            _ = setRadioName(track, to: title)
+            return
+        }
+        let edit = TrackEdit(title: title.isEmpty ? track.fileName : title, artist: artist)
+        TrackEdits.set(edit, for: track.identityKey)
+        let cached = derivedCache.values.flatMap { $0.tracks }
+        var pool = [track]
+        pool.append(contentsOf: mainSnapshot)
+        pool.append(contentsOf: playlist.tracks)
+        pool.append(contentsOf: queue.items.map { $0.track })
+        pool.append(contentsOf: cached)
+        pool.append(contentsOf: GlobalSearch.shared.rows.map { $0.track })
+        for item in pool where item.identityKey == track.identityKey { TrackEdits.apply(to: item) }
+        notifyPlaylistChanged()
+        if currentTrack?.identityKey == track.identityKey { postTrackChange() }
+        persistNow()
+    }
+
     func restoreFromState() {
         let state = LibraryStore.load()
+        TrackEdits.restore(state.trackEdits)
         setMode(PlayMode(rawValue: state.playMode) ?? .listLoop)
         volume = state.volume
         isMuted = state.muted
@@ -2802,6 +2825,7 @@ final class PlayerController {
 
     func persistNow() {
         var state = LibraryStore.load()
+        state.trackEdits = TrackEdits.snapshot
         // identityKey 同时是存档写法：普通轨是文件路径，CUE 轨是 `cue路径#track=N`。
         // 停在派生组时写的必须是 [默认] 组的留档，否则一次切组就把用户的列表冲了。
         // 搜索态也一样：写的是「进入搜索前那一页」的留档，命中表永远不该落盘

@@ -115,14 +115,17 @@ enum Archive {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         if let hit = cache[key] {
-            cache.removeValue(forKey: key)   // 触到就重新插入更新 LRU
-            cache[key] = hit
+            cacheOrder.removeAll { $0 == key }
+            cacheOrder.append(key)
             return hit
         }
         guard let r = EntryReader(archive: archive, entry: entry) else { return nil }
-        if r.cached == nil { return r }        // streaming：见上面「不入池」的理由
+        guard let bytes = r.cached, bytes.count <= cacheBudget else { return r }
         cache[key] = r
-        while cache.count > cacheCapacity, let oldest = cache.first?.key {
+        cacheOrder.append(key)
+        while cache.count > cacheCapacity || cache.values.reduce(0, { $0 + ($1.cached?.count ?? 0) }) > cacheBudget,
+              let oldest = cacheOrder.first {
+            cacheOrder.removeFirst()
             cache.removeValue(forKey: oldest)
         }
         return r
@@ -133,11 +136,14 @@ enum Archive {
         cacheLock.lock(); defer { cacheLock.unlock() }
         let prefix = archive.path + "\u{0}"
         for k in cache.keys where k.hasPrefix(prefix) { cache.removeValue(forKey: k) }
+        cacheOrder.removeAll { $0.hasPrefix(prefix) }
     }
 
     private static let cacheLock = NSRecursiveLock()
     private static var cache: [String: EntryReader] = [:]
+    private static var cacheOrder: [String] = []
     private static let cacheCapacity = 5
+    private static let cacheBudget = 64 * 1024 * 1024
 
     /// 外层归档文件名当 album：“TestArtist-Album.zip” → “TestArtist-Album”；
     /// "album.tar.gz" → "album"（一次剥掉 archiveExtensions 里能剥的后缀）。

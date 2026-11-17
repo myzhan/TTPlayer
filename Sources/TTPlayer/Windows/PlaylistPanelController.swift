@@ -1,7 +1,7 @@
 import AppKit
 
 /// 播放列表独立面板（停靠组的第二块窗）：
-/// 工具条「添加 电台 删除 列表 排序 查找 编辑 模式 队列」→ 左列表组 + 右歌曲表
+/// 工具条「添加 电台 删除 列表 排序 编辑 队列」→ 左列表组 + 右歌曲表
 /// 顶部不再有标题条，开关走主面板底部的「列表」键
 final class PlaylistPanelWindow: SkinPanelWindow {
     override var contentHeight: CGFloat { MainWindowController.playlistPanelH }
@@ -59,7 +59,6 @@ final class PlaylistPanelController: NSObject, NSTextFieldDelegate {
     /// 与 groupItems 一一对应的组身份（歌单页多起来以后「第几行」不再等于身份）
     private var groupKinds: [GroupKind] = []
     private var sortAscending = true
-    private var searchKeyword = ""
     /// 上次输入的电台地址（弹框预填，手滑取消也不丢）
     private var radioInput = ""
 
@@ -111,9 +110,7 @@ final class PlaylistPanelController: NSObject, NSTextFieldDelegate {
         toolbar.addArrangedSubview(tool("删除", #selector(removeAction), "从列表删除选中曲目"))
         toolbar.addArrangedSubview(tool("列表", #selector(listAction(_:)), "保存/载入播放列表（m3u）"))
         toolbar.addArrangedSubview(tool("排序", #selector(sortAction(_:)), "按标题/艺术家/时长排序"))
-        toolbar.addArrangedSubview(tool("查找", #selector(findAction), "按关键字跳到下一首匹配曲"))
         toolbar.addArrangedSubview(tool("编辑", #selector(editAction), "修改当前曲目的标题/艺术家"))
-        toolbar.addArrangedSubview(tool("模式", #selector(modeAction(_:)), "播放方式（F1~F4）"))
         toolbar.addArrangedSubview(tool("队列", #selector(queueAction), "待播队列（下一首播放 / 稍后播放的条目）"))
 
         window.skinRoot.addSubview(toolbar)
@@ -568,7 +565,7 @@ final class PlaylistPanelController: NSObject, NSTextFieldDelegate {
 
     // MARK: - 事件
 
-    /// 工具条按钮数（自检用：添加/电台/删除/列表/排序/查找/编辑/模式/队列）
+    /// 工具条按钮数（自检用：添加/电台/删除/列表/排序/编辑/队列）
     var toolbarButtonCount: Int { toolbar.arrangedSubviews.count }
 
     /// 自检用：左栏当前有几行（固定六页 + 歌单页）
@@ -925,25 +922,6 @@ final class PlaylistPanelController: NSObject, NSTextFieldDelegate {
         Diagnostics.log("列表按 \(raw) 排序")
     }
 
-    @objc private func findAction() {
-        let alert = NSAlert()
-        alert.messageText = "在播放列表中查找"
-        alert.informativeText = "输入曲名/艺术家关键字，回车跳到下一首匹配。"
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
-        field.stringValue = searchKeyword
-        field.placeholderString = "关键字"
-        alert.accessoryView = field
-        alert.addButton(withTitle: "查找")
-        alert.addButton(withTitle: "取消")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        searchKeyword = field.stringValue
-        guard !searchKeyword.isEmpty else { return }
-        if !playlistView.focusNextMatch(after: playlistView.targetRow >= 0 ? playlistView.targetRow : nil,
-                                        keyword: searchKeyword) {
-            NSSound.beep()
-        }
-    }
-
     @objc private func editAction() {
         let row = playlistView.targetRow
         guard row >= 0, let track = playlistView.track(forDisplay: row) else {
@@ -951,14 +929,15 @@ final class PlaylistPanelController: NSObject, NSTextFieldDelegate {
             return
         }
         let alert = NSAlert()
-        alert.messageText = "编辑标签"
-        alert.informativeText = track.fileName
+        alert.messageText = "编辑显示信息"
+        alert.informativeText = "保存在播放器中\n" + track.fileName
         let title = NSTextField(frame: NSRect(x: 0, y: 46, width: 250, height: 24))
         title.stringValue = track.title
         title.placeholderString = "标题"
         let artist = NSTextField(frame: NSRect(x: 0, y: 16, width: 250, height: 24))
         artist.stringValue = track.artist
         artist.placeholderString = "艺术家"
+        artist.isEnabled = !track.isRadio
         let box = NSView(frame: NSRect(x: 0, y: 0, width: 250, height: 76))
         box.addSubview(title)
         box.addSubview(artist)
@@ -966,27 +945,7 @@ final class PlaylistPanelController: NSObject, NSTextFieldDelegate {
         alert.addButton(withTitle: "确定")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        track.title = title.stringValue.isEmpty ? track.fileName : title.stringValue
-        track.artist = artist.stringValue
-        NotificationCenter.default.post(name: .ttPlaylistChanged, object: nil)
-        NotificationCenter.default.post(name: .ttTrackChanged, object: nil,
-                                       userInfo: ["track": track])
-    }
-
-    @objc private func modeAction(_ sender: NSButton) {
-        let menu = NSMenu()
-        for mode in PlayMode.allCases {
-            let item = menu.addItem(withTitle: mode.displayName,
-                                    action: #selector(selectMode(_:)), keyEquivalent: "")
-            item.target = self
-            item.tag = mode.rawValue
-            item.state = controller.playMode == mode ? .on : .off
-        }
-        menu.popUp(under: sender)
-    }
-
-    @objc private func selectMode(_ sender: NSMenuItem) {
-        controller.setMode(PlayMode(rawValue: sender.tag) ?? .listLoop)
+        controller.editDisplayInfo(track, title: title.stringValue, artist: artist.stringValue)
     }
 
     // MARK: - 自建歌单（左栏右键：新建/改名/删除/清空/导出/导入）

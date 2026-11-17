@@ -202,13 +202,13 @@ struct UISuite: SelfTestSuite {
         let main = ctx.main
         let w = main.window
         let dock = main.dock
-        // 列表面板：独立窗 + 工具条 9 个按钮（第九键是待播队列）
+        // 列表面板：独立窗 + 工具条 7 个按钮（含待播队列）
         let listWin = dock.window(for: .playlist)
         ctx.check("播放列表独立面板",
                   main.listVisible && listWin != nil && listWin!.isVisible
                     && abs(listWin!.frame.width - w.frame.width) < 1.5,
                   "list=\(listWin.map { "\(Int($0.frame.width))×\(Int($0.frame.height))" } ?? "nil")")
-        ctx.check("列表工具条齐全", main.playlistPanel.toolbarButtonCount == 9,
+        ctx.check("列表工具条齐全", main.playlistPanel.toolbarButtonCount == 7,
                   "count=\(main.playlistPanel.toolbarButtonCount)")
         // 启动时的 lit 要跟存档里的面板显隐一致（owner 是建完窗口才接上的）
         let dpStart = main.displayPanel

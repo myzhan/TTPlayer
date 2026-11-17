@@ -134,6 +134,8 @@ struct Lyric {
     // MARK: - 同目录歌词索引（与 CoverArt 同一套思路：一个目录只列一次）
 
     private static var dirIndex: [String: [String: URL]] = [:]
+    private static var dirStamps: [String: Date] = [:]
+    private static let indexLock = NSLock()
     private static let dirCacheLimit = 512
 
     private static func fuzzyMatch(for audioURL: URL) -> URL? {
@@ -150,7 +152,9 @@ struct Lyric {
 
     private static func lrcIndex(in dir: URL) -> [String: URL] {
         let key = dir.path
-        if let hit = dirIndex[key] { return hit }
+        let stamp = (try? dir.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        indexLock.lock(); defer { indexLock.unlock() }
+        if let stamp, dirStamps[key] == stamp, let hit = dirIndex[key] { return hit }
         var map: [String: URL] = [:]
         if let names = try? FileManager.default.contentsOfDirectory(atPath: key) {
             for name in names where name.lowercased().hasSuffix(".lrc") {
@@ -162,8 +166,9 @@ struct Lyric {
                 map[base] = url
             }
         }
-        if dirIndex.count >= dirCacheLimit { dirIndex.removeAll() }
+        if dirIndex.count >= dirCacheLimit { dirIndex.removeAll(); dirStamps.removeAll() }
         dirIndex[key] = map
+        dirStamps[key] = stamp
         return map
     }
 

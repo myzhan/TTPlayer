@@ -992,7 +992,14 @@ final class MainWindowController: NSObject {
     // MARK: - 键盘（复刻千千静听快捷键）
 
     func handleKey(_ event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        guard PlayerShortcuts.accepts(event) else { return false }
         if event.modifierFlags.contains(.command) {
+            if modifiers.contains(.shift) {
+                guard PlayerShortcuts.opensFolder(event) else { return false }
+                addFolder()
+                return true
+            }
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "o": addFiles(); return true
             case "d": toggleFavorite(); return true
@@ -1012,11 +1019,12 @@ final class MainWindowController: NSObject {
         // F10 歌词校准：⌥← / ⌥→ 提前延后 0.5 秒，⌥ 0 归零。必须排在输入框守卫之后、
         // 也排在←/→（上一曲/下一曲）之前：否则在搜索框里按 Option+左右选字就把歌词偷偷搬了
         if event.modifierFlags.contains(.option) {
+            guard modifiers == .option else { return false }
             switch Int(event.keyCode) {
             case 123: shiftLyricEarlier(); return true
             case 124: shiftLyricLater(); return true
             case 29:  resetLyricShiftKey(); return true   // 主键盘的 0
-            default: break
+            default: return false
             }
         }
         switch event.keyCode {

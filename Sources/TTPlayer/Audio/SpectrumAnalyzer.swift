@@ -12,6 +12,9 @@ final class SpectrumAnalyzer {
     private var storedLevels: (left: Float, right: Float) = (0, 0)
     private var sampleRate: Double = 44_100
     private var enabled = true
+    private var analysisRequests = 0
+    /// 只在持有 lock 时读取；窗口与临时测量各自持有分析需求。
+    private var shouldAnalyze: Bool { enabled || analysisRequests > 0 }
 
     /// UI 一次只拿一份很小的快照，避免分别读取频谱/电平时与音频线程数据竞争。
     var bars: [Float] {
@@ -27,7 +30,7 @@ final class SpectrumAnalyzer {
     /// 当前是否处于分析态；自检在测音频链路时需要临时打开后再还原，避免影响 UI 侧的可见性判定。
     var isEnabled: Bool {
         lock.lock(); defer { lock.unlock() }
-        return enabled
+        return shouldAnalyze
     }
 
     // MARK: 采集参数
@@ -79,11 +82,28 @@ final class SpectrumAnalyzer {
     func setEnabled(_ value: Bool) {
         lock.lock()
         enabled = value
-        if !value {
+        if !shouldAnalyze {
             for i in storedBars.indices { storedBars[i] = 0 }
             storedLevels = (0, 0)
         }
         lock.unlock()
+    }
+
+    /// 测量期间持续分析，UI 仍可更新可见性；结束后遵循最新的 UI 状态。
+    func withAnalysisEnabled<T>(_ body: () -> T) -> T {
+        lock.lock()
+        analysisRequests += 1
+        lock.unlock()
+        defer {
+            lock.lock()
+            analysisRequests -= 1
+            if !shouldAnalyze {
+                for i in storedBars.indices { storedBars[i] = 0 }
+                storedLevels = (0, 0)
+            }
+            lock.unlock()
+        }
+        return body()
     }
 
     /// 音频线程入口：从 buffer 取前两个声道计算电平，混成单声道喂给 FFT
@@ -92,7 +112,7 @@ final class SpectrumAnalyzer {
         let frameCount = Int(buffer.frameLength)
         guard frameCount > 0 else { return }
         lock.lock()
-        let active = enabled
+        let active = shouldAnalyze
         let sr = sampleRate
         lock.unlock()
         guard active else { return }
@@ -141,7 +161,7 @@ final class SpectrumAnalyzer {
             }
         }
         lock.lock()
-        if enabled {
+        if shouldAnalyze {
             storedLevels = (max(peakL, storedLevels.0 * decay),
                             max(peakR, storedLevels.1 * decay))
         }
@@ -209,7 +229,7 @@ final class SpectrumAnalyzer {
             nextBars[b] = powf(v, 1.4) // 抬亮中低段，视觉上更接近千千静听
         }
         lock.lock()
-        if enabled { swap(&storedBars, &nextBars) }
+        if shouldAnalyze { swap(&storedBars, &nextBars) }
         lock.unlock()
     }
 }

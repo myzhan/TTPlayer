@@ -18,8 +18,9 @@ zsh scripts/build_ffmpeg.sh
 swift build -c $CONF "${ARCH_ARGS[@]}"
 BIN=$(swift build -c $CONF "${ARCH_ARGS[@]}" --show-bin-path)
 
-# 版本号：CI 传 tag（v1.16 → 1.16），本地打包就是 1.0
-VER=${TTPLAYER_VERSION:-1.0}
+# 版本号：CI 可显式传入，本地沿用最近的发布 tag。
+VER=${TTPLAYER_VERSION:-$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo v1.0)}
+VER=${VER#v}
 BUILD_VER=${TTPLAYER_BUILD:-1}
 
 APP=build/TTPlayer.app

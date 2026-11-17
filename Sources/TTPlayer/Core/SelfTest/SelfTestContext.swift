@@ -169,15 +169,14 @@ final class SelfTestContext {
     /// 单点读 max 会撞冷启动时序假象（上一帧 tap 未排上），多抽几次取 max 才稳。
     func spectrumEnergy(_ p: PlayerController, ticks: Int = 12, interval: TimeInterval = 0.1) -> Float {
         let a = p.engine.spectrum
-        let was = a.isEnabled
-        if !was { a.setEnabled(true) }
-        defer { if !was { a.setEnabled(false) } }
-        var e: Float = 0
-        for _ in 0..<ticks {
-            pump(interval)
-            e = max(e, a.bars.max() ?? 0)
+        return a.withAnalysisEnabled {
+            var e: Float = 0
+            for _ in 0..<ticks {
+                pump(interval)
+                e = max(e, a.bars.max() ?? 0)
+            }
+            return e
         }
-        return e
     }
 
     // MARK: - 截图

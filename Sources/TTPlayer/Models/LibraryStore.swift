@@ -7,6 +7,7 @@ struct AppState: Codable {
     static let defaultGains: [Float] = Array(repeating: 0, count: 10)
 
     var trackPaths: [String] = []
+    var trackEdits: [String: TrackEdit] = [:]
     var playMode: Int = PlayMode.listLoop.rawValue
     var volume: Float = 0.8
     var muted: Bool = false
@@ -86,7 +87,7 @@ struct AppState: Codable {
     // 逐字段 decodeIfPresent：旧版 state.json 缺少新增字段时不能整档解码失败，
     // 否则 LibraryStore.load() 会回退到空默认值，把播放列表与设置一起丢掉。
     private enum CodingKeys: String, CodingKey {
-        case trackPaths, playMode, volume, muted, eqEnabled, eqGains, eqPreGain
+        case trackPaths, trackEdits, playMode, volume, muted, eqEnabled, eqGains, eqPreGain
         case eqPresetName, windowFrame, listVisible, dockGeometry, eqVisible, lyricFrame
         case skinLayout, recentKeys, favoriteKeys, recentRadioKeys, glass, transparency
         case userLists, viewListID, autoResumePlay, gaplessPlay
@@ -103,6 +104,7 @@ struct AppState: Codable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         trackPaths = try c.decodeIfPresent([String].self, forKey: .trackPaths) ?? []
+        trackEdits = try c.decodeIfPresent([String: TrackEdit].self, forKey: .trackEdits) ?? [:]
         playMode = try c.decodeIfPresent(Int.self, forKey: .playMode) ?? PlayMode.listLoop.rawValue
         volume = try c.decodeIfPresent(Float.self, forKey: .volume) ?? 0.8
         muted = try c.decodeIfPresent(Bool.self, forKey: .muted) ?? false
@@ -142,6 +144,18 @@ struct AppState: Codable {
 }
 
 enum LibraryStore {
+    private static let fallbackTestDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("ttplayer-selftest-" + UUID().uuidString, isDirectory: true)
+
+    /// 自检入口采用同一判定；缺目录或误指向用户目录时仍必须隔离。
+    static func storageDirectory(environment: [String: String], userDirectory: URL, fallback: URL) -> URL {
+        guard environment["TTPLAYER_SELFTEST"] != nil else { return userDirectory }
+        guard let path = environment["TTPLAYER_TESTDIR"], !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return fallback }
+        let candidate = URL(fileURLWithPath: path, isDirectory: true)
+        return candidate.standardizedFileURL.resolvingSymlinksInPath().path == userDirectory.standardizedFileURL.resolvingSymlinksInPath().path
+            ? fallback : candidate
+    }
     /// 可播扩展名的唯一来源是 AudioFormats（向 CoreAudio 现场问出来的）
     static var supportedExtensions: Set<String> { AudioFormats.scanExtensions }
     /// 分轨表（单独统计，命中时把一份镜像拆成多首）
@@ -161,13 +175,9 @@ enum LibraryStore {
     /// 存档目录：自检用 TTPLAYER_TESTDIR 隔离，避免跑一次自检就覆盖用户的播放列表与窗口布局
     private static var storeDirectory: URL {
         let env = ProcessInfo.processInfo.environment
-        if env["TTPLAYER_SELFTEST"] == "1", let dir = env["TTPLAYER_TESTDIR"], !dir.isEmpty {
-            let base = URL(fileURLWithPath: dir, isDirectory: true)
-            try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-            return base
-        }
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let user = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("TTPlayer", isDirectory: true)
+        let dir = storageDirectory(environment: env, userDirectory: user, fallback: fallbackTestDirectory)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
@@ -190,7 +200,7 @@ enum LibraryStore {
     /// 首批断言时灵时不灵
     static func resetSelfTestStateIfRequested() {
         let env = ProcessInfo.processInfo.environment
-        guard env["TTPLAYER_SELFTEST"] == "1" else { return }
+        guard env["TTPLAYER_SELFTEST"] != nil else { return }
         try? FileManager.default.removeItem(at: stateURL)
         try? FileManager.default.removeItem(at: resumeURL)
     }
@@ -386,6 +396,7 @@ enum LibraryStore {
             let base = url.deletingLastPathComponent()
             enum Entry {
                 case file(URL)
+                case reference(String)
                 /// 电台地址 + #EXTINF 里写的台名（空串 = 没写）
                 case radio(URL, String)
             }
@@ -408,6 +419,10 @@ enum LibraryStore {
                     continue
                 }
                 extTitle = nil
+                if let key = PlaylistM3U.referenceKey(line, base: base) {
+                    pending.append(.reference(key))
+                    continue
+                }
                 let path = (line.hasPrefix("/") || line.hasPrefix("file://"))
                     ? line : base.appendingPathComponent(line).path
                 let fileURL = path.hasPrefix("file")
@@ -418,6 +433,8 @@ enum LibraryStore {
             // 歌单里的条目不再是“用户直接拖进来的文件”，拒收原因只在歌单级别给
             for item in pending {
                 switch item {
+                case .reference(let key):
+                    for track in LibraryStore.tracks(fromArchiveEntries: [key]) { emit(track) }
                 case .radio(let radioURL, let name):
                     let track = Track(radio: radioURL)
                     // 台名按地址存（F11）：用户已经给这个地址起过名，就不能因为
@@ -435,6 +452,7 @@ enum LibraryStore {
                     let ext = entry.pathExtension.lowercased()
                     if AudioFormats.isPlaylist(entry) { absorbPlaylistSource(entry) }
                     else if ext == cueExtension { absorbCue(entry) }
+                    else if AudioFormats.isArchive(entry) { absorbArchive(entry) }
                     else if AudioFormats.isPlayable(entry) { absorbAudio(entry) }
                 }
             }

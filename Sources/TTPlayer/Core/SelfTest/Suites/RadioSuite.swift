@@ -21,11 +21,34 @@ struct RadioSuite: SelfTestSuite {
         checkRetry(ctx)
         checkRadioAllFailStops(ctx)
         checkDecoder(ctx)
+        checkByteBuffer(ctx)
         checkStations(ctx)
         checkBuiltinStations(ctx)
         checkQuality(ctx)
         checkLocalStream(ctx)
         checkLiveStream(ctx)
+    }
+
+    private func checkByteBuffer(_ ctx: SelfTestContext) {
+        // 不启动 FFmpeg，直接驱动生产/消费；分别覆盖读空和一直留有尾巴。
+        for tail in [0, 17] {
+            let decoder = RadioStreamDecoder()
+            let chunk = Data((0..<4096).map { UInt8($0 % 251) })
+            var out = [UInt8](repeating: 0, count: 4096)
+            var valid = true
+            var maxOffset = 0
+            decoder.feed(chunk.prefix(tail))
+            let first = Array(chunk.prefix(tail) + chunk.prefix(4096 - tail))
+            let subsequent = Array(chunk.suffix(tail) + chunk.prefix(4096 - tail))
+            for i in 0..<10_000 {
+                decoder.feed(chunk)
+                let n = out.withUnsafeMutableBufferPointer { decoder.consume($0.baseAddress, 4096) }
+                valid = valid && n == 4096 && out == (i == 0 ? first : subsequent)
+                maxOffset = max(maxOffset, decoder.bufferedByteOffset)
+            }
+            ctx.check("电台-字节缓冲回收历史前缀-tail=\(tail)", valid && maxOffset < 65_536,
+                      "累计消费 39 MB，最大前缀 \(maxOffset) 字节")
+        }
     }
 
     // MARK: - 地址归一化
@@ -172,8 +195,8 @@ struct RadioSuite: SelfTestSuite {
         ctx.check("电台-时长列写直播", radioText == "直播", "text=\(radioText ?? "nil")")
         ctx.check("电台-本地曲目仍写时间",
                   fileText?.contains(":") == true, "text=\(fileText ?? "nil")")
-        ctx.check("电台-工具条九键（添加/电台/删除/列表/排序/查找/编辑/模式/队列）",
-                  ctx.main.playlistPanel.toolbarButtonCount == 9,
+        ctx.check("电台-工具条七键（添加/电台/删除/列表/排序/编辑/队列）",
+                  ctx.main.playlistPanel.toolbarButtonCount == 7,
                   "count=\(ctx.main.playlistPanel.toolbarButtonCount)")
         p.clearPlaylist()
     }

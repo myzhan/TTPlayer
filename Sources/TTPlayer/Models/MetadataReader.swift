@@ -35,6 +35,7 @@ enum MetadataReader {
 
     static func readSync(_ track: Track) {
         guard !track.isRadio else { return }
+        defer { TrackEdits.apply(to: track) }
         // 一次探测：解码参数 + 标签 + 内嵌封面都由 FFmpeg 读回
         guard let info = FFmpegProbe.probe(track.url) else {
             // 认不出容器：把原因留在曲目上（入表/属性面板/日志才能回答“为什么放不了”）
@@ -66,7 +67,7 @@ enum MetadataReader {
         // CUE 分轨拆出来的几首靠的正是镜像里那一份（曲目增益对整盘而言也是那一份）
         track.replayGainTags = ReplayGainTags(tags: info.tags)
         // 封面照旧要读（整盘镜像里那张 attached_pic 就是这一盘的封面）
-        if track.cover == nil, let data = info.coverData {
+        if let data = info.coverData {
             attachEmbeddedCover(data, to: track, name: "")
         }
         if track.cover == nil { attachExternalCover(track) }
@@ -106,6 +107,11 @@ enum MetadataReader {
         }
         track.coverRef = CoverArt.Ref(key: found.art.key, art: found.art, origin: .file(found.url))
         track.coverSource = "外部文件 \(found.url.lastPathComponent) \(found.art.pixelLabel)"
+    }
+
+    static func refreshExternalCover(_ track: Track) {
+        if let ref = track.coverRef, case .embedded = ref.origin { return }
+        attachExternalCover(track)
     }
 
     /// 封面大图窗要放大时调：曲目上只常驻 112px 的小档，240pt 的格子拿它放大会糊，

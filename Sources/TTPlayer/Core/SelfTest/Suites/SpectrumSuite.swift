@@ -68,6 +68,26 @@ struct SpectrumSuite: SelfTestSuite {
             ctx.check("频谱-停画时不分析", analyzer.bars.allSatisfy { $0 == 0 }
                         && analyzer.levels.left == 0 && analyzer.levels.right == 0)
             analyzer.setEnabled(true)
+            var protected = 0
+            var restored = 0
+            // 重放窗口遮挡回调落在测量开始之后的时序，30 轮防抖。
+            for _ in 0..<30 {
+                analyzer.withAnalysisEnabled {
+                    specView.startAnimating() // 离屏窗口请求关闭分析
+                    analyzer.process(buffer: buf)
+                    if analyzer.isEnabled && (analyzer.bars.max() ?? 0) > 0.3 { protected += 1 }
+                    analyzer.withAnalysisEnabled {
+                        analyzer.setEnabled(false)
+                    }
+                    if !analyzer.isEnabled { protected -= 1 }
+                }
+                if !analyzer.isEnabled && analyzer.bars.allSatisfy({ $0 == 0 })
+                    && analyzer.levels.left == 0 { restored += 1 }
+            }
+            ctx.check("频谱-测量不被窗口遮挡中断（含嵌套）", protected == 30, "\(protected)/30")
+            ctx.check("频谱-测量结束恢复最新隐藏状态", restored == 30, "\(restored)/30")
+            analyzer.withAnalysisEnabled { analyzer.setEnabled(true) }
+            ctx.check("频谱-测量结束保留最新可见状态", analyzer.isEnabled)
         } else {
             ctx.check("频谱-buffer创建", false)
         }

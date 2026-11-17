@@ -16,6 +16,16 @@ import Foundation
 /// 唯一的歧义边界：本地路径里正好带 `#track=` 会被当成分轨扩展写法（第三方 m3u 也一样歧义，
 /// 真碰到了就走 TTPlayer 自己的存档而不是 m3u）。
 enum PlaylistM3U {
+    /// 所有歌单入口共用精确条目身份解析；相对 CUE 路径以歌单目录为基准。
+    static func referenceKey(_ line: String, base: URL) -> String? {
+        if let marker = line.range(of: LibraryStore.cueArchiveMarker) {
+            let path = String(line[..<marker.lowerBound])
+            let url = path.hasPrefix("/") ? URL(fileURLWithPath: path) : base.appendingPathComponent(path)
+            return url.path + String(line[marker.lowerBound...])
+        }
+        if let url = URL(string: line), Archive.parseEntryURL(url) != nil { return url.absoluteString }
+        return nil
+    }
     /// 扩展格式标记行：读到它就确认这份 m3u 是按上面那套写法导出的
     static let marker = "#EXT-X-TTPLAYER:1"
     /// 给人看的兼容说明（跟着写进导出文件，用户拿别的编辑器也知道那两类行是什么）
@@ -108,8 +118,8 @@ enum PlaylistM3U {
                 return
             }
             // TTPlayer 扩展写法：精确的一条 CUE 分轨 / 归档里的一个条目，原样留着就是身份
-            if line.contains(LibraryStore.cueArchiveMarker) || line.contains("#archive-entry=") {
-                result.keep(line, exists: LibraryStore.entryExists(line))
+            if let key = PlaylistM3U.referenceKey(line, base: base) {
+                result.keep(key, exists: LibraryStore.entryExists(key))
                 return
             }
             let path = (line.hasPrefix("/") || line.hasPrefix("file://"))

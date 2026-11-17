@@ -66,6 +66,9 @@ jobs:
         run: |
           TTPLAYER_VERSION="$VERSION" TTPLAYER_BUILD="$GITHUB_RUN_NUMBER" ./build_app.sh
 
+      - name: 打包版冒烟自检
+        run: TTPLAYER_BIN=build/TTPlayer.app/Contents/MacOS/TTPlayer ./scripts/selftest.sh
+
       - name: 校验产物
         run: |
           set -euo pipefail

@@ -168,9 +168,24 @@ final class RadioStreamDecoder {
     // 环缓冲 + 条件变量：feed() 是生产者，读回调是消费者
     private let cond = NSCondition()
     private var ring = Data()
+    static let maxBufferedBytes = 8 * 1024 * 1024
+    var bufferedByteCount: Int {
+        cond.lock(); defer { cond.unlock() }
+        return ring.count
+    }
+    /// 自检监视已消费前缀，避免直播时底层存储随累计流量增长。
+    var bufferedByteOffset: Int {
+        cond.lock(); defer { cond.unlock() }
+        return ring.startIndex
+    }
     private var eof = false
     private var aborted = false
     private var started = false
+    private var finished = false
+    var hasFinished: Bool {
+        cond.lock(); defer { cond.unlock() }
+        return finished
+    }
     /// 解码线程是否已被 join 过：close() 会被显式调一次、deinit 再调一次，
     /// 而 readDone 只 signal 一次，重复 close 若不短路，第二次会卡在无上限的 wait 上。
     private var joined = false
@@ -203,6 +218,14 @@ final class RadioStreamDecoder {
         guard !data.isEmpty else { return }
         cond.lock()
         if aborted || eof { cond.unlock(); return }
+        guard data.count <= Self.maxBufferedBytes - ring.count else {
+            aborted = true
+            ring = Data()
+            cond.broadcast()
+            cond.unlock()
+            onFailure?("电台输入缓冲超出上限")
+            return
+        }
         ring.append(data)
         cond.broadcast()
         cond.unlock()
@@ -233,7 +256,7 @@ final class RadioStreamDecoder {
     /// 没数据时挂起等待；EOF 或中断且取空返回 `AVERROR_EOF`——**不能回 0**：
     /// FFmpeg n9 的 `fill_buffer` 只把 `AVERROR_EOF` 和负数当结束，回 0 算
     /// 「这趟没读到」并接着重试，断流后的解码线程就会 100% CPU 原地空转而不退
-    fileprivate func consume(_ dest: UnsafeMutablePointer<UInt8>?, _ want: Int32) -> Int32 {
+    func consume(_ dest: UnsafeMutablePointer<UInt8>?, _ want: Int32) -> Int32 {
         guard let dest, want > 0 else { return Int32(cff_averror_eof()) }
         cond.lock()
         while ring.isEmpty, !eof, !aborted {
@@ -246,13 +269,29 @@ final class RadioStreamDecoder {
         let n = min(Int(want), ring.count)
         _ = ring.withUnsafeBytes { src in memcpy(dest, src.baseAddress!, n) }
         ring.removeFirst(n)
+        // Data.removeFirst 只移动切片起点，不回收已消费的前缀。
+        // 清空时释放存储；持续有余量时每 64 KB 复制剩余字节，限制历史前缀。
+        // 必须显式复制：Data(ring) 仍可能共享原来的大块存储。
+        if ring.isEmpty {
+            ring = Data()
+        } else if ring.startIndex >= 65_536 {
+            ring = ring.withUnsafeBytes { Data($0) }
+        }
         cond.unlock()
         return Int32(n)
     }
 
     private func decodeLoop(opaque: UnsafeMutableRawPointer) {
         FFmpeg.ensureInit()
-        defer { readDone.signal() }
+        defer {
+            cond.lock()
+            eof = true
+            finished = true
+            ring = Data()
+            cond.broadcast()
+            cond.unlock()
+            readDone.signal()
+        }
 
         // 1) 自定义 IO：用环缓冲喂 FFmpeg，直播不可 seek
         let bufSize = Int32(Self.ioBufferSize)
@@ -343,8 +382,11 @@ final class RadioStreamDecoder {
         while !interrupted {
             av_packet_unref(packet)
             ret = av_read_frame(fmt, packet)
-            if ret == FFmpeg.errorEOF { break }
-            if ret < 0 { break }
+            if ret < 0 {
+                cond.lock(); let requested = eof || aborted; cond.unlock()
+                if !requested { onFailure?("电台解码中断（\(FFmpeg.errstr(ret))）") }
+                break
+            }
             if packet.pointee.stream_index != idx { continue }
             packetsSeen += 1
             if avcodec_send_packet(codecCtx, packet) < 0 { continue }
@@ -740,6 +782,10 @@ extension RadioPlayer: URLSessionDataDelegate {
                     dataTask: URLSessionDataTask,
                     didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard session === self.session, dataTask === task, wantsPlayback, !closed else {
+            completionHandler(.cancel)
+            return
+        }
         guard let http = response as? HTTPURLResponse else {
             completionHandler(.cancel)
             handle(.fatal("服务器的应答不是 HTTP 数据流"))
@@ -762,7 +808,7 @@ extension RadioPlayer: URLSessionDataDelegate {
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        guard wantsPlayback, !closed else { return }
+        guard session === self.session, dataTask === task, wantsPlayback, !closed else { return }
         if decoder == nil {
             let d = RadioStreamDecoder()
             d.onInfo = { [weak self] info, format in
@@ -770,17 +816,24 @@ extension RadioPlayer: URLSessionDataDelegate {
                 // 第一块 PCM 出来才算“能听了”；这里只把格式交上去
                 DispatchQueue.main.async { self.onInfo?(info, format) }
             }
-            d.onPCM = { [weak self] buffer in
-                guard let self else { return }
-                if self.state != .playing {
-                    self.attempt = 0
-                    self.setState(.playing)
+            d.onPCM = { [weak self, weak d] buffer in
+                self?.queue.async { [weak self, weak d] in
+                    guard let self, let d, self.decoder === d, self.wantsPlayback, !self.closed else { return }
+                    if self.state != .playing {
+                        self.attempt = 0
+                        self.setState(.playing)
+                    }
+                    DispatchQueue.main.async { self.onPCM?(buffer) }
                 }
-                DispatchQueue.main.async { self.onPCM?(buffer) }
             }
-            d.onFailure = { reason in
-                // 单块解码失败不重连（广告段常这样），只有持续没声音才由 URLSession 的错误路径接管
-                Diagnostics.error("电台解码：\(reason)")
+            let connection = generation
+            d.onFailure = { [weak self, weak d] reason in
+                self?.queue.async { [weak self, weak d] in
+                    guard let self, let d, self.generation == connection, self.decoder === d,
+                          self.wantsPlayback, !self.closed else { return }
+                    self.teardown()
+                    self.handle(.transient(reason))
+                }
             }
             guard d.open() else {
                 scheduleRetry(reason: "解析器打不开")
@@ -803,7 +856,7 @@ extension RadioPlayer: URLSessionDataDelegate {
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard wantsPlayback, !closed else { return }
+        guard session === self.session, task === self.task, wantsPlayback, !closed else { return }
         // 状态码不对时是自己在上面掐的，那一遍已经收过场了，不能重复计一次退避
         if let code = (error as? URLError)?.code, code == .cancelled { return }
         guard let error else {

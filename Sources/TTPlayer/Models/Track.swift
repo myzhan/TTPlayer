@@ -77,6 +77,8 @@ final class Track: NSObject {
         self.title = url.deletingPathExtension().lastPathComponent
         self.artist = ""
         self.album = ""
+        super.init()
+        TrackEdits.apply(to: self)
     }
 
     /// 由电台地址构造：标题先看用户给这个地址起过什么名（F11 的台名按地址存），
@@ -99,6 +101,7 @@ final class Track: NSObject {
         artist = cueTrack.performer.isEmpty ? sheet.albumPerformer : cueTrack.performer
         album = sheet.albumTitle
         duration = cueTrack.duration ?? 0
+        TrackEdits.apply(to: self)
     }
 
     /// 类型描述：优先用读出来的真实编码名，还没解析过就先按容器/扩展名给个名字

@@ -2,6 +2,7 @@
 build/
 ttlogs/
 tttools/
+/tasks/
 testlib/
 .DS_Store
 # FFmpeg 源码子模块的编译产物（scripts/build_ffmpeg.sh 生成，3rd/ffmpeg 本身是 submodule 要入库）

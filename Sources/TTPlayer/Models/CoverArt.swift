@@ -79,7 +79,7 @@ enum CoverArt {
     private static func fileKey(_ url: URL) -> String {
         let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
         let size = values?.fileSize ?? 0
-        let stamp = Int((values?.contentModificationDate ?? .distantPast).timeIntervalSince1970)
+        let stamp = (values?.contentModificationDate ?? .distantPast).timeIntervalSince1970
         return "f:\(url.path)|\(size)|\(stamp)"
     }
 
@@ -203,6 +203,7 @@ enum CoverArt {
     /// 目录 →（小写文件名 → 图片地址）。缓存有上限，曲库极大时整体丢掉重来，
     /// 宁可偶尔重列一次目录，也不让这份索引无限膨胀
     private static var index: [String: [String: URL]] = [:]
+    private static var indexStamps: [String: Date] = [:]
     private static var scans: [String: Int] = [:]
 
     /// 供自检：某个目录被真列过几次（同目录的第二首曲目不该再来一次）。
@@ -227,9 +228,10 @@ enum CoverArt {
     }
 
     private static func entries(of dir: URL) -> [String: URL] {
+        let stamp = (try? dir.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
         lock.lock(); defer { lock.unlock() }
         let key = dir.path
-        if let hit = index[key] { return hit }
+        if let stamp, indexStamps[key] == stamp, let hit = index[key] { return hit }
         scans[key, default: 0] += 1
         var map: [String: URL] = [:]
         if let names = try? FileManager.default.contentsOfDirectory(atPath: key) {
@@ -242,9 +244,11 @@ enum CoverArt {
         }
         if index.count >= 512 {
             index.removeAll()
+            indexStamps.removeAll()
             scans.removeAll()
         }
         index[key] = map
+        indexStamps[key] = stamp
         return map
     }
 }
