@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=TTPlayer
+Comment=Audio player
+Exec=ttplayer %U
+Icon=ttplayer
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+MimeType=audio/mpeg;audio/flac;audio/x-wav;audio/ogg;audio/x-mpegurl;application/x-cue;

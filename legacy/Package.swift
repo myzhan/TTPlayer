@@ -6,8 +6,8 @@ import Foundation
 // 头与库分别落在 3rd/ffmpeg-build/{include,lib}。这里用绝对路径把编译/链接钉死，
 // 避免依赖构建时的工作目录。
 let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
-let ffmpegInclude = packageRoot + "/3rd/ffmpeg-build/include"
-let ffmpegLib = packageRoot + "/3rd/ffmpeg-build/lib"
+let ffmpegInclude = packageRoot + "/../3rd/ffmpeg-build/include"
+let ffmpegLib = packageRoot + "/../3rd/ffmpeg-build/lib"
 
 let package = Package(
     name: "TTPlayer",

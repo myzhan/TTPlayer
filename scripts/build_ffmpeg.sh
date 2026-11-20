@@ -8,6 +8,7 @@
 # 交叉编译：设 TTPLAYER_ARCHS="arm64 x86_64" 时对每个架构各编一遍再 lipo 合并（发版用）。
 set -e
 SCRIPT_HASH=$(shasum -a 256 "$0" | awk '{print $1}')
+COMP_HASH=$(shasum -a 256 "$(dirname "$0")/ffmpeg_components.sh" | awk '{print $1}')
 cd "$(dirname "$0")/.."
 
 SRC=3rd/ffmpeg
@@ -31,7 +32,7 @@ if [[ -n "$TTPLAYER_ARCHS" ]]; then
 fi
 
 # 旧版只记 commit，macOS/架构/编译参数变化后会误用旧库。
-CONFIG_KEY="$COMMIT|$SCRIPT_HASH|${(j:,:)ARCHS}|$(uname -m)|macos=$DEPLOYMENT_TARGET"
+CONFIG_KEY="$COMMIT|$SCRIPT_HASH|$COMP_HASH|${(j:,:)ARCHS}|$(uname -m)|macos=$DEPLOYMENT_TARGET"
 NEED_BUILD=1
 if [[ "$1" != "--force" && -f "$CONFIG_STAMP" && -f "$STAMP" ]]; then
     if [[ "$(cat "$CONFIG_STAMP")" == "$CONFIG_KEY" && "$(cat "$STAMP")" == "$COMMIT" ]]; then
@@ -51,78 +52,10 @@ ffmpeg_arch() {
     esac
 }
 
-# 一次性把组件清单集中在这里，configure 会自动补齐依赖（parser/bsf 等）
-COMPONENTS=(
-    # 协议：本地文件 + 管道；电台由 URLSession 喂自定义 AVIOContext，不需 http/tls
-    --enable-protocol=file
-    --enable-protocol=pipe
-    # 解复用器（容器）
-    --enable-demuxer=mp3
-    --enable-demuxer=aac
-    --enable-demuxer=flac
-    --enable-demuxer=ogg
-    --enable-demuxer=wav
-    --enable-demuxer=aiff
-    --enable-demuxer=caf
-    --enable-demuxer=au
-    --enable-demuxer=w64
-    --enable-demuxer=mov
-    --enable-demuxer=matroska
-    --enable-demuxer=asf
-    --enable-demuxer=ape
-    --enable-demuxer=wv
-    --enable-demuxer=tta
-    --enable-demuxer=dsf
-    --enable-demuxer=iff
-    --enable-demuxer=wsd
-    --enable-demuxer=image2
-    # 解码器（音频）
-    --enable-decoder=mp3
-    --enable-decoder=mp3float
-    --enable-decoder=aac
-    --enable-decoder=aac_fixed
-    --enable-decoder=aac_latm
-    --enable-decoder=flac
-    --enable-decoder=vorbis
-    --enable-decoder=opus
-    --enable-decoder=alac
-    --enable-decoder=ape
-    --enable-decoder=wavpack
-    --enable-decoder=tta
-    --enable-decoder=dsd_lsbf
-    --enable-decoder=dsd_msbf
-    --enable-decoder=dsd_lsbf_planar
-    --enable-decoder=dsd_msbf_planar
-    --enable-decoder=wmav1
-    --enable-decoder=wmav2
-    --enable-decoder=mlp
-    --enable-decoder=truehd
-    --enable-decoder=ac3
-    --enable-decoder=eac3
-    # PCM 全套（WAV/AIFF/CAF 里的各种位深/编码）
-    --enable-decoder=pcm_s8
-    --enable-decoder=pcm_s16le
-    --enable-decoder=pcm_s16be
-    --enable-decoder=pcm_s24le
-    --enable-decoder=pcm_s24be
-    --enable-decoder=pcm_s32le
-    --enable-decoder=pcm_s32be
-    --enable-decoder=pcm_u8
-    --enable-decoder=pcm_f32le
-    --enable-decoder=pcm_f32be
-    --enable-decoder=pcm_f64le
-    --enable-decoder=pcm_f64be
-    --enable-decoder=pcm_mulaw
-    --enable-decoder=pcm_alaw
-    # CAF/WAV 里的 IMA ADPCM（QuickTime 'ima4'  fourcc），afconvert 转码矩阵会造这种
-    --enable-decoder=adpcm_ima_qt
-    # 封面：内嵌图通常是 MJPEG/PNG，解出裸流字节交给 ImageIO 再解码
-    --enable-decoder=mjpeg
-    --enable-decoder=png
-    --enable-decoder=bmp
-    --enable-decoder=gif
-    --enable-parser=mjpeg
-)
+# 组件清单集中在 scripts/ffmpeg_components.sh（三平台共用，唯一真相），
+# configure 会自动补齐依赖（parser/bsf 等）。
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+source "$SCRIPT_DIR/ffmpeg_components.sh"
 
 build_one() {
     local arch_arg=()

@@ -1,0 +1,26 @@
+#pragma once
+
+// 系统托盘后台（跨平台对应 Swift「菜单栏后台继续播」）：最小化/隐藏到托盘后
+// 音频继续，托盘菜单提供 显示/隐藏 · 播放/暂停 · 上一首/下一首 · 停止 · 退出。
+// 平台没有托盘（部分 Linux 桌面）时静默降级，不影响主界面。
+
+#include "core/PlayerController.h"
+
+#include <QObject>
+#include <QPointer>
+
+class MainWindow;
+class QSystemTrayIcon;
+
+class TrayController : public QObject {
+    Q_OBJECT
+public:
+    TrayController(MainWindow *window, PlayerController *controller, QObject *parent = nullptr);
+
+    bool available() const;
+
+private:
+    QPointer<MainWindow> m_window;
+    PlayerController *m_controller;
+    QSystemTrayIcon *m_tray = nullptr;
+};

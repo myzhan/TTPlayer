@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>ttplayer</string>
+<key>CFBundleIdentifier</key><string>org.ttplayer.TTPlayer</string>
+<key>CFBundleName</key><string>TTPlayer</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>1.1.4</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleIconFile</key><string>AppIcon.icns</string>
+<key>LSMinimumSystemVersion</key><string>@CMAKE_OSX_DEPLOYMENT_TARGET@</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>CFBundleDocumentTypes</key><array><dict>
+<key>CFBundleTypeName</key><string>Audio and playlists</string>
+<key>CFBundleTypeRole</key><string>Viewer</string>
+<key>LSHandlerRank</key><string>Alternate</string>
+<key>CFBundleTypeExtensions</key><array><string>mp3</string><string>m4a</string><string>aac</string><string>flac</string><string>wav</string><string>aiff</string><string>ogg</string><string>opus</string><string>ape</string><string>tta</string><string>dsf</string><string>cue</string><string>m3u</string><string>m3u8</string><string>zip</string><string>7z</string><string>rar</string><string>tar</string></array>
+</dict></array>
+</dict></plist>

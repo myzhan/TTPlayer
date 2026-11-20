@@ -13,7 +13,7 @@ fi
 
 # 前置：解码已全部交给 FFmpeg，静态库必须先编好（Package.swift 直接链 3rd/ffmpeg-build/lib）。
 # 每次校验部署目标和架构；构建脚本会复用有效缓存，不能只看一个 .a 是否存在。
-zsh scripts/build_ffmpeg.sh
+zsh ../scripts/build_ffmpeg.sh
 
 swift build -c $CONF "${ARCH_ARGS[@]}"
 BIN=$(swift build -c $CONF "${ARCH_ARGS[@]}" --show-bin-path)

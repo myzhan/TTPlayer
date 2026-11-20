@@ -1,5 +1,13 @@
 .build/
 build/
+# CMake 重构的构建产物：Debug=build/（上方），Release=build-release/
+build-release/
+build-package/
+dist/
+legacy/.build/
+CMakeCache.txt
+CMakeFiles/
+*_autogen/
 ttlogs/
 tttools/
 /tasks/
@@ -10,3 +18,10 @@ testlib/
 # 调试用的界面截图/探针产物（仓库根目录）
 /*.png
 /*.txt
+# 但 Qt6 重构的工程文件 CMakeLists.txt 恰以 .txt 结尾，必须放行
+!/CMakeLists.txt
+
+__pycache__/
+aqtinstall.log
+legacy/build/
+build-asan/

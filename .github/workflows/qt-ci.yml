@@ -1,0 +1,117 @@
+name: Qt validation
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+        config: [Debug, Release]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y qt6-base-dev qt6-5compat-dev libsdl2-dev libarchive-dev zlib1g-dev ffmpeg nasm yasm
+      - name: macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install nasm yasm ffmpeg
+          python -m pip install aqtinstall
+          python -m aqt install-qt mac desktop 6.8.3 clang_64 -m qt5compat -O "$RUNNER_TEMP/Qt"
+          echo "CMAKE_PREFIX_PATH=$RUNNER_TEMP/Qt/6.8.3/macos;$RUNNER_TEMP/SDL" >> "$GITHUB_ENV"
+          curl --fail --location https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz -o "$RUNNER_TEMP/sdl.tar.gz"
+          tar -xf "$RUNNER_TEMP/sdl.tar.gz" -C "$RUNNER_TEMP"
+          cmake -S "$RUNNER_TEMP/SDL2-2.32.10" -B "$RUNNER_TEMP/sdl-build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/SDL"
+          cmake --build "$RUNNER_TEMP/sdl-build" -j 4
+          cmake --install "$RUNNER_TEMP/sdl-build"
+      - name: FFmpeg
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]]; then zsh scripts/build_ffmpeg.sh; else bash scripts/build_ffmpeg_linux.sh; fi
+      - name: Build
+        run: |
+          cmake -S . -B build-ci -DCMAKE_BUILD_TYPE=${{ matrix.config }}
+          cmake --build build-ci -j 4
+      - name: Full selftest
+        env:
+          TTPLAYER_BIN: build-ci/ttplayer
+          TTPLAYER_PROBE: build-ci/selftest
+        run: python scripts/selftest.py all
+      - name: CTest
+        run: ctest --test-dir build-ci --output-on-failure
+      - name: Prepare distributable
+        if: matrix.config == 'Release'
+        run: python scripts/package.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qt-${{ matrix.os }}-${{ matrix.config }}-validation
+          path: |
+            build-ci/selftest
+            dist
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          install: make nasm yasm
+          path-type: inherit
+      - name: Dependencies
+        shell: pwsh
+        run: |
+          python -m pip install aqtinstall
+          python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -m qt5compat -O "$env:RUNNER_TEMP/Qt"
+          vcpkg install sdl2:x64-windows libarchive:x64-windows zlib:x64-windows
+          echo "TTPLAYER_VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows" >> $env:GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$env:RUNNER_TEMP/Qt/6.8.3/msvc2022_64;$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows" >> $env:GITHUB_ENV
+          echo "$env:RUNNER_TEMP/Qt/6.8.3/msvc2022_64/bin" >> $env:GITHUB_PATH
+          echo "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin" >> $env:GITHUB_PATH
+          choco install ffmpeg -y --no-progress
+      - name: FFmpeg MSVC ABI
+        shell: msys2 {0}
+        run: bash scripts/build_ffmpeg_msvc.sh
+      - name: Build and validate both configurations
+        shell: pwsh
+        run: |
+          cmake -S . -B build-ci -G "Visual Studio 17 2022" -A x64
+          foreach ($config in @("Debug", "Release")) {
+            cmake --build build-ci --config $config -j 4
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            $env:TTPLAYER_BIN="build-ci/$config/ttplayer.exe"
+            $env:TTPLAYER_PROBE="build-ci/selftest-$config"
+            python scripts/selftest.py all
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            ctest --test-dir build-ci -C $config --output-on-failure
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          python scripts/package.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qt-windows-validation
+          path: |
+            build-ci/selftest-*
+            dist
