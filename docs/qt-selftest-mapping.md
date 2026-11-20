@@ -33,7 +33,7 @@
 | format | FORMAT | MP3/AAC/FLAC/ALAC/Vorbis/Opus、PCM/ADPCM、WMA/TTA/WavPack、DSF/DFF、可选真实 APE | 独立 FFmpeg CLI 编码及 Python DSD fixture；真实解码帧数 |
 | decoder | DECODER、FORMAT、REVIEW | 采样率/声道、精确重复 seek、帧数、取消、坏文件拒收 | 真实 FFmpeg；DSD/TTA/APE 在 FORMAT，不能说 DECODER 单套全包 |
 | import | IMPORT、SL、IDENTITY、WATCH | 递归、去重、CUE/归档/M3U 统一入口、EXTINF、拒收原因 | 临时文件；扫描与手动导入均在后台 |
-| radio | RADIO、RADIOCAT、RADIOLIVE、SYSTEM | 种台/黑名单、分类、ICY 拆包、异步取消、2/4/8/8、重试上限/手动重试、403 终止、质量窗口 | 本地 HTTP 真实剧本；RADIO 本身只是种台，不能冒充重连 |
+| radio | RADIO、RADIOCAT、RADIOLIVE、REVIEW、SYSTEM | 种台/黑名单、分类、ICY 拆包、异步取消、2/4/8/8、重试上限/手动重试、403 终止、质量窗口、PCM 起播与补缓冲、短流收尾 | 本地 HTTP 真实剧本；RADIO 本身只是种台，不能冒充重连 |
 | archive | ARCHIVE、IDENTITY、LISTS | zip/tar/gz/bz2/可选 7z、加密拒绝、seek PCM、中文/空格/特殊字符 URL、M3U 往返 | 流式 libarchive，不落地解压；RAR/RAR5 未现场生成 |
 | lists | LISTS、SL、GROUPS、SEARCH | 歌单名字、重复/重排/独立引用、M3U、删除/收藏分流 | 持久化与真实面板删除路径 |
 | search | SEARCH、UI、SL | 跨页/格式/来源、退出选区、排序持久化、搜索删除、保留媒体库 | 真窗口入口；排序与匹配均按身份 |
@@ -56,11 +56,12 @@ GAPLESS 直接检查跨段回调没有中间零窗，再走公开 controller 与
 GAIN 先测 Off 基准 RMS，重测基准证明复用成立，再比较实际 Track/峰值限制输出。
 SCENE 恢复 ramp 第 1 秒并真实开声采样，区别于从头恢复；最终物理输出仍静音。
 
-## 不得宣称已完成的验收
+REVIEW 在 48 kHz 下直接向输出环送入已知 PCM，验证起播前保留首秒、实际短读后进入补缓冲、恢复出声和不足两秒的 EOF 尾段。RADIOLIVE 另起本地 HTTP 服务测试网络行为。UI 连续 30 帧比较实际发生变化的像素与重绘区域，频谱衰减结束后验证无需再重绘。
+
+## 验证结果与平台边界
 
 这些入口已补齐，但尚不能把“所有 Swift 1411 个断言逐一等价移植”写成结论。
 Windows/Linux 原生运行、设备热插拔/系统休眠、系统媒体面板、桌面透明合成，以及
 压缩格式的整专辑衔接矩阵仍须后续平台与专项取证。
-本机最终 Debug、Release、ASan+UBSan 和打包 app 全量各为 862 PASS / 0 FAIL / 0 SKIP；
-CTest 双构型各 41/41。启动恢复另覆盖异步让出事件循环、恢复期间不存半库和过期代际拒交付。
+2026-11-20 的 macOS arm64 电台与绘制修复后，Debug、Release、ASan+UBSan 和打包 app 全量各为 **862 PASS / 0 FAIL / 0 SKIP**。此前审查修复阶段的 CTest 在 Debug、Release 各通过 **41/41**。启动恢复另覆盖异步让出事件循环、恢复期间不存半库和过期代际拒交付。
 完整结果及 ASan 首轮异常记录见 [review-fixes.md](review-fixes.md)；原审查保留在 [review.md](../review.md)。

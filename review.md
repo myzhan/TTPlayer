@@ -4,7 +4,7 @@
 >
 > 本文保留为修复前的审查快照。修复实现、验证结果和未关闭的验收边界见 [docs/review-fixes.md](docs/review-fixes.md)，测试对应关系见 [docs/qt-selftest-mapping.md](docs/qt-selftest-mapping.md)。不要把下文旧复现结果当作当前版本结果。
 
-日期：2026-11-20。参考基线：`c66a60a` 的 Swift 行为，源码现位于 `legacy/Sources/TTPlayer/`；被审对象为当前未提交的 Qt working tree。第一轮记录保存在 [docs/review-2026-11-19.md](docs/review-2026-11-19.md)。
+日期：2026-11-20。参考基线：`c66a60a` 的 Swift 行为，源码现位于 `legacy/Sources/TTPlayer/`；被审对象为 2026-11-20 审查时尚未提交的 Qt 工作树。文中外观对照使用 [Swift 基线截图](https://github.com/myzhan/TTPlayer/tree/c66a60a42e7e809167419fe493d90a2d91d87f25/docs/screenshots)。第一轮记录保存在 [docs/review-2026-11-19.md](docs/review-2026-11-19.md)。
 
 **结论：重写补齐了不少结构和界面，但仍不满足 1:1 功能与稳定性交付。现有自检全绿，仍能复现拖拽重排崩溃和 seek 接受旧位置 PCM。应先修这些正确性问题，再补无缝、电台、媒体库和系统整合。**
 

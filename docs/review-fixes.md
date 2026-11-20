@@ -2,7 +2,7 @@
 
 对应 [第二轮 review](../review.md) 的 B01～B27，以及其关联的第一轮问题。下表记录 Qt 实现和对应的回归入口。
 
-用户已明确要求保留既有深色 Qt 界面，**本轮不修改任何样式**。B27 的蓝灰复刻建议作废；Swift 只用于功能与测试对照。原 Qt 配色、字体、统一 alpha 和紧凑布局已恢复，基线见 [approved-dark-style.json](review-evidence/approved-dark-style.json) 与 `screenshots/qt-dark-*.png`。
+用户已明确要求保留既有深色 Qt 界面，**本轮不修改任何样式**。B27 的蓝灰复刻建议作废；Swift 只用于功能与测试对照。原 Qt 配色、字体、统一 alpha 和紧凑布局已恢复，基线见 [approved-dark-style.json](review-evidence/approved-dark-style.json) 及获确认时的[主面板](screenshots/qt-dark-main.png)、[播放列表](screenshots/qt-dark-playlist.png)和[均衡器](screenshots/qt-dark-equalizer.png)。当前打包版的八张截图与拍摄条件见[界面截图说明](screenshots/README.md)。
 
 ## 实现与对应回归
 
@@ -44,13 +44,15 @@
 
 ## 电台缓冲与前台播放 CPU
 
-电台按输出采样率保留最多 12 秒 PCM，起播和耗尽后先积累 2 秒。不可定位的直播流切换采样率时直接配置重采样器。CoreAudio 回归覆盖了 44.1 kHz 电台在 48 kHz 设备上播放。
+网络层最多缓存 4 MiB 压缩数据，输出层按设备采样率保留最多 12 秒 PCM。起播和耗尽后先积累 2 秒；遇到流结束则直接播完现存尾段。不可定位的直播流切换采样率时直接配置重采样器。CoreAudio 回归覆盖了 44.1 kHz 电台在 48 kHz 设备上播放。
 
 频谱和电平表共用刷新时钟，静态窗壳复用底图。相同测试流、窗口全程可见、实际每秒绘制约 25 帧时，30 秒平均 CPU 从 16.6% 降至 10.1%。更新后的 macOS Debug、Release、ASan+UBSan 和打包版全量自检各 **862 PASS / 0 FAIL / 0 SKIP**。
 
+复测 CPU 时应使用同一打包构型、直播输入、输出设备和窗口可见状态，等播放稳定后记录采样时长、平均 CPU 及实际绘制帧率。隐藏窗口会停用频谱分析与绘制，起播阶段还包含开流与缓冲开销；单次活动监视器读数不宜作为前后台或不同版本的平均值。
+
 ## 验证口径与未完成边界
 
-修复前 Qt 为 221 PASS。第二轮审查修复后，Debug、Release、ASan+UBSan 及部署后 app 全量各 **852 PASS / 0 FAIL / 0 SKIP**，Debug/Release CTest 各 **41/41**。日志分别位于 `/tmp/tt-final-debug`、`/tmp/tt-final-release`、`/tmp/tt-final-asan-repeat`、`/tmp/tt-final-packaged`，各目录含 `run.json` 与 `selftest.log`。产品双构型编译 0 warning / 0 error，签名严格校验、Info.plist 和 diff 空白检查通过。
+修复前 Qt 为 221 PASS。第二轮审查修复后，Debug、Release、ASan+UBSan 及部署后 app 全量各 **852 PASS / 0 FAIL / 0 SKIP**，Debug/Release CTest 各 **41/41**。该阶段的本机临时报告目录为 `/tmp/tt-final-debug`、`/tmp/tt-final-release`、`/tmp/tt-final-asan-repeat`、`/tmp/tt-final-packaged`，各目录含 `run.json` 与 `selftest.log`。产品双构型编译 0 warning / 0 error，签名严格校验、Info.plist 和 diff 空白检查通过。
 
 该轮 app 的 CoreAudio DEVICE/GAPLESS/SCENE/GAIN 为 **174 PASS / 0 FAIL**；普通启动路径 30 次 **0 崩溃、30 次进入播放**，复制真实 profile 到临时目录的无输入启动也正常退出，真实用户档 SHA-256 守卫未变化。该轮打包的二进制 SHA-256 为 `74baf0026df74ebb1f6c2b0ee1157e97d75c7bb81f18de67af63719a605c0589`。
 

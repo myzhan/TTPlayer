@@ -41,7 +41,19 @@ Linux 依赖 Qt6 Widgets/Network/Core5Compat/Concurrent/DBus、SDL2、libarchive
 运行 `bash scripts/build_ffmpeg_linux.sh`。Windows 使用 MSVC 2022、Qt msvc2022_64、
 vcpkg x64-windows 的 SDL2/libarchive/zlib；初始化 MSVC developer 环境后，
 在继承该环境的 MSYS shell 中运行 `scripts/build_ffmpeg_msvc.sh`，再由 CMake 构建。
-不要混链 MSVC 与 MinGW 的 C++ 库。具体矩阵见 `.github/workflows/qt-ci.yml`。
+不要混链 MSVC 与 MinGW 的 C++ 库。具体的依赖版本、生成器和安装步骤见 [Qt CI 配置](.github/workflows/qt-ci.yml)。
+
+### 运行当前 Qt 版
+
+macOS 和 Linux 的普通单构型构建生成 `build/ttplayer` 和 `build-release/ttplayer`。Windows 使用 Visual Studio 多构型生成器时，可执行文件位于构建目录的 `Debug` 或 `Release` 子目录。可先运行 `--version` 确认输出包含 Qt 版本和架构。macOS 打包与启动使用：
+
+```sh
+python3 scripts/package.py
+dist/ttplayer.app/Contents/MacOS/ttplayer --version
+open dist/ttplayer.app
+```
+
+打包目录是 `dist/`，Swift 的 `legacy/build_app.sh` 用于历史参考实现。更新 README 配图前，请按[界面截图说明](docs/screenshots/README.md)隔离存档、准备示例曲库并核对截图内容。
 
 ## 验证入口
 
