@@ -1,9 +1,9 @@
 #include "MediaSession.h"
-#include "core/PlayerController.h"
+#include "playback/PlayerController.h"
 #include "ui/MainWindow.h"
 #include <QApplication>
 #include <QTemporaryDir>
-#include "models/CoverArt.h"
+#include "media/CoverArt.h"
 #include <QDBusAbstractAdaptor>
 #include <QDBusConnection>
 #include <QDBusMessage>

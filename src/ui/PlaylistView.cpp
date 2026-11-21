@@ -3,7 +3,7 @@
 #include <QFileInfo>
 #include "Theme.h"
 #include "Painter.h"
-#include "core/Collections.h"
+#include "library/Collections.h"
 #include "models/UserPlaylist.h"
 
 #include <QPainter>

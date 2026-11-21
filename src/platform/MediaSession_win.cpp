@@ -1,11 +1,11 @@
 #include "MediaSession.h"
-#include "core/PlayerController.h"
+#include "playback/PlayerController.h"
 #include "ui/MainWindow.h"
 #include <windows.h>
 #include <QApplication>
 #include <QTemporaryDir>
 #include <QPointer>
-#include "models/CoverArt.h"
+#include "media/CoverArt.h"
 #include <winrt/Windows.Storage.h>
 #include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.Foundation.h>

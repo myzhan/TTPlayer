@@ -3,8 +3,8 @@
 // 歌词窗（滚动显示，自包含版）：监听控制器位置回显，
 // 用同名 .lrc 查当前行，居中高亮、上下渐隐。完整的时间轴校准/整盘 CUE 偏移属后续。
 
-#include "core/PlayerController.h"
-#include "models/Lyric.h"
+#include "playback/PlayerController.h"
+#include "media/Lyric.h"
 #include "SkinWindow.h"
 
 #include <QWidget>

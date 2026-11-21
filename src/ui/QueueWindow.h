@@ -4,7 +4,7 @@
 // 下面是待播条目表——拖动调整次序、多选「移除」、「清空待播」、双击某条直接播它。
 // 面板只读 PlayQueue.pending()、写只经 PlayerController 的队列 API，绝不自己挪游标。
 
-#include "core/PlayerController.h"
+#include "playback/PlayerController.h"
 #include "SkinWindow.h"
 
 #include <QListWidget>

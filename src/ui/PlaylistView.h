@@ -4,7 +4,7 @@
 // 「序号. 艺术家 - 标题」+「时长」，当前行前面画 ▶ 并用亮蓝高亮。
 // 只管高亮与选中，不负责推进（PlayQueue 是唯一真相，三层约束）。
 
-#include "core/PlayerController.h"
+#include "playback/PlayerController.h"
 #include "models/Track.h"
 
 #include <QAbstractScrollArea>

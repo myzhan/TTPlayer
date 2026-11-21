@@ -1,5 +1,5 @@
 #include "LibraryStore.h"
-#include "decoder/FFmpeg.h"
+#include "media/FFmpeg.h"
 
 #include <QCoreApplication>
 #include <QDateTime>

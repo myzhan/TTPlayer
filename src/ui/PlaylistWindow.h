@@ -9,8 +9,8 @@
 // 搜索命中只是临时把控制器列表换成命中表（pitfall #13）——清空关键字即从
 // Collections.currentTracks() 还原，不依赖控制器自己「记得」原列表。
 
-#include "core/PlayerController.h"
-#include "core/Collections.h"
+#include "playback/PlayerController.h"
+#include "library/Collections.h"
 #include "SkinWindow.h"
 #include "PlaylistView.h"
 #include <optional>

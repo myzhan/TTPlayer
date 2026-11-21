@@ -7,7 +7,7 @@
 // 加密条目拒收，seek 走「重开+丢弃到偏移」（ABI 稳定的
 // libarchive 子集只做顺序读，见 src/clibarchive/include/shim.h）。
 
-#include "decoder/Decoder.h"
+#include "Decoder.h"
 
 #include <QList>
 #include <QString>

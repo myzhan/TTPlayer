@@ -1,5 +1,5 @@
 #include "CoverArt.h"
-#include "decoder/FFmpeg.h"
+#include "FFmpeg.h"
 
 #include <QCryptographicHash>
 #include <QDir>

@@ -1,5 +1,5 @@
 #include "PlayerController.h"
-#include "decoder/Archive.h"
+#include "media/Archive.h"
 #include "audio/RadioStream.h"
 #include <QPointer>
 #include <QApplication>

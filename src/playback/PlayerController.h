@@ -13,10 +13,10 @@
 
 #include "models/PlayQueue.h"
 #include "models/ReplayGain.h"
-#include "models/Lyric.h"
+#include "media/Lyric.h"
 #include "audio/AudioEngine.h"
 #include "audio/RadioQuality.h"
-#include "core/Clock.h"
+#include "Clock.h"
 #include <QElapsedTimer>
 
 #include <QObject>

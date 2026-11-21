@@ -4,9 +4,9 @@
 #include "SkinWidgets.h"
 #include "Painter.h"
 #include "Theme.h"
-#include "models/GlobalSearch.h"
-#include "models/Importer.h"
-#include "models/PlaylistM3U.h"
+#include "library/GlobalSearch.h"
+#include "library/Importer.h"
+#include "media/PlaylistM3U.h"
 #include "models/TrackFilter.h"
 
 #include <QHBoxLayout>

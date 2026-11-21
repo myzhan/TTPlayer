@@ -1,5 +1,5 @@
 #include "CoverWindow.h"
-#include "models/CoverArt.h"
+#include "media/CoverArt.h"
 #include "Theme.h"
 #include "Painter.h"
 

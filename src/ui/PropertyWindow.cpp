@@ -1,6 +1,6 @@
 #include "PropertyWindow.h"
-#include "models/CoverArt.h"
-#include "core/PlayerController.h"
+#include "media/CoverArt.h"
+#include "playback/PlayerController.h"
 #include "Theme.h"
 #include "SkinParts.h"
 

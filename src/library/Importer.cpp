@@ -1,8 +1,9 @@
 #include "Importer.h"
-#include "PlaylistM3U.h"
-#include "core/Collections.h"
-#include "decoder/Archive.h"
-#include "decoder/Decoder.h"
+
+#include "Collections.h"
+#include "media/Archive.h"
+#include "media/Decoder.h"
+#include "media/PlaylistM3U.h"
 
 void Importer::probe(Track &t, std::shared_ptr<std::atomic<bool>> cancel) {
     if (t.isNull() || t.isRadio()) return;

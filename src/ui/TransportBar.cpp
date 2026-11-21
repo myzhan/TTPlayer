@@ -1,6 +1,6 @@
 #include "TransportBar.h"
-#include "ui/Painter.h"
-#include "ui/Theme.h"
+#include "Painter.h"
+#include "Theme.h"
 
 #include <QHBoxLayout>
 #include <QPainter>

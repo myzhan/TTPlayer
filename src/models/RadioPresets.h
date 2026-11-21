@@ -6,7 +6,7 @@
 // m3u 导进来的地址共用同一个校验与同一个身份写法（电台的 identityKey 就是完整地址），
 // 内置的东西没有资格绕过它单开一套。归一化不出来的内置地址就是代码里写错了。
 
-#include "models/Track.h"
+#include "Track.h"
 
 #include <QList>
 #include <QString>

@@ -4,7 +4,7 @@
 // id 是歌单的稳定身份：改名、增删条目、拖动排序都不动它，所以左栏那一行、存档记住的
 // 当前组、右键「加入歌单」指的都是同一张歌单。条目只存 Track.identityKey，对象按需还原。
 
-#include "models/NameRules.h"
+#include "NameRules.h"
 
 #include <QSet>
 #include <QString>

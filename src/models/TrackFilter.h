@@ -5,7 +5,7 @@
 // 关键字对 标题/艺术家/专辑/文件名 任一命中（大小写不敏感），
 // 格式档空集=不限。
 
-#include "models/Track.h"
+#include "Track.h"
 
 #include <QList>
 #include <QSet>

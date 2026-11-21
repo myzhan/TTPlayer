@@ -1,5 +1,5 @@
 #include "CrashHandler.h"
-#include "models/LibraryStore.h"
+#include "library/LibraryStore.h"
 
 #include <cstring>
 #include <ctime>

@@ -1,7 +1,7 @@
 #include "RadioStations.h"
 
-#include "models/NameRules.h"
-#include "models/RadioPresets.h"
+#include "NameRules.h"
+#include "RadioPresets.h"
 
 #include <QUuid>
 

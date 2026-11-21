@@ -1,6 +1,6 @@
 #include "RadioStream.h"
 
-#include "decoder/FFmpeg.h"
+#include "media/FFmpeg.h"
 
 #include <QByteArray>
 #include <QNetworkAccessManager>

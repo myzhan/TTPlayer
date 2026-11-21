@@ -4,7 +4,7 @@
 // 共享引用语义：元数据异步解析后要能让所有持有者看到（QSharedData 式手动 impl）。
 // CUE 分轨 / 归档条目 / ReplayGain 等字段随对应模块移植再补齐。
 
-#include "models/ReplayGain.h"
+#include "ReplayGain.h"
 
 #include <QString>
 #include <QUrl>

@@ -1,5 +1,5 @@
 #include "Archive.h"
-#include "decoder/FFmpeg.h"
+#include "FFmpeg.h"
 
 extern "C" {
 #include "shim.h" // src/clibarchive/include —— libarchive 稳定子集声明

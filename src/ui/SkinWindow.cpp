@@ -3,7 +3,7 @@
 #include "Theme.h"
 #include "SkinParts.h"
 #include "Painter.h"
-#include "Application.h"
+#include "app/Application.h"
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>

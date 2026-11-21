@@ -1,7 +1,7 @@
 #include "MediaSession.h"
-#include "core/PlayerController.h"
+#include "playback/PlayerController.h"
 #include "ui/MainWindow.h"
-#include "models/CoverArt.h"
+#include "media/CoverArt.h"
 #include <QBuffer>
 #include <QApplication>
 #include <QPointer>

@@ -2,13 +2,13 @@
 
 // 「格式转换」对话框：把列表里选中的本地曲目转成别的封装 / 编码。
 //
-// 转换走内嵌 libav*（decoder/AudioEncoder），不需要外部 ffmpeg 命令行：
+// 转换走内嵌 libav*（media/AudioEncoder），不需要外部 ffmpeg 命令行：
 // 解码复用 Decoder，编码用 FFmpeg 自带 AAC / ALAC / FLAC / PCM 编码器。
 // 本窗负责挑格式与音频参数（码率 / 压缩档 / 采样率 / 声道 / 音量）、选输出目录、
 // 在后台线程按首顺序转换并显示总进度；取消/关窗会收掉工作线程。
 // 输出名沿用源文件主名，同名已存在自动加序号——绝不覆盖原文件。
 
-#include "core/AudioConvert.h"
+#include "media/AudioConvert.h"
 #include "models/Track.h"
 #include "SkinWindow.h"
 

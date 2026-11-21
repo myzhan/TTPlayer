@@ -3,7 +3,7 @@
 #include "SkinParts.h"
 #include "SkinWidgets.h"
 #include "Theme.h"
-#include "decoder/AudioEncoder.h"
+#include "media/AudioEncoder.h"
 
 #include <QCloseEvent>
 #include <QDir>

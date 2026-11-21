@@ -3,8 +3,8 @@
 // 传输键带（浅玻璃 SegmentedGlassBar）：改用 SkinParts 的 TTButton + Skin::drawGlyph，
 // 与主面板其它按钮共用同一套玻璃砖渲染（bodyAlpha 走 buttonAlpha）。
 
-#include "core/PlayerController.h"
-#include "ui/SkinParts.h"
+#include "playback/PlayerController.h"
+#include "SkinParts.h"
 
 #include <QWidget>
 

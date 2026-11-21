@@ -12,7 +12,7 @@
 // 不可定位（live 流），seekable()=false；电台不做时长/进度、也不做 ReplayGain。
 // 沿用「自定义 AVIO 喂同一条 FFmpegDecoder」的思路（同归档通路）。
 
-#include "decoder/Decoder.h"
+#include "media/Decoder.h"
 
 #include <QString>
 #include <QUrl>

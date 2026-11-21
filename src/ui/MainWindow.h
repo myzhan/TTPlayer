@@ -5,8 +5,8 @@
 // 频谱 + 底部条[音量·静音·传输带·列表/均衡器/歌词]) → 独立进度行 ControlBar(18)。
 // 播放列表已挪到独立 PlaylistWindow（列表/均衡器/歌词是各自浮窗，SkinDock 三窗排布后续补）。
 
-#include "core/PlayerController.h"
-#include "core/Collections.h"
+#include "playback/PlayerController.h"
+#include "library/Collections.h"
 #include "audio/AudioEngine.h"
 
 #include <QWidget>

@@ -13,9 +13,9 @@
 //     自己丢弃在途样本——UI 不 join 网络线程，因此断流时 stop 也是秒回。
 //   - m_gen 代际：producer 每次交付前核对解码器身份，旧曲的 EOF/样本不能污染新曲。
 
-#include "decoder/Decoder.h"
-#include "audio/EQ.h"
-#include "audio/Spectrum.h"
+#include "media/Decoder.h"
+#include "EQ.h"
+#include "Spectrum.h"
 
 #include <QPointer>
 #include <QString>

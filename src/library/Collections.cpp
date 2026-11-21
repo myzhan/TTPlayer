@@ -1,7 +1,7 @@
 #include "Collections.h"
 
-#include "models/CueSheet.h"
-#include "decoder/Archive.h"
+#include "media/CueSheet.h"
+#include "media/Archive.h"
 
 #include <QFileInfo>
 #include <QSet>

@@ -1,7 +1,7 @@
 #include "RadioHarness.h"
 
 #include "audio/AudioEngine.h"
-#include "core/PlayerController.h"
+#include "playback/PlayerController.h"
 #include "models/Track.h"
 
 #include <QByteArray>

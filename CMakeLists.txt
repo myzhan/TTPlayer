@@ -255,35 +255,43 @@ foreach(_codec vorbisenc vorbis ogg opus mp3lame)
 endforeach()
 
 qt_add_executable(ttplayer
-  src/main.cpp
-  src/decoder/FFmpeg.cpp
-  src/decoder/Decoder.cpp
-  src/decoder/Archive.cpp
-  src/decoder/AudioEncoder.cpp
+  # 进程外壳：入口 / 崩溃落盘 / 单实例
+  src/app/main.cpp
+  src/app/CrashHandler.cpp
+  # 纯值对象
+  src/models/Track.cpp
+  src/models/ReplayGain.cpp
+  src/models/TrackFilter.cpp
+  src/models/UserPlaylist.cpp
+  src/models/RadioPresets.cpp
+  src/models/RadioStations.cpp
+  src/models/PlayQueue.cpp
+  # 媒体字节层：解码 / 归档 / 编码 / CUE·歌词·封面·歌单解析
+  src/media/FFmpeg.cpp
+  src/media/Decoder.cpp
+  src/media/Archive.cpp
+  src/media/AudioEncoder.cpp
+  src/media/AudioConvert.cpp
+  src/media/CueSheet.cpp
+  src/media/Lyric.cpp
+  src/media/CoverArt.cpp
+  src/media/PlaylistM3U.cpp
+  # 输出与 DSP：引擎 / EQ / 频谱 / 电台流
   src/audio/AudioEngine.cpp
   src/audio/EQ.cpp
   src/audio/Spectrum.cpp
   src/audio/RadioStream.cpp
-  src/models/Track.cpp
-  src/models/Importer.cpp
-  src/models/Lyric.cpp
-  src/models/CoverArt.cpp
-  src/models/TrackFilter.cpp
-  src/models/UserPlaylist.cpp
-  src/models/GlobalSearch.cpp
-  src/models/PlaylistM3U.cpp
-  src/models/CueSheet.cpp
-  src/models/ReplayGain.cpp
-  src/models/LibraryStore.cpp
-  src/models/RadioPresets.cpp
-  src/models/RadioStations.cpp
-  src/models/PlayQueue.cpp
-  src/core/PlayerController.cpp
-  src/core/Collections.cpp
-  src/core/CrashHandler.cpp
-  src/core/AudioConvert.cpp
+  # 曲库层：页装配 / 存档 / 导入 / 搜索
+  src/library/Collections.cpp
+  src/library/LibraryStore.cpp
+  src/library/Importer.cpp
+  src/library/GlobalSearch.cpp
+  # 播放控制
+  src/playback/PlayerController.cpp
+  # 自检探针
   src/testing/RadioHarness.cpp
   src/testing/Regression.cpp
+  # 界面
   src/ui/Theme.cpp
   src/ui/AppIcon.cpp
   src/ui/Painter.cpp

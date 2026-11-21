@@ -6,8 +6,8 @@
 //
 // 约定 viewId：@all=媒体库/当前，@fav=收藏，其余=某张自建歌单的 id。
 
-#include "models/GlobalSearch.h"
-#include "models/LibraryStore.h"
+#include "GlobalSearch.h"
+#include "LibraryStore.h"
 #include "models/RadioStations.h"
 #include "models/Track.h"
 #include "models/UserPlaylist.h"

@@ -15,6 +15,24 @@
   打包用 `build/package/` 与 `build/dist/`。不要另开 `build-xxx` 目录。
 - 自检素材只现场生成到临时目录，不入仓。
 
+`src/` 按依赖方向分层，上层可以引用下层，反过来不行：
+
+| 目录 | 职责 |
+| --- | --- |
+| `app/` | 进程外壳：`main.cpp`、`PlayerApplication`（文件打开事件）、`CrashHandler`、`InstanceGuard` |
+| `models/` | 纯值对象：`Track`、`ReplayGain`、`PlayQueue`、`UserPlaylist`、`RadioStations` 等，不做 IO |
+| `media/` | 单个媒体文件的字节层：FFmpeg / `Decoder` / `Archive` / 编码器、CUE·歌词·封面·m3u 解析、格式转换 |
+| `audio/` | 输出与 DSP：`AudioEngine`、EQ、频谱、电台流 |
+| `library/` | 曲目集合层：`Collections` 页装配、`LibraryStore` 存档、`Importer`、`GlobalSearch` |
+| `playback/` | 播放控制：`PlayerController`（换曲、无缝、seek）与单调时钟 `Clock` |
+| `ui/` | Qt Widgets 窗口、皮肤、主题、图标；只提交意图，不做阻塞 IO |
+| `platform/` | 系统媒体会话（macOS Now Playing / Linux MPRIS / Windows SMTC） |
+| `testing/` | 自检探针与套件注册表 `suites.txt` |
+| `clibarchive/include/` | libarchive 稳定子集声明，不是产品模块 |
+
+依赖方向：`models` → `media` → `audio` → `library` → `playback` → `ui`/`platform`，`app` 在最外层（入口、崩溃、单实例）。
+唯一例外是 `ui/SkinWindow.cpp` 引 `app/Application.h`，用于把拖入的文件转给外壳打开。
+
 ```sh
 git clone <repo> && cd TTPlayer
 git submodule update --init --recursive --depth 1
@@ -207,7 +225,7 @@ TTPLAYER_QT_LYRIC_PROBE=1 \
 ### 7.2 调试器
 
 - macOS：`lldb -- ./build/ttplayer`；断点可打在 `src/audio/AudioEngine.cpp`、
-  `src/core/PlayerController.cpp`、`src/testing/Regression.cpp`。
+  `src/playback/PlayerController.cpp`、`src/testing/Regression.cpp`。
 - Linux：`gdb --args ./build/ttplayer`。
 - Windows：VS 打开 `build\TTPlayer.sln`，或 `devenv /debugexe build\Debug\ttplayer.exe`。
 - 线程相关 bug 先看 AGENTS.md 的「分层和生命周期」：开流/扫描在后台，设备回调只消费 PCM 环。

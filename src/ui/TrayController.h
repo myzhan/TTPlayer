@@ -4,7 +4,7 @@
 // 音频继续，托盘菜单提供 显示/隐藏 · 播放/暂停 · 上一首/下一首 · 停止 · 退出。
 // 平台没有托盘（部分 Linux 桌面）时静默降级，不影响主界面。
 
-#include "core/PlayerController.h"
+#include "playback/PlayerController.h"
 
 #include <QObject>
 #include <QPointer>

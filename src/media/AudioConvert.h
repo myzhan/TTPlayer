@@ -2,13 +2,13 @@
 
 // 格式转换的「格式表 + 参数」与 codec 层目标的翻译（唯一真相）。
 //
-// 转换走内嵌 libav*（见 decoder/AudioEncoder）：
+// 转换走内嵌 libav*（见 media/AudioEncoder）：
 //   有损 AAC / MP3 / OGG Vorbis / Opus；无损 ALAC / FLAC / PCM(WAV)。
 // MP3 / Vorbis / Opus 的编码器来自 3rd/ 下 vendored 的 libmp3lame / libvorbis /
 // libopus（静态链进同一份 libavcodec，见 scripts/codec_deps.sh），所以格式表里
 // 能用它们；encoderName 显式钉死具体实现，不靠 codec id 碰运气。
 
-#include "decoder/AudioEncoder.h"
+#include "AudioEncoder.h"
 
 #include <QList>
 #include <QString>

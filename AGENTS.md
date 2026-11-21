@@ -149,6 +149,10 @@ python3 scripts/package.py               # 只生成本地 build/dist，不发�
 
 ## 分层和生命周期
 
+- `src/` 按依赖单向分层，不得反向引用：`models`（纯值对象）→ `media`（解码/归档/格式解析）→
+  `audio`（输出/DSP）→ `library`（曲库装配/存档/导入）→ `playback`（播放控制）→ `ui`/`platform`；
+  `app`（入口/崩溃/单实例）在最外层，只向下引。唯一的反向边是 `ui/SkinWindow.cpp` → `app/Application.h`
+  （把拖入的文件转给外壳）。新建文件先定层再定目录，职责表见 development.md 第 1 节。
 - 所有解码走 Decoder / FFmpeg，所有归档走 libarchive 自定义 AVIO；归档不落地解压。
 - 本地、CUE、归档、电台统一 resolver/importer，稳定身份不得互相截断或重造。
 - Qt 线程只提交用户意图和 UI 更新；开流、扫描、预取放后台。结果绑定 generation 与取消标志。

@@ -1,10 +1,10 @@
 #include "SettingsWindow.h"
 #include "MainWindow.h"
-#include "core/PlayerController.h"
+#include "playback/PlayerController.h"
 #include "audio/AudioEngine.h"
 #include "models/PlayQueue.h"
 #include "models/ReplayGain.h"
-#include "ui/Theme.h"
+#include "Theme.h"
 #include "SkinWidgets.h"
 #include "SkinParts.h"
 
