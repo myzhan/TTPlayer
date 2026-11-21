@@ -27,7 +27,15 @@ jobs:
           python-version: '3.12'
       - name: Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y qt6-base-dev qt6-5compat-dev libsdl2-dev libarchive-dev zlib1g-dev ffmpeg nasm yasm
+        run: |
+          # 系统 Qt 只用来提供 GL/xkb/dbus 等依赖库；实际链接下一步装的 6.8.3。
+          sudo apt-get update && sudo apt-get install -y qt6-base-dev qt6-5compat-dev libsdl2-dev libarchive-dev zlib1g-dev ffmpeg nasm yasm
+      - name: Linux Qt 6.8.3
+        if: runner.os == 'Linux'
+        run: |
+          python -m pip install aqtinstall
+          python -m aqt install-qt linux desktop 6.8.3 gcc_64 -m qt5compat -O "$RUNNER_TEMP/Qt"
+          echo "CMAKE_PREFIX_PATH=$RUNNER_TEMP/Qt/6.8.3/gcc_64" >> "$GITHUB_ENV"
       - name: macOS dependencies
         if: runner.os == 'macOS'
         run: |
