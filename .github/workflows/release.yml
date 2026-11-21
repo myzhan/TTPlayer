@@ -152,7 +152,7 @@ jobs:
   macos:
     # 产物：TTPlayer-<ver>-macos-arm64.dmg（package.py 生成并 adhoc 签名的 ttplayer.app）
     name: macOS arm64
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 75
     steps:
       - name: Checkout
