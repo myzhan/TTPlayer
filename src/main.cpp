@@ -229,12 +229,12 @@ static int runDockProbe(QTextStream &out) {
     };
 
     // 1) 把列表拖离停靠槽很远 → 停下后脱离浮动，且保留拖到的位置（不是一直吸附）
-    const QPoint far = pl.frameGeometry().topLeft() + QPoint(500, 400);
-    pl.move(far);
+    const QPoint detachedPosition = pl.frameGeometry().topLeft() + QPoint(500, 400);
+    pl.move(detachedPosition);
     QCoreApplication::processEvents();
     spin(150);
     check("detach_when_far", !dock.isPanelDocked(SkinDock::Playlist));
-    check("float_keeps_position", pl.frameGeometry().topLeft() == far);
+    check("float_keeps_position", pl.frameGeometry().topLeft() == detachedPosition);
     // 列表脱离后，仍吸附的均衡器应补位到主窗正下方
     check("reflow_after_detach", eq.frameGeometry().left() == main.frameGeometry().left() &&
                                      eq.frameGeometry().top() >= main.frameGeometry().bottom());
@@ -1355,6 +1355,7 @@ static int runSaveProbe(QTextStream &out) {
 // 跨平台播放器入口。命令行可给文件/目录直接载入（自检与"双击即播"用）：
 //   ttplayer testlib/demo01.wav
 int main(int argc, char *argv[]) {
+    SDL_SetMainReady(); // 自管入口时，必须在任何 SDL_Init 前通知 SDL。
     // 三平台视觉一致：关掉所有原生平台对话框（文件/消息/颜色/字体），改用 Qt 自带实现。
     QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
     PlayerApplication app(argc, argv);

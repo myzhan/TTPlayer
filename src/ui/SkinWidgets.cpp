@@ -223,9 +223,9 @@ SkinComboBox::SkinComboBox(QWidget *parent) : QWidget(parent) {
     connect(&GlassNotifier::instance(), &GlassNotifier::changed, this, [this] { update(); });
 }
 
-void SkinComboBox::addItem(const QString &text, const QVariant &data) {
+void SkinComboBox::addItem(const QString &text, const QVariant &itemData) {
     m_texts << text;
-    m_datas << data;
+    m_datas << itemData;
     if (m_current < 0)
         setCurrentIndex(0);
     else
@@ -481,9 +481,9 @@ void SkinListView::addItem(const QString &text) {
     m_datas << QVariant();
     update();
 }
-void SkinListView::addItem(const QString &text, const QVariant &data) {
+void SkinListView::addItem(const QString &text, const QVariant &itemData) {
     m_items << text;
-    m_datas << data;
+    m_datas << itemData;
     update();
 }
 void SkinListView::removeRow(int row) {

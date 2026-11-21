@@ -82,7 +82,7 @@ class SkinComboBox : public QWidget {
     Q_OBJECT
 public:
     explicit SkinComboBox(QWidget *parent = nullptr);
-    void addItem(const QString &text, const QVariant &data = QVariant());
+    void addItem(const QString &text, const QVariant &itemData = QVariant());
     int count() const { return m_texts.size(); }
     int currentIndex() const { return m_current; }
     void setCurrentIndex(int i);
@@ -175,7 +175,7 @@ public:
     explicit SkinListView(QWidget *parent = nullptr);
     void setItems(const QStringList &items);
     void addItem(const QString &text);
-    void addItem(const QString &text, const QVariant &data);
+    void addItem(const QString &text, const QVariant &itemData);
     void removeRow(int row);
     void clear();
     int count() const { return m_items.size(); }

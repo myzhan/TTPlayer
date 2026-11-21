@@ -294,14 +294,14 @@ int runRadioLiveProbe(AudioEngine *engine, PlayerController &controller, QTextSt
         qint64 worstOpen = 0, worstStop = 0;
         bool openUnbounded = false, stopUnbounded = false;
         for (int i = 0; i < stress; ++i) {
-            Bounded o = runBounded(
+            Bounded openResult = runBounded(
                 [&] {
                     controller.setTracks({track});
                     controller.playRowAt(0);
                 },
                 2500);
-            worstOpen = std::max(worstOpen, o.ms);
-            if (!o.ok) openUnbounded = true;
+            worstOpen = std::max(worstOpen, openResult.ms);
+            if (!openResult.ok) openUnbounded = true;
             // 让后台开流有机会推进（起播/卡在 read），再立即 stop/切下一轮
             pump(mode == Mode::Stall ? 40 : 15);
             Bounded s = runBounded([&] { controller.stop(); }, 1500);

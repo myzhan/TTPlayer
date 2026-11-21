@@ -333,9 +333,9 @@ public:
                 std::fill_n(l, 128, 0.1f);
                 std::fill_n(r, 128, -0.1f);
                 engine->ringPush(l, r, 128);
-                float out[256];
-                engine->callback(out, 128);
-                check("gain_real_output", std::all_of(out, out + 256, [gain](float v) {
+                float samples[256];
+                engine->callback(samples, 128);
+                check("gain_real_output", std::all_of(samples, samples + 256, [gain](float v) {
                           return std::abs(std::abs(v) - 0.08f * gain) < 0.00001;
                       }));
             }
@@ -655,10 +655,10 @@ public:
             const QString url = Archive::entryUrl(dir.path() + "/专辑 #%.zip", "disc #/曲%.flac").toString();
             const QList<Track> source{a, Track(QUrl(url)), Track::fromRadio(QUrl("http://example.com/live?q=1"))};
             for (const QString &ext : QStringList{"m3u", "m3u8"}) {
-                const QString path = dir.path() + "/list." + ext;
-                check("list_export", PlaylistM3U::exportTracks(source, path));
+                const QString playlistPath = dir.path() + "/list." + ext;
+                check("list_export", PlaylistM3U::exportTracks(source, playlistPath));
                 PlaylistM3U::Imported imported;
-                check("list_import", PlaylistM3U::importFile(path, imported));
+                check("list_import", PlaylistM3U::importFile(playlistPath, imported));
                 check("list_roundtrip_identity",
                       imported.keys == QStringList{a.identityKey(), url, source.last().identityKey()});
             }
@@ -781,20 +781,20 @@ public:
             int containers = 0;
             for (const QString &name :
                  fixtures.entryList({"*.zip", "*.tar", "*.tar.gz", "*.tar.bz2", "*.7z"}, QDir::Files, QDir::Name)) {
-                const QString path = fixtures.filePath(name);
-                const auto entries = Archive::listAudioEntries(path);
+                const QString archivePath = fixtures.filePath(name);
+                const auto entries = Archive::listAudioEntries(archivePath);
                 if (name == "encrypted.zip") {
                     check("encrypted_archive_rejected", entries.isEmpty());
                     continue;
                 }
                 check("archive_entries", !entries.isEmpty());
                 for (const QString &entry : entries) {
-                    const QUrl url = Archive::entryUrl(path, entry);
-                    QString parsed, name;
-                    check("archive_URL_roundtrip",
-                          Archive::parseEntryUrl(url, parsed, name) && parsed == path && name == entry);
+                    const QUrl url = Archive::entryUrl(archivePath, entry);
+                    QString parsed, entryName;
+                    check("archive_URL_roundtrip", Archive::parseEntryUrl(url, parsed, entryName) &&
+                                                       parsed == archivePath && entryName == entry);
                     auto decoder =
-                        Decoder::openStream(std::make_shared<ArchiveEntrySource>(path, entry), url.toString());
+                        Decoder::openStream(std::make_shared<ArchiveEntrySource>(archivePath, entry), url.toString());
                     check("archive_true_decoder", bool(decoder));
                     if (decoder) {
                         float l[128], r[128], repeat[128], right[128];
