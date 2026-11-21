@@ -1,4 +1,4 @@
-# 提交后验证：Linux / macOS 的 Debug + Release 矩阵，以及 Windows 的 Debug + Release。
+# 提交后验证：Linux / macOS 的 Debug + Release 矩阵，以及共享 FFmpeg 产物的 Windows 双构型矩阵。
 # 只构建、跑全量自检并留存 artifacts，不发布产物；发布见 release.yml。
 name: CI
 on:
@@ -109,8 +109,59 @@ jobs:
           path: |
             build/ci/selftest
             build/dist
+  windows-ffmpeg:
+    name: Windows FFmpeg (MSVC x64)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          install: make nasm yasm pkgconf
+          path-type: inherit
+      - name: FFmpeg (frozen 9.0, MSVC ABI)
+        shell: msys2 {0}
+        run: |
+          echo "frozen FFmpeg source: $(cat 3rd/ffmpeg/RELEASE) @ $(git -C 3rd/ffmpeg rev-parse --short HEAD)"
+          # 默认编齐 Release /MD 与 Debug /MDd，外部编码库也各一套。
+          bash scripts/build_ffmpeg_msvc.sh
+      - name: Upload shared Windows dependencies
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-windows-msvc-dependencies
+          if-no-files-found: error
+          retention-days: 7
+          # 公共根目录是 3rd/；只交接安装产物，不传 .obj-*、CMakeCache 或绝对路径构建树。
+          path: |
+            3rd/ffmpeg-build/include
+            3rd/ffmpeg-build/lib
+            3rd/ffmpeg-build/debug/include
+            3rd/ffmpeg-build/debug/lib
+            3rd/codec-build/include
+            3rd/codec-build/lib
+            3rd/codec-build/debug/include
+            3rd/codec-build/debug/lib
+      - name: Upload Windows FFmpeg diagnostics
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ci-windows-ffmpeg-diagnostics
+          include-hidden-files: true
+          path: |
+            3rd/ffmpeg-build/.obj-msvc/ffbuild/config.log
+            3rd/ffmpeg-build/debug/.obj-msvc/ffbuild/config.log
+
   windows:
-    name: Windows x64
+    name: Windows x64 (${{ matrix.config }})
+    needs: windows-ffmpeg
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Debug, Release]
     runs-on: windows-2022
     timeout-minutes: 60
     steps:
@@ -121,65 +172,82 @@ jobs:
         with:
           python-version: '3.12'
       - uses: ilammy/msvc-dev-cmd@v1
-      - uses: msys2/setup-msys2@v2
+      - name: Download shared Windows dependencies
+        uses: actions/download-artifact@v4
         with:
-          msystem: MSYS
-          install: make nasm yasm pkgconf
-          path-type: inherit
+          name: ci-windows-msvc-dependencies
+          # 恢复到相同目录；两档各在独立 runner，不共享可写构建树。
+          path: 3rd
+      - name: Verify shared Windows dependencies
+        shell: pwsh
+        run: |
+          # CMake configure 会查两套库的公共 Release 根，即使本 job 只构建 Debug。
+          foreach ($suffix in @("", "/debug")) {
+            foreach ($library in @("avformat", "avcodec", "swresample", "avutil")) {
+              $path = "3rd/ffmpeg-build$suffix/lib/$library.lib"
+              if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "缺少共享 FFmpeg 库: $path" }
+            }
+            foreach ($library in @("vorbisenc", "vorbis", "ogg", "opus", "mp3lame")) {
+              $path = "3rd/codec-build$suffix/lib/$library.lib"
+              if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "缺少共享编码库: $path" }
+            }
+            $path = "3rd/ffmpeg-build$suffix/include/libavcodec/avcodec.h"
+            if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "缺少共享 FFmpeg 头文件: $path" }
+          }
       - name: Windows dependencies
         shell: pwsh
         run: |
           python -m pip install aqtinstall
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -m qt5compat -O "$env:RUNNER_TEMP/Qt"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           # SDL3 / libarchive / zlib / liblzma 全部由 3rd/ 子模块静态现编，不再装 vcpkg 包。
           echo "CMAKE_PREFIX_PATH=$env:RUNNER_TEMP/Qt/6.8.3/msvc2022_64" >> $env:GITHUB_ENV
           echo "$env:RUNNER_TEMP/Qt/6.8.3/msvc2022_64/bin" >> $env:GITHUB_PATH
           choco install ffmpeg -y --no-progress
-      - name: FFmpeg (frozen 9.0, MSVC ABI)
-        shell: msys2 {0}
-        run: |
-          echo "frozen FFmpeg source: $(cat 3rd/ffmpeg/RELEASE) @ $(git -C 3rd/ffmpeg rev-parse --short HEAD)"
-          ffmpeg -version | head -1
-          bash scripts/build_ffmpeg_msvc.sh
-      - name: Build, selftest and package (Debug + Release)
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ffmpeg -version | Select-Object -First 1
+      - name: Build, selftest and CTest (${{ matrix.config }})
         shell: pwsh
         run: |
-          # 同一个 build/ci 目录分别构建 Debug / Release，各自跑全量自检与 CTest；
-          # 最后只把 Release 安装成 build/dist 供 artifact 留存。
+          # 每个 runner 只构建一档，共享的 FFmpeg 不再编译。
+          $config = "${{ matrix.config }}"
           cmake -S . -B build/ci -G "Visual Studio 17 2022" -A x64
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          $dependencyPath = $env:PATH
-          $debugCrt = Join-Path $env:VCToolsRedistDir "debug_nonredist/x64/Microsoft.VC143.DebugCRT"
-          foreach ($config in @("Debug", "Release")) {
-            $env:PATH = if ($config -eq "Debug") { "$debugCrt;$env:WindowsSdkVerBinPath/x64;$dependencyPath" } else { $dependencyPath }
-            cmake --build build/ci --config $config -j 4
-            if ($LASTEXITCODE) { exit $LASTEXITCODE }
-            $env:TTPLAYER_BIN="build/ci/$config/ttplayer.exe"
-            $env:TTPLAYER_PROBE="build/ci/selftest-$config"
-            $env:QT_QPA_PLATFORM="offscreen"
-            $env:TTPLAYER_SILENT_OUTPUT="1"
-            $env:TTPLAYER_QT_STATE="$env:RUNNER_TEMP/ci-version-$config/state.json"
-            & $env:TTPLAYER_BIN --version
-            if ($LASTEXITCODE) {
-              $startupExit = $LASTEXITCODE
-              dumpbin /DEPENDENTS $env:TTPLAYER_BIN
-              exit $startupExit
-            }
-            python scripts/selftest.py all
-            if ($LASTEXITCODE) { exit $LASTEXITCODE }
-            ctest --test-dir build/ci -C $config --output-on-failure
-            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ($config -eq "Debug") {
+            $debugCrt = Join-Path $env:VCToolsRedistDir "debug_nonredist/x64/Microsoft.VC143.DebugCRT"
+            $env:PATH = "$debugCrt;$env:WindowsSdkVerBinPath/x64;$env:PATH"
           }
-          python scripts/package.py
+          cmake --build build/ci --config $config -j 4
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:TTPLAYER_BIN="build/ci/$config/ttplayer.exe"
+          $env:TTPLAYER_PROBE="build/ci/selftest-$config"
+          $env:QT_QPA_PLATFORM="offscreen"
+          $env:TTPLAYER_SILENT_OUTPUT="1"
+          $env:TTPLAYER_QT_STATE="$env:RUNNER_TEMP/ci-version-$config/state.json"
+          & $env:TTPLAYER_BIN --version
+          if ($LASTEXITCODE) {
+            $startupExit = $LASTEXITCODE
+            dumpbin /DEPENDENTS $env:TTPLAYER_BIN
+            exit $startupExit
+          }
+          python scripts/selftest.py all
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ctest --test-dir build/ci -C $config --output-on-failure
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Prepare distributable (Release)
+        if: matrix.config == 'Release'
+        shell: pwsh
+        run: |
+          # 直接部署刚通过自检的 Release，不另起 build/package 重编一遍。
+          cmake --install build/ci --config Release --prefix build/dist
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ci-windows-validation
+          name: ci-windows-${{ matrix.config }}-validation
           include-hidden-files: true
           path: |
             build/ci/selftest-*
-            3rd/ffmpeg-build/.obj-msvc/ffbuild/config.log
-            3rd/ffmpeg-build/debug/.obj-msvc/ffbuild/config.log
             build/dist
