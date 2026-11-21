@@ -2,7 +2,8 @@
 #include "FFmpeg.h"
 
 extern "C" {
-#include "shim.h" // src/clibarchive/include —— libarchive 稳定子集声明
+#include <archive.h>
+#include <archive_entry.h>
 }
 
 #include <QFileInfo>
@@ -32,7 +33,7 @@ bool nextEntry(struct archive *reader, struct archive_entry **entry) {
     *entry = nullptr;
     const int status = archive_read_next_header(reader, entry);
     // Windows 的当前 C locale 不能表示 PAX UTF-8 名称时，header 仍可用、但返回 WARN。
-    return *entry && (status == CLARCHIVE_OK || status == CLARCHIVE_WARN);
+    return *entry && (status == ARCHIVE_OK || status == ARCHIVE_WARN);
 }
 
 QString archiveEntryName(struct archive_entry *entry) {
@@ -88,7 +89,7 @@ QStringList listAudioEntries(const QString &archivePath) {
     if (!a) return out;
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
-    if (openArchive(a, archivePath) != CLARCHIVE_OK) {
+    if (openArchive(a, archivePath) != ARCHIVE_OK) {
         archive_read_free(a);
         return out;
     }
@@ -134,7 +135,7 @@ bool ArchiveEntrySource::openAt(int64_t skipBytes) {
     if (!a) return false;
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
-    if (openArchive(a, m_archivePath) != CLARCHIVE_OK) {
+    if (openArchive(a, m_archivePath) != ARCHIVE_OK) {
         archive_read_free(a);
         return false;
     }

@@ -28,7 +28,6 @@
 | `ui/` | Qt Widgets 窗口、皮肤、主题、图标；只提交意图，不做阻塞 IO |
 | `platform/` | 系统媒体会话（macOS Now Playing / Linux MPRIS / Windows SMTC） |
 | `testing/` | 自检探针与套件注册表 `suites.txt` |
-| `clibarchive/include/` | libarchive 稳定子集声明，不是产品模块 |
 
 依赖方向：`models` → `media` → `audio` → `library` → `playback` → `ui`/`platform`，`app` 在最外层（入口、崩溃、单实例）。
 唯一例外是 `ui/SkinWindow.cpp` 引 `app/Application.h`，用于把拖入的文件转给外壳打开。

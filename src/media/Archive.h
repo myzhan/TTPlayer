@@ -4,8 +4,7 @@
 // 把条目包成自定义 StreamSource 喂给同一条 FFmpegDecoder（与电台同模式）。
 // 条目 URL 一律用 file://<归档绝对路径>#archive-entry=<percentEncoded 条目名>。
 // 归档条目的约束：
-// 加密条目拒收，seek 走「重开+丢弃到偏移」（ABI 稳定的
-// libarchive 子集只做顺序读，见 src/clibarchive/include/shim.h）。
+// 加密条目拒收，seek 走「重开+丢弃到偏移」（归档只做顺序读）。
 
 #include "Decoder.h"
 

@@ -46,8 +46,11 @@ macOS 使用 Qt 6.8.x（含 Core5Compat）、nasm/yasm、`pkg-config` 和 FFmpeg
 | `3rd/opus` | libopus 1.6.1 | Opus 编码 / 解码 |
 
 `TTPLAYER_VENDORED=ON`（默认）时 CMake 用 `add_subdirectory` 直接编 zlib / xz / libarchive /
-SDL3，不再让 `find_package` 去捞 Homebrew/apt/vcpkg 的同类库；`-DTTPLAYER_VENDORED=OFF`
-才回到系统库兜底。格式转换用的 LAME / libogg / libvorbis / libopus 走另一条路径：
+SDL3，不再让 `find_package` 去捞 Homebrew/apt/vcpkg 的同类库；libarchive 头直接取
+`3rd/libarchive/libarchive/`，不再维护手写子集声明。`-DTTPLAYER_VENDORED=OFF`
+才回到系统库兜底，此时头文件也跟开发包走（`archive.h` / `archive_entry.h`），
+macOS SDK 只带 tbd，不开 vendored 就得另装 libarchive 开发包。
+格式转换用的 LAME / libogg / libvorbis / libopus 走另一条路径：
 FFmpeg 在 configure 阶段就要探测它们（`--enable-libmp3lame/-libvorbis/-libopus`），
 所以由 `scripts/codec_deps.sh` 在 FFmpeg 之前统一编到 `3rd/codec-build/`（含 `.pc`），
 CMake 再用 `-DCODEC_ROOT` 找到并静态链接同一份产物。macOS / Linux 需要 `pkg-config`

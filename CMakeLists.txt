@@ -2,7 +2,7 @@
 #
 # 工程代码在 src/，CMakeLists.txt 在仓库根。
 # 解码层沿用 3rd/ffmpeg-build 的静态库（同一份产物、同一套链接顺序：avformat → avcodec → swresample → avutil）。
-# libarchive 稳定子集声明已搬进 src/clibarchive/include。
+# libarchive 头文件取自 vendored 源码或系统开发包，不再维护手写子集声明。
 # 输出层：设备 IO 用 SDL3（mac=CoreAudio/win=WASAPI/linux=ALSA），EQ/fade/频谱在回调里自绘。
 #
 # 构建产物统一在 build/（Debug 用 build/、Release 用 build/release/、打包用 build/package/ 与 build/dist/）。
@@ -164,8 +164,8 @@ if(TTPLAYER_VENDORED)
   if(NOT _tt_bz2_config MATCHES "HAVE_BZLIB_H 1")
     message(FATAL_ERROR "libarchive 没有启用内置 bzip2（${_tt_bz2_config}）：tar.bz2 会退回外部 bzip2 程序过滤器")
   endif()
-  # 头文件仍用稳定子集声明：shim 只声明用到的接口，不复制上游实现。
-  set(CLIBARCHIVE_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/src/clibarchive/include)
+  # 头文件用 3rd/libarchive 自己的 archive.h：与静态库同版本，不必另写子集声明。
+  set(CLIBARCHIVE_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/3rd/libarchive/libarchive)
 
   # SDL3：静态链接（设备 IO 只有一个入口，静态省掉打包拷 dylib）。
   set(SDL_SHARED OFF CACHE BOOL "" FORCE)
@@ -219,9 +219,9 @@ else()
     find_path(SDL3_INCLUDE_DIR SDL3/SDL.h REQUIRED)
   endif()
 
-  # libarchive 子集声明 shim.h 已随重构搬进 src/clibarchive/include（macOS SDK 不装 archive.h，ABI 只用 3.4/3.5 时代稳定接口）。
+  # 系统库兜底：头文件随 libarchive 开发包走（macOS SDK 只带 tbd，需要开发包或用 vendored）。
   find_library(ARCHIVE_LIBRARY NAMES archive libarchive REQUIRED)
-  set(CLIBARCHIVE_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/src/clibarchive/include)
+  find_path(CLIBARCHIVE_INCLUDE archive.h REQUIRED)
   set(TTPLAYER_ZLIB_TARGET z)
 endif()
 
