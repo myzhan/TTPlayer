@@ -53,9 +53,9 @@ QList<QPainterPath> headphone(qreal cx, qreal bandY, qreal bandR, qreal thick, q
 
 namespace AppIcon {
 
-QPixmap pixmap(int side) {
+QImage image(int side) {
     const qreal s = side;
-    QPixmap pm(side, side);
+    QImage pm(side, side, QImage::Format_ARGB32_Premultiplied);
     pm.fill(Qt::transparent);
 
     QPainter p(&pm);
@@ -132,6 +132,10 @@ QPixmap pixmap(int side) {
 
     p.end();
     return pm;
+}
+
+QPixmap pixmap(int side) {
+    return QPixmap::fromImage(image(side));
 }
 
 QIcon icon() {

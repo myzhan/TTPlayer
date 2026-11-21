@@ -124,8 +124,8 @@ private:
     void loadState();                          // 从 state.db 应用设置
     void saveState();                          // 当前运行时写回 state.db
     void updateModeBadge();                    // 标题条播放方式徽章（[列表循环] 等）
-    void togglePinTop(bool on);                // 置顶：整组可见窗一起切 WindowStaysOnTopHint
-    void setWindowPinTop(QWidget *w, bool on); // 对单窗切 stays-on-top（改 flags 后按需重显保位）
+    void togglePinTop(bool on);                // 置顶：整组可见窗一起调整层级
+    void setWindowPinTop(QWidget *w, bool on); // Windows 原生改层级；其他平台就地改 flags
     void updateLibraryWatch();                 // R09：把曲库文件夹(含子目录)挂上 QFileSystemWatcher
     void onLibraryChanged();                   // 目录改动→重启防抖重扫定时器
 

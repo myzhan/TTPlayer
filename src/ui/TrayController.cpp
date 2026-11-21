@@ -1,36 +1,11 @@
 #include "TrayController.h"
 #include "MainWindow.h"
-#include "Theme.h"
+#include "AppIcon.h"
 
 #include <QSystemTrayIcon>
 #include <QMenu>
 #include <QAction>
-#include <QPainter>
-#include <QPixmap>
-#include <QIcon>
 #include <QApplication>
-
-namespace {
-
-// 无外部资源：现画一枚 22px 音符图标（accent 圆底 + 白色音符）
-QPixmap makeTrayIcon() {
-    QPixmap pm(22, 22);
-    pm.fill(Qt::transparent);
-    QPainter p(&pm);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setPen(Qt::NoPen);
-    p.setBrush(Theme::textAccent);
-    p.drawRoundedRect(1, 1, 20, 20, 5, 5);
-    p.setPen(QPen(Qt::white, 2));
-    // 音符：一根竖干 + 一个符头
-    p.drawLine(13, 5, 13, 15);
-    p.setBrush(Qt::white);
-    p.drawEllipse(QPointF(10.5, 15.5), 3.0, 2.4);
-    p.end();
-    return pm;
-}
-
-} // namespace
 
 TrayController::TrayController(MainWindow *window, PlayerController *controller, QObject *parent)
     : QObject(parent), m_window(window), m_controller(controller) {
@@ -57,7 +32,7 @@ TrayController::TrayController(MainWindow *window, PlayerController *controller,
     connect(quit, &QAction::triggered, qApp, &QCoreApplication::quit);
 
     m_tray = new QSystemTrayIcon(this);
-    m_tray->setIcon(QIcon(makeTrayIcon()));
+    m_tray->setIcon(AppIcon::icon());
     m_tray->setToolTip(QStringLiteral("千千静听"));
     m_tray->setContextMenu(menu);
     // 双击托盘图标 = 显示 / 隐藏

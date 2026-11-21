@@ -87,6 +87,13 @@ static QFont uiFont(int pt, bool bold) {
     f.setFamilies({QStringLiteral("Segoe UI"), QStringLiteral("Helvetica Neue"), QStringLiteral("Arial"),
                    QStringLiteral("Noto Sans"), QStringLiteral("DejaVu Sans"), QStringLiteral("PingFang SC"),
                    QStringLiteral("Microsoft YaHei"), QStringLiteral("sans-serif")});
+#ifdef Q_OS_WIN
+    // Windows 优先微软雅黑，保留既有字号、字重与缺字回退；其他平台不变。
+    QStringList families = f.families();
+    families.removeAll(QStringLiteral("Microsoft YaHei"));
+    families.prepend(QStringLiteral("Microsoft YaHei"));
+    f.setFamilies(families);
+#endif
     f.setStyleHint(QFont::SansSerif);
     f.setPointSize(pt);
     f.setBold(bold);

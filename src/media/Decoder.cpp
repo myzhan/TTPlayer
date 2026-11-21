@@ -291,6 +291,7 @@ void Decoder::seek(int64_t frame) {
     m_flushSent = false;
     m_nextOutPos = target;
     m_runningOutPos = target;
+    m_outputPosAnchored = false;
     m_discardUntil = target;
     m_ptsCalibrated = true; // seek 之后的首帧 pts 不是第 0 帧的，基准不能再重认
 }
@@ -298,7 +299,7 @@ void Decoder::seek(int64_t frame) {
 int Decoder::read(float *outL, float *outR, int need, int64_t fromPos) {
     if (need <= 0 || !m_fmt) return 0;
     if (m_abort.load()) return 0; // R08：取消后不再产出，回调侧会当 EOF 处理
-    if (!forwardOnly() && (fromPos != m_nextOutPos || m_discardUntil >= 0)) seek(fromPos);
+    if (!forwardOnly() && fromPos != m_nextOutPos) seek(fromPos);
 
     int produced = 0;
     while (produced < need) {
@@ -386,7 +387,7 @@ bool Decoder::emitFrame(AVFrame *frame) {
     const int inCount = frame->nb_samples;
     if (inCount <= 0) return false;
 
-    // 时间戳只当「顺序计数器」的校对：FFmpeg 在解码器里丢 priming 时会把 pts 一起
+    // 时间戳只用于可听基准与冷启动定位：FFmpeg 在解码器里丢 priming 时会把 pts 一起
     // 往后挪（实测 lame mp3 第一帧 pts = 576 样本），直接拿它当帧号会和实交帧数对不上。
     // 可听帧号 = pts 坐标 − 基准（基准 = 第 0 帧的 pts，没解过先拿报上来的编码延迟算）
     int64_t ptsCoord;
@@ -402,14 +403,18 @@ bool Decoder::emitFrame(AVFrame *frame) {
         // seek 又多容器坐标加 1024 —— 两头各错一次，等于凭空丢头 23 ms
         m_ptsBase = ptsCoord;
     }
-    const int64_t blockStart = ptsCoord - m_ptsBase;
-
+    // swr 会保留滤波延迟，后续输入帧 PTS 并不是当前输出块的起点。
+    // 冷启动只从首个输入帧建立时间轴（即使它尚未产出），随后按实产 PCM 推进。
+    if (!m_outputPosAnchored) {
+        m_runningOutPos = ptsCoord - m_ptsBase;
+        m_outputPosAnchored = true;
+    }
     const int got = convert(const_cast<const uint8_t **>(frame->extended_data), inCount);
     if (got <= 0) return false;
 
     int valid = got;
-    int64_t start = blockStart;
-    m_runningOutPos = blockStart + valid;
+    const int64_t start = m_runningOutPos;
+    m_runningOutPos += got;
 
     if (m_discardUntil >= 0) {
         if (start + valid <= m_discardUntil) return false;
@@ -417,14 +422,12 @@ bool Decoder::emitFrame(AVFrame *frame) {
             const int drop = int(m_discardUntil - start);
             shiftStageLeft(drop);
             valid -= drop;
-            start = m_discardUntil;
         }
         m_discardUntil = -1;
     }
 
     m_stageCount = valid;
     m_stageCursor = 0;
-    m_nextOutPos = std::max(m_nextOutPos, start);
     return true;
 }
 
@@ -433,8 +436,9 @@ bool Decoder::drainSwrTail() {
     const int valid0 = convert(nullptr, 0);
     if (valid0 <= 0) return false;
     int v = valid0;
+    const int64_t start = m_runningOutPos;
+    m_runningOutPos += valid0;
     if (m_discardUntil >= 0) {
-        const int64_t start = m_runningOutPos;
         if (start + v <= m_discardUntil) return false;
         if (start < m_discardUntil) {
             shiftStageLeft(int(m_discardUntil - start));
@@ -444,7 +448,6 @@ bool Decoder::drainSwrTail() {
     }
     m_stageCount = v;
     m_stageCursor = 0;
-    m_runningOutPos += v;
     return true;
 }
 

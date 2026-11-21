@@ -182,6 +182,11 @@ Debug 档运行若提示缺 `ucrtbased.dll` / `vcruntime140d.dll`，把
 - 或命令行 `devenv /debugexe build\Debug\ttplayer.exe`。
 - 迷你转储与调用栈依赖 `dbghelp`（已在链接行里）；崩溃文本见第 7.3 节。
 - 绿色版：Windows 的存档跟 `ttplayer.exe` 同目录（`state.db`），不写 `%APPDATA%`。
+- 分发目录由 `cmake --install build --config Release --prefix build/dist` 生成；CMake 从 MSVC
+  可再分发目录部署 Release VC DLL 到 `bin/`，与 exe 同目录，用户无需安装 VC Redistributable。
+  不改变 `/MD`，不发布 Debug CRT；Windows 10+ 的 UCRT 等系统 DLL 仍由系统提供。
+- 部署后运行 `python scripts/package.py --verify-windows build/dist`：隔离存档、清理开发工具搜索
+  路径并启动打包版，检查实际加载的 VC DLL 来自 exe 目录。`package.py` 在 Windows 上也会自动做此验证。
 
 ## 6. 常用选项
 

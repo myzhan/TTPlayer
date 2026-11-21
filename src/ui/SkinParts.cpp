@@ -3,6 +3,7 @@
 #include "Painter.h"
 
 #include <QPainter>
+#include <QFontMetricsF>
 #include <QPainterPath>
 #include <QLinearGradient>
 #include <QPaintEvent>
@@ -162,20 +163,6 @@ void drawGlyph(QPainter *p, Glyph g, const QRectF &rect, const QColor &color, qr
         for (int i = 0; i < 3; ++i)
             p->drawRect(QRectF(box.left(), box.top() + i * s * 0.34, s, s * 0.14));
         break;
-    case Glyph::Music: {
-        // 音符：左下实心符头 + 右侧符干 + 顶部斜旗（矢量绘制，不依赖系统字体，三平台一致）
-        QRectF head(box.left(), box.bottom() - s * 0.42, s * 0.52, s * 0.38);
-        p->drawEllipse(head);
-        const qreal stemX = head.right() - s * 0.10;
-        p->drawRect(QRectF(stemX, box.top() + s * 0.06, s * 0.11, s * 0.82));
-        QPainterPath flag;
-        flag.moveTo(stemX + s * 0.11, box.top() + s * 0.06);
-        flag.lineTo(box.right(), box.top() + s * 0.30);
-        flag.lineTo(stemX + s * 0.11, box.top() + s * 0.46);
-        flag.closeSubpath();
-        p->drawPath(flag);
-        break;
-    }
     case Glyph::Pin: {
         // 图钉：上部椭圆帽 + 下尖针（置顶）
         QRectF cap(box.center().x() - s * 0.30, box.top() + s * 0.06, s * 0.60, s * 0.42);
@@ -572,8 +559,24 @@ VolumeSlider::VolumeSlider(QWidget *parent) : QWidget(parent) {
     connect(&GlassNotifier::instance(), &GlassNotifier::changed, this, [this] { update(); });
 }
 
+double VolumeSlider::knobDiameter() const {
+    return qMin(double(height()) - 4.0, 16.0);
+}
+
+QRectF VolumeSlider::readoutRect() const {
+    const QFontMetricsF metrics(Fonts::tiny);
+    // 留足最长读数的字形宽度，不随当前数值改变槽长，避免拖动时跳动。
+    const double textWidth = qCeil(qMax(metrics.horizontalAdvance(QStringLiteral("100%")),
+                                        metrics.horizontalAdvance(QStringLiteral("静音")))) +
+                             2.0;
+    return QRectF(width() - textWidth - 2.0, 0, textWidth, height());
+}
+
 QRectF VolumeSlider::grooveRect() const {
-    return QRectF(2, (height() - 5) / 2.0, qMax(1.0, double(width()) - 40.0), 5);
+    const double radius = knobDiameter() / 2.0;
+    const double left = radius + 1.0;
+    const double right = readoutRect().left() - radius - 3.0;
+    return QRectF(left, (height() - 5) / 2.0, qMax(1.0, right - left), 5);
 }
 
 void VolumeSlider::setValue(double v) {
@@ -628,7 +631,7 @@ void VolumeSlider::paintEvent(QPaintEvent *) {
     }
 
     // 玻璃圆推子
-    const double knobD = qMin(double(height()) - 4.0, 16.0);
+    const double knobD = knobDiameter();
     if (knobD > 2) {
         const double cx = gr.x() + fillW;
         const QRectF knob(cx - knobD / 2.0, height() / 2.0 - knobD / 2.0, knobD, knobD);
@@ -650,7 +653,7 @@ void VolumeSlider::paintEvent(QPaintEvent *) {
     const QString pct = m_muted ? QStringLiteral("静音") : QStringLiteral("%1%").arg(int(m_value * 100));
     p.setFont(Fonts::tiny);
     p.setPen((m_muted || m_value == 0) ? Theme::meterRed : Theme::inkOnGlassSoft);
-    p.drawText(QRectF(gr.right() + 6, 0, width() - gr.right() - 8, height()), Qt::AlignVCenter | Qt::AlignRight, pct);
+    p.drawText(readoutRect(), Qt::AlignVCenter | Qt::AlignRight, pct);
 }
 
 // ————————————————————————————————————————————————

@@ -32,7 +32,6 @@ enum class Glyph {
     Minus,
     Close, // 标题条窗控
     Pin,   // 置顶（标题条）
-    Music, // 音符（标题条品牌图标）
     List,
     EQ,
     Lyric,
@@ -184,6 +183,9 @@ protected:
     void leaveEvent(QEvent *) override;
 
 private:
+    friend class RegressionTests;
+    double knobDiameter() const;
+    QRectF readoutRect() const;
     QRectF grooveRect() const;
     double m_value = 0.8;
     bool m_muted = false, m_hot = false;

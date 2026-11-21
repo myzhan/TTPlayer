@@ -3,7 +3,7 @@
 当前产品位于 `src/`，使用 C++20 / Qt 6 Widgets / FFmpeg / libarchive；Windows/Linux 输出使用 SDL3，macOS 按 UID 打开 HAL AudioUnit。
 修改行为时，应对照 `src/testing` 自检，不能仅以编译成功作为验收。
 
-**用户确认的视觉基线是当前 Qt 深色样式。本轮禁止修改配色、字体、布局、透明度规则和控件外观。**
+**用户确认的视觉基线是当前 Qt 深色样式。Windows 字体按用户要求优先微软雅黑；所有品牌入口统一使用 AppIcon 耳机图标，音量读数修复只调整控件内部间距。其余字体、字号、配色、布局、透明度规则和控件外观保持不变。**
 
 ## 必须遵守
 
@@ -85,6 +85,12 @@ zlib、SDL3、libarchive 与 lame/ogg/vorbis/opus 一样由 `3rd/` 源码现编�
 Debug（/MDd），Debug 静态库放在 `3rd/ffmpeg-build/debug/`；CMake 按构型选库。
 用 `-DTTPLAYER_VENDORED=OFF` 回落到系统库时，Debug 自检仍需对应运行时的 DLL
 在搜索路径上，不能只提供 Release 的 `bin`。
+Windows Release 安装由 CMake 统一把可再分发 VC DLL 放进 `bin/`（与 exe 同目录），不得依赖
+用户预装 VC Redistributable、附安装器代替 DLL，或发布 `debug_nonredist`。打包后运行
+`python scripts/package.py --verify-windows build/dist`，核对目标进程实际加载的是包内 CRT；
+Windows 10+ 的 UCRT 等系统组件仍由系统提供。Windows exe 图标必须由构建期复用 AppIcon
+生成并嵌入资源，不能只设置运行时窗口图标；副面板使用主窗所属工具窗，任务栏只保留主窗口。
+打包探针还须使用 `windows` 平台插件检查真实 HWND 与图标，不能以 offscreen 代替。
 
 ### 运行当前 Qt 版
 

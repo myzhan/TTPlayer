@@ -387,11 +387,24 @@ endif()
 # Qt 管理应用入口；SDL 不得把 main 重写为 SDL_main。
 target_compile_definitions(ttplayer PRIVATE TTPLAYER_QT=1 SDL_MAIN_HANDLED)
 if(MSVC)
-  target_compile_options(ttplayer PRIVATE /W4 /utf-8 /permissive-)
+  target_compile_options(ttplayer PRIVATE "$<$<COMPILE_LANGUAGE:CXX,OBJCXX>:/W4;/utf-8;/permissive->")
 else()
-  target_compile_options(ttplayer PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(ttplayer PRIVATE "$<$<COMPILE_LANGUAGE:CXX,OBJCXX>:-Wall;-Wextra;-Wpedantic>")
 endif()
 
+# 单独的图标生成器复用 AppIcon；不安装生成器，Windows/Linux 构建依赖各自的图标输出。
+add_executable(ttplayer_icon EXCLUDE_FROM_ALL packaging/windows_icon.cpp src/ui/AppIcon.cpp)
+set_target_properties(ttplayer_icon PROPERTIES AUTOMOC OFF)
+target_include_directories(ttplayer_icon PRIVATE src)
+target_link_libraries(ttplayer_icon PRIVATE Qt6::Gui)
+if(MSVC)
+  target_compile_options(ttplayer_icon PRIVATE /W4 /utf-8 /permissive-)
+else()
+  target_compile_options(ttplayer_icon PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Windows 版本资源与分发版本共用这一来源。
+set(CPACK_PACKAGE_VERSION 1.1.5)
 option(TTPLAYER_BUNDLE "Build a macOS application bundle for distribution" OFF)
 if(APPLE AND TTPLAYER_BUNDLE)
   configure_file(packaging/Info.plist.in "${CMAKE_CURRENT_BINARY_DIR}/Info.plist" @ONLY)
@@ -399,18 +412,98 @@ if(APPLE AND TTPLAYER_BUNDLE)
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/Info.plist"
     MACOSX_BUNDLE_GUI_IDENTIFIER "org.ttplayer.TTPlayer"
     MACOSX_BUNDLE_BUNDLE_NAME "千千静听"
-    MACOSX_BUNDLE_SHORT_VERSION_STRING "1.1.5")
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${CPACK_PACKAGE_VERSION}")
 endif()
 if(WIN32)
   set_target_properties(ttplayer PROPERTIES WIN32_EXECUTABLE TRUE)
+  enable_language(RC)
+  set(_tt_windows_icon "${CMAKE_CURRENT_BINARY_DIR}/icons/$<CONFIG>/ttplayer.ico")
+  set(_tt_windows_rc "${CMAKE_CURRENT_BINARY_DIR}/icons/$<CONFIG>/ttplayer.rc")
+  set(_tt_windows_icon_script "${CMAKE_CURRENT_BINARY_DIR}/icons/$<CONFIG>/generate-icon.cmake")
+  string(REPLACE "." "," _tt_windows_version "${CPACK_PACKAGE_VERSION}.0")
+  # 任务管理器“进程”页读取 FileDescription；内部文件名与存档身份保持不变。
+  # RC 单独声明 UTF-8，不向资源编译器传 C++ 的 /utf-8 选项。
+  set(_tt_windows_resource [=[
+#pragma code_page(65001)
+LANGUAGE 0, 0
+1 ICON "@_tt_windows_icon@"
+1 VERSIONINFO
+ FILEVERSION @_tt_windows_version@
+ PRODUCTVERSION @_tt_windows_version@
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS $<IF:$<CONFIG:Debug>,0x1L,0x0L>
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+ BLOCK "StringFileInfo"
+ BEGIN
+  BLOCK "040904b0"
+  BEGIN
+   VALUE "FileDescription", L"千千静听\0"
+   VALUE "ProductName", L"千千静听\0"
+   VALUE "FileVersion", "@CPACK_PACKAGE_VERSION@\0"
+   VALUE "ProductVersion", "@CPACK_PACKAGE_VERSION@\0"
+   VALUE "InternalName", "ttplayer\0"
+   VALUE "OriginalFilename", "ttplayer.exe\0"
+  END
+ END
+ BLOCK "VarFileInfo"
+ BEGIN
+  VALUE "Translation", 0x0409, 1200
+ END
+END
+]=])
+  string(CONFIGURE "${_tt_windows_resource}" _tt_windows_resource @ONLY)
+  file(GENERATE OUTPUT "${_tt_windows_rc}" CONTENT "${_tt_windows_resource}")
+  # 构建时继承 PATH（含 Debug CRT），不能冻结 configure 时的环境。
+  file(GENERATE OUTPUT "${_tt_windows_icon_script}" CONTENT
+    "set(ENV{PATH} \"$<TARGET_FILE_DIR:Qt6::Core>;\$ENV{PATH}\")\nexecute_process(COMMAND \"$<TARGET_FILE:ttplayer_icon>\" \"${_tt_windows_icon}\" COMMAND_ERROR_IS_FATAL ANY)\n")
+  add_custom_command(OUTPUT "${_tt_windows_icon}"
+    COMMAND ${CMAKE_COMMAND} -P "${_tt_windows_icon_script}"
+    DEPENDS ttplayer_icon "${_tt_windows_icon_script}"
+    COMMENT "生成 Windows exe 多尺寸图标"
+    VERBATIM)
+  add_custom_target(ttplayer_windows_icon DEPENDS "${_tt_windows_icon}")
+  add_dependencies(ttplayer ttplayer_windows_icon)
+  target_sources(ttplayer PRIVATE "${_tt_windows_rc}")
 endif()
 install(TARGETS ttplayer BUNDLE DESTINATION . RUNTIME DESTINATION bin)
 if(UNIX AND NOT APPLE)
+  set(_tt_linux_icon "${CMAKE_CURRENT_BINARY_DIR}/icons/$<CONFIG>/ttplayer.png")
+  add_custom_command(OUTPUT "${_tt_linux_icon}"
+    COMMAND $<TARGET_FILE:ttplayer_icon> "${_tt_linux_icon}"
+    DEPENDS ttplayer_icon
+    COMMENT "生成 Linux 耳机图标"
+    VERBATIM)
+  add_custom_target(ttplayer_linux_icon DEPENDS "${_tt_linux_icon}")
+  add_dependencies(ttplayer ttplayer_linux_icon)
   install(FILES packaging/ttplayer.desktop DESTINATION share/applications)
-  install(FILES packaging/ttplayer.svg DESTINATION share/icons/hicolor/scalable/apps)
+  install(FILES "${_tt_linux_icon}" DESTINATION share/icons/hicolor/256x256/apps)
 endif()
 if(WIN32 AND DEFINED ENV{TTPLAYER_VCPKG_ROOT})
   install(DIRECTORY "$ENV{TTPLAYER_VCPKG_ROOT}/bin/" DESTINATION bin FILES_MATCHING PATTERN "*.dll")
+endif()
+if(WIN32 AND MSVC)
+  # app-local 部署可再分发的 Release CRT，保持 /MD 与 Qt/FFmpeg 的 ABI；不发布 Debug CRT。
+  set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
+  set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_NO_WARNINGS TRUE)
+  set(CMAKE_INSTALL_DEBUG_LIBRARIES FALSE)
+  set(CMAKE_INSTALL_DEBUG_LIBRARIES_ONLY FALSE)
+  # Qt 6.8 的 Windows 10+ 基线自带 UCRT，不复制系统 ucrtbase/API-set DLL。
+  set(CMAKE_INSTALL_UCRT_LIBRARIES FALSE)
+  if(NOT MSVC_REDIST_DIR AND DEFINED ENV{VCToolsRedistDir})
+    file(TO_CMAKE_PATH "$ENV{VCToolsRedistDir}" MSVC_REDIST_DIR)
+  endif()
+  include(InstallRequiredSystemLibraries)
+  # 模块会忽略缺失文件；缺核心 CRT 时必须失败，不能产出依赖系统 VC 的包。
+  foreach(_tt_crt msvcp140.dll vcruntime140.dll vcruntime140_1.dll)
+    if(NOT EXISTS "${MSVC_CRT_DIR}/${_tt_crt}")
+      message(FATAL_ERROR "缺少 app-local VC 运行时 ${_tt_crt}（${MSVC_CRT_DIR}）；请安装 MSVC x64 可再分发组件")
+    endif()
+  endforeach()
+  install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} DESTINATION bin
+    CONFIGURATIONS Release RelWithDebInfo MinSizeRel)
 endif()
 if(NOT APPLE OR TTPLAYER_BUNDLE)
   if(APPLE)
@@ -432,7 +525,13 @@ if(NOT APPLE OR TTPLAYER_BUNDLE)
       install(FILES "$<TARGET_FILE:Qt6::QOffscreenIntegrationPlugin>" DESTINATION "ttplayer.app/Contents/PlugIns/platforms")
     endif()
   endif()
-  qt_generate_deploy_app_script(TARGET ttplayer OUTPUT_SCRIPT ttplayer_deploy NO_UNSUPPORTED_PLATFORM_ERROR)
+  set(_tt_deploy_options)
+  if(WIN32 AND MSVC)
+    # CRT 已由上面的统一安装规则部署，不让 windeployqt 再附 vc_redist 安装器。
+    list(APPEND _tt_deploy_options NO_COMPILER_RUNTIME)
+  endif()
+  qt_generate_deploy_app_script(TARGET ttplayer OUTPUT_SCRIPT ttplayer_deploy
+    NO_UNSUPPORTED_PLATFORM_ERROR ${_tt_deploy_options})
   install(SCRIPT ${ttplayer_deploy})
   if(APPLE)
     # macdeployqt 把 sqldrivers 整个目录搬进来，其中 mimer 插件链到本机不存在的
@@ -441,7 +540,6 @@ if(NOT APPLE OR TTPLAYER_BUNDLE)
   endif()
 endif()
 set(CPACK_PACKAGE_NAME TTPlayer)
-set(CPACK_PACKAGE_VERSION 1.1.5)
 include(CPack)
 
 # ---- CTest 注册（R27）----

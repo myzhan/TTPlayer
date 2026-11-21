@@ -242,6 +242,8 @@ jobs:
           # 直接部署刚通过自检的 Release，不另起 build/package 重编一遍。
           cmake --install build/ci --config Release --prefix build/dist
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python scripts/package.py --verify-windows build/dist
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         if: always()

@@ -11,6 +11,7 @@
 #include <QKeyEvent>
 #include <QWheelEvent>
 #include <QScrollBar>
+#include <QStyle>
 #include <QMenu>
 #include <QContextMenuEvent>
 #include <QApplication>
@@ -44,6 +45,32 @@ PlaylistView::PlaylistView(PlayerController *controller, QWidget *parent)
     setFocusPolicy(Qt::StrongFocus);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     viewport()->setMouseTracking(true); // 统一毛玻璃：未按键也收 move，hover 行才能轻亮
+
+    // 只替换歌曲列表的滚动条：轨道透底，滑块使用现有灰色并跟随玻璃 alpha。
+    // 保留 Fusion 的宽度，不改变列表可用宽度；滚动与命中仍由 QScrollBar 处理。
+    auto *bar = verticalScrollBar();
+    const int barWidth = bar->sizeHint().width();
+    const int minHandle = bar->style()->pixelMetric(QStyle::PM_ScrollBarSliderMin, nullptr, bar);
+    const auto updateScrollStyle = [this, bar, barWidth, minHandle] {
+        QColor handle = Theme::inkOnGlassSoft;
+        handle.setAlphaF(GlassStyle::enabled() ? GlassStyle::glassAlpha() : 1.0f);
+        bar->setStyleSheet(
+            QStringLiteral(
+                "QScrollBar:vertical{background:transparent;width:%1px;margin:0;border:none;}"
+                "QScrollBar::handle:vertical{background:rgba(%2,%3,%4,%5);border-radius:3px;min-height:%6px;}"
+                "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;background:transparent;}"
+                "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}")
+                .arg(barWidth)
+                .arg(handle.red())
+                .arg(handle.green())
+                .arg(handle.blue())
+                .arg(handle.alpha())
+                .arg(minHandle));
+        bar->setAutoFillBackground(false);
+        viewport()->update();
+    };
+    connect(&GlassNotifier::instance(), &GlassNotifier::changed, this, updateScrollStyle);
+    updateScrollStyle();
 
     connect(controller, &PlayerController::listChanged, this, &PlaylistView::reload);
     connect(controller, &PlayerController::trackChanged, this, &PlaylistView::reload);

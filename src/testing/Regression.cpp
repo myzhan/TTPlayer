@@ -19,6 +19,14 @@
 #include "ui/Theme.h"
 #include "ui/TransportBar.h"
 #include "ui/AppIcon.h"
+#include "ui/TrayController.h"
+#include <QFontMetricsF>
+#include <QLabel>
+#include <QScrollBar>
+#include <QStyleOptionSlider>
+#include <QWheelEvent>
+#include <QPainter>
+#include <QSystemTrayIcon>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMenu>
@@ -45,6 +53,13 @@
 #include <algorithm>
 #include <cstdio>
 #include <vector>
+#ifdef Q_OS_WIN
+#include <QAbstractNativeEventFilter>
+#include <QFontInfo>
+#include <QWindow>
+#include <windows.h>
+#include <shellapi.h>
+#endif
 #ifdef __APPLE__
 #include <mach/mach.h>
 #include <CoreAudio/CoreAudio.h>
@@ -56,6 +71,89 @@ constexpr UInt32 kCfStringRefSize = sizeof(void *);
 #endif
 
 namespace {
+#ifdef Q_OS_WIN
+// 用真实 HWND 的 owner/扩展样式核对任务栏资格；offscreen 的 Qt flags 不能充当此证据。
+bool ownedToolWindow(QWidget *panel, QWidget *owner) {
+    const HWND hwnd = reinterpret_cast<HWND>(panel->winId());
+    const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    return (style & WS_EX_TOOLWINDOW) != 0 && (style & WS_EX_APPWINDOW) == 0 &&
+           GetWindow(hwnd, GW_OWNER) == reinterpret_cast<HWND>(owner->winId());
+}
+
+int nativeTaskbarWindowCount() {
+    int count = 0;
+    const auto visit = [](HWND hwnd, LPARAM context) -> BOOL {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hwnd, &pid);
+        const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        if (pid == GetCurrentProcessId() && IsWindowVisible(hwnd) && (style & WS_EX_TOOLWINDOW) == 0 &&
+            ((style & WS_EX_APPWINDOW) != 0 || GetWindow(hwnd, GW_OWNER) == nullptr))
+            ++*reinterpret_cast<int *>(context);
+        return TRUE;
+    };
+    return EnumWindows(visit, reinterpret_cast<LPARAM>(&count)) ? count : -1;
+}
+
+// 监测整个切换过程，而不只比较最终样式；旧 Qt 路径会先移除再恢复 layered 位。
+// 不用 QWidget::grab/render 主动重绘，避免掩盖原生合成表面被重置的问题。
+class PinSurfaceMonitor final : public QAbstractNativeEventFilter {
+public:
+    explicit PinSurfaceMonitor(const QList<QWidget *> &windows) {
+        for (QWidget *window : windows) {
+            Snapshot snapshot;
+            snapshot.window = window;
+            snapshot.hwnd = reinterpret_cast<HWND>(window->winId());
+            snapshot.owner = GetWindow(snapshot.hwnd, GW_OWNER);
+            snapshot.style = GetWindowLongPtrW(snapshot.hwnd, GWL_EXSTYLE) & ~WS_EX_TOPMOST;
+            snapshot.flags = window->windowHandle()->flags();
+            m_intact &= GetWindowRect(snapshot.hwnd, &snapshot.rect) != FALSE && (snapshot.style & WS_EX_LAYERED) != 0;
+            m_windows.append(snapshot);
+        }
+        qApp->installNativeEventFilter(this);
+    }
+    ~PinSurfaceMonitor() override { qApp->removeNativeEventFilter(this); }
+
+    bool nativeEventFilter(const QByteArray &, void *message, qintptr *) override {
+        const auto *event = static_cast<const MSG *>(message);
+        for (const Snapshot &snapshot : std::as_const(m_windows)) {
+            if (event->hwnd != snapshot.hwnd) continue;
+            if (event->message == WM_STYLECHANGING && event->wParam == static_cast<WPARAM>(GWL_EXSTYLE)) {
+                const auto *styles = reinterpret_cast<const STYLESTRUCT *>(event->lParam);
+                m_intact &= (styles->styleNew & WS_EX_LAYERED) != 0;
+            }
+            if (event->message == WM_NCDESTROY || (event->message == WM_SHOWWINDOW && !event->wParam)) m_intact = false;
+        }
+        return false;
+    }
+
+    bool unchanged(bool pinned) const {
+        if (!m_intact) return false;
+        for (const Snapshot &snapshot : m_windows) {
+            RECT rect{};
+            const LONG_PTR style = GetWindowLongPtrW(snapshot.hwnd, GWL_EXSTYLE);
+            if (reinterpret_cast<HWND>(snapshot.window->internalWinId()) != snapshot.hwnd ||
+                !IsWindowVisible(snapshot.hwnd) || GetWindow(snapshot.hwnd, GW_OWNER) != snapshot.owner ||
+                (style & ~WS_EX_TOPMOST) != snapshot.style || ((style & WS_EX_TOPMOST) != 0) != pinned ||
+                !GetWindowRect(snapshot.hwnd, &rect) || !EqualRect(&rect, &snapshot.rect) ||
+                snapshot.window->windowHandle()->flags() != snapshot.flags)
+                return false;
+        }
+        return true;
+    }
+
+private:
+    struct Snapshot {
+        QWidget *window = nullptr;
+        HWND hwnd = nullptr, owner = nullptr;
+        LONG_PTR style = 0;
+        RECT rect{};
+        Qt::WindowFlags flags;
+    };
+    QList<Snapshot> m_windows;
+    bool m_intact = true;
+};
+#endif
+
 // 右键菜单树摊平成「父/子/项」：探针据此核对分组与隐藏规则
 QStringList menuPaths(const QMenu &menu, const QString &prefix = QString()) {
     QStringList out;
@@ -412,6 +510,89 @@ public:
                 check("PCM_stereo", std::equal(l, l + 128, r));
             }
             if (suite == "DECODER") {
+                const QDir formats(qEnvironmentVariable("TTPLAYER_TESTDIR") + QStringLiteral("/formats"));
+                // 输入 PTS 不能把实交 PCM 位置推前：比较整段解码与 producer 分块的每个样本。
+                for (const QString &name :
+                     {QStringLiteral("mp3.mp3"), QStringLiteral("mp3-320.mp3"), QStringLiteral("s16.wav"),
+                      QStringLiteral("aac.m4a"), QStringLiteral("opus.ogg"), QStringLiteral("dsd.dsf"),
+                      QStringLiteral("dsd.dff")}) {
+                    for (int rate : {22050, 44100, 48000, 96000}) {
+                        const QString prefix = QStringLiteral("resample_%1_%2_").arg(name).arg(rate);
+                        const auto verify = [&](const char *what, bool ok) {
+                            check((prefix + QString::fromLatin1(what)).toUtf8().constData(), ok);
+                        };
+                        auto reference = Decoder::openFile(formats.filePath(name));
+                        auto chunked = Decoder::openFile(formats.filePath(name));
+                        const bool ready =
+                            reference && chunked && reference->resampleTo(rate) && chunked->resampleTo(rate);
+                        verify("available", ready);
+                        if (!ready) continue;
+                        if (name == QStringLiteral("mp3-320.mp3")) verify("bitrate", chunked->bitRateKbps() == 320);
+                        const int capacity = rate * 14;
+                        std::vector<float> left(capacity), right(capacity), expectedL(capacity), expectedR(capacity);
+                        const int total = reference->read(expectedL.data(), expectedR.data(), capacity, 0);
+                        bool sequential = true;
+                        int pos = 0;
+                        while (pos < capacity) {
+                            if (pos > 0) sequential &= chunked->m_nextOutPos == pos && chunked->m_discardUntil < 0;
+                            const int need = std::min(2048, capacity - pos);
+                            const int got = chunked->read(left.data() + pos, right.data() + pos, need, pos);
+                            pos += got;
+                            sequential &= chunked->m_nextOutPos == pos;
+                            if (got <= 0) break;
+                        }
+                        verify("sequential_position", sequential);
+                        verify("continuous_PCM", total > 10000 && pos == total &&
+                                                     std::equal(left.begin(), left.begin() + pos, expectedL.begin()) &&
+                                                     std::equal(right.begin(), right.begin() + pos, expectedR.begin()));
+                        if (name == QStringLiteral("mp3-320.mp3")) verify("twelve_seconds", total == rate * 12);
+                        // 真正不连续的位置仍要 seek；重复定位和其后的短块继续读都必须稳定。
+                        const int target = rate / 3;
+                        float firstL[257], firstR[257], againL[257], againR[257], tailL[31], tailR[31];
+                        const int first = chunked->read(firstL, firstR, 257, target);
+                        const int tail = chunked->read(tailL, tailR, 31, target + first);
+                        bool repeated = first == 257 && tail == 31;
+                        bool identical = true;
+                        for (int repeat = 0; repeat < 30; ++repeat) {
+                            const int got = chunked->read(againL, againR, 257, target);
+                            repeated &= got == first && chunked->m_nextOutPos == target + got;
+                            identical &= got == first && std::equal(firstL, firstL + first, againL) &&
+                                         std::equal(firstR, firstR + first, againR);
+                        }
+                        verify("seek_position_repeat_30", repeated);
+                        // FFmpeg AAC 的 PNS 随机状态不由 flush 重置，重复 seek 不保证逐位相同。
+                        // 上面的顺序解码仍逐样本比较；其它这些编码另核对重复 seek 的 PCM。
+                        if (name != QStringLiteral("aac.m4a")) verify("seek_PCM_repeat_30", repeated && identical);
+                        // EOF 附近的短读和尾部冲刷，也不能把后续顺序请求当成重新定位。
+                        chunked->seek(total + rate);
+                        const int beyond = chunked->read(firstL, firstR, 257, total + rate);
+                        const int eofAgain = chunked->read(firstL, firstR, 257, total + rate);
+                        verify("EOF_stable", beyond == 0 && eofAgain == 0 && chunked->m_nextOutPos == total + rate);
+                    }
+                }
+                // 用可计算的斜坡核对重采样后的真实定位，不能只比较两次同样错位的 seek。
+                const QString rampPath = dir.path() + QStringLiteral("/seek-ramp.wav");
+                QFile ramp(rampPath);
+                ramp.open(QIODevice::WriteOnly);
+                ramp.write(wave(3, 44100));
+                ramp.close();
+                for (int rate : {22050, 48000, 96000}) {
+                    auto decoder = Decoder::openFile(rampPath);
+                    const bool ready = decoder && decoder->resampleTo(rate);
+                    bool accurate = ready;
+                    if (ready) {
+                        float left[257], right[257];
+                        for (int target : {rate / 3, rate + 37, rate * 2 + 113}) {
+                            const int got = decoder->read(left, right, 257, target);
+                            accurate &= got == 257 && decoder->m_nextOutPos == target + got;
+                            for (int i = 0; i < got; ++i) {
+                                const double expected = double(target + i) / (rate * 3) * 20000 / 32768;
+                                accurate &= std::abs(left[i] - expected) < 0.0001 && left[i] == right[i];
+                            }
+                        }
+                    }
+                    check(QStringLiteral("resample_ramp_%1_seek_accuracy").arg(rate).toUtf8().constData(), accurate);
+                }
                 auto live = std::make_shared<GateSource>();
                 live->allowSeek = false;
                 live->data = wave(3, 44100);
@@ -1204,10 +1385,108 @@ public:
                 check("approved_dark_inkOnGlassAccent", Theme::inkOnGlassAccent.rgba() == 0xfff2a93bu);
                 check("approved_font_size",
                       Fonts::base.pointSize() == 13 && Fonts::small.pointSize() == 12 && Fonts::tiny.pointSize() == 11);
+#ifdef Q_OS_WIN
+                check("approved_font_families",
+                      Fonts::base.families() == QStringList{"Microsoft YaHei", "Segoe UI", "Helvetica Neue", "Arial",
+                                                            "Noto Sans", "DejaVu Sans", "PingFang SC", "sans-serif"});
+                check("windows_font_all_roles", QApplication::font().family() == QStringLiteral("Microsoft YaHei") &&
+                                                    Fonts::small.family() == Fonts::base.family() &&
+                                                    Fonts::tiny.family() == Fonts::base.family() &&
+                                                    Fonts::title.family() == Fonts::base.family() &&
+                                                    Fonts::panelTitle.family() == Fonts::base.family());
+#else
                 check("approved_font_families",
                       Fonts::base.families() == QStringList{"Segoe UI", "Helvetica Neue", "Arial", "Noto Sans",
                                                             "DejaVu Sans", "PingFang SC", "Microsoft YaHei",
                                                             "sans-serif"});
+#endif
+                {
+                    // 长列表必须实际出现滚动条；检查绘制 alpha 与真实拖动，不只匹配 QSS 文本。
+                    const bool wasEnabled = GlassStyle::enabled();
+                    const float oldAlpha = GlassStyle::transparency();
+                    PlayerController scrollCtl(AudioEngine::create());
+                    QList<Track> longList;
+                    for (int row = 0; row < 100; ++row) {
+                        Track track(QUrl::fromLocalFile(dir.path() + QStringLiteral("/scroll-%1.wav").arg(row)));
+                        track.setTitle(QStringLiteral("Track %1").arg(row));
+                        longList.append(track);
+                    }
+                    scrollCtl.setTracks(longList);
+                    PlaylistView view(&scrollCtl);
+                    view.resize(360, 180);
+                    view.show();
+                    QCoreApplication::processEvents();
+                    auto *bar = view.verticalScrollBar();
+                    QScrollBar nativeBar(Qt::Vertical);
+                    check("UI_playlist_scrollbar_long_list", bar->isVisible() && bar->maximum() > 0);
+                    check("UI_playlist_scrollbar_preserves_width",
+                          bar->width() == nativeBar.sizeHint().width() &&
+                              view.viewport()->width() == view.width() - bar->width());
+                    const auto handleRect = [&] {
+                        QStyleOptionSlider option;
+                        option.initFrom(bar);
+                        option.orientation = Qt::Vertical;
+                        option.minimum = bar->minimum();
+                        option.maximum = bar->maximum();
+                        option.sliderPosition = bar->sliderPosition();
+                        option.sliderValue = bar->value();
+                        option.singleStep = bar->singleStep();
+                        option.pageStep = bar->pageStep();
+                        return bar->style()->subControlRect(QStyle::CC_ScrollBar, &option, QStyle::SC_ScrollBarSlider,
+                                                            bar);
+                    };
+                    const auto alphaMatches = [&](int expected) {
+                        QImage image(bar->size(), QImage::Format_ARGB32_Premultiplied);
+                        image.fill(Qt::transparent);
+                        bar->render(&image, QPoint(), QRegion(), QWidget::RenderFlags{});
+                        const QRect handle = handleRect();
+                        bool transparentTrack = !handle.isEmpty() && !bar->autoFillBackground() &&
+                                                !bar->parentWidget()->autoFillBackground();
+                        for (int y = 0; y < image.height(); ++y)
+                            for (int x = 0; x < image.width(); ++x)
+                                if (!handle.contains(x, y)) transparentTrack &= image.pixelColor(x, y).alpha() == 0;
+                        return transparentTrack && std::abs(image.pixelColor(handle.center()).alpha() - expected) <= 1;
+                    };
+                    view.selectAt(2, Qt::NoModifier);
+                    bar->setValue(120);
+                    const auto scene = view.scene();
+                    GlassStyle::setEnabled(true);
+                    bool alphaTracksGlass = true;
+                    for (float alpha : {0.0f, 0.15f, 0.65f, 1.0f}) {
+                        GlassStyle::setTransparency(alpha);
+                        QCoreApplication::processEvents();
+                        alphaTracksGlass &= alphaMatches(qRound(alpha * 255)) && view.scene().scroll == scene.scroll &&
+                                            view.scene().selected == scene.selected;
+                    }
+                    check("UI_playlist_scrollbar_transparent_track_and_glass_handle", alphaTracksGlass);
+                    GlassStyle::setEnabled(false);
+                    check("UI_playlist_scrollbar_glass_off", alphaMatches(255));
+                    GlassStyle::setTransparency(oldAlpha);
+                    GlassStyle::setEnabled(wasEnabled);
+                    bar->setValue(0);
+                    const QPoint start = handleRect().center();
+                    const QPoint end = start + QPoint(0, 40);
+                    QMouseEvent press(QEvent::MouseButtonPress, start, bar->mapToGlobal(start), Qt::LeftButton,
+                                      Qt::LeftButton, Qt::NoModifier);
+                    QApplication::sendEvent(bar, &press);
+                    QMouseEvent move(QEvent::MouseMove, end, bar->mapToGlobal(end), Qt::NoButton, Qt::LeftButton,
+                                     Qt::NoModifier);
+                    QApplication::sendEvent(bar, &move);
+                    QMouseEvent release(QEvent::MouseButtonRelease, end, bar->mapToGlobal(end), Qt::LeftButton,
+                                        Qt::NoButton, Qt::NoModifier);
+                    QApplication::sendEvent(bar, &release);
+                    check("UI_playlist_scrollbar_drag",
+                          bar->value() > 0 && view.rowAtPos(QPoint(0, 0)) == bar->value() / PlaylistView::kRowH);
+                    bar->setValue(0);
+                    const QPoint wheelPos = view.viewport()->rect().center();
+                    QWheelEvent wheel(wheelPos, view.viewport()->mapToGlobal(wheelPos), QPoint(), QPoint(0, -120),
+                                      Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+                    QApplication::sendEvent(view.viewport(), &wheel);
+                    check("UI_playlist_scrollbar_wheel", bar->value() > 0);
+                    scrollCtl.setTracks({longList.first()});
+                    QCoreApplication::processEvents();
+                    check("UI_playlist_scrollbar_short_list", !bar->isVisible() && bar->value() == 0);
+                }
                 {
                     // 右键菜单：分组 + 子菜单 + 「当前页/当前行做不到的动作不生成」。
                     // 只核对菜单树与动作派发，不 exec：模态菜单会把探针卡在 exec 里。
@@ -1306,10 +1585,88 @@ public:
                 check("UI_borderless", window.windowFlags().testFlag(Qt::FramelessWindowHint));
                 check("UI_approved_compact_width", window.width() < 500 && window.minimumWidth() == 420);
                 check("UI_icon", !AppIcon::icon().isNull());
+                bool iconMatches = true;
+                for (int size : {16, 24, 32, 48, 64, 128, 256})
+                    iconMatches &= AppIcon::image(size).convertToFormat(QImage::Format_ARGB32) ==
+                                   AppIcon::pixmap(size).toImage().convertToFormat(QImage::Format_ARGB32);
+                check("UI_build_icon_matches_window_icon", iconMatches);
+                auto *brandIcon = window.findChild<QLabel *>(QStringLiteral("appIcon"));
+                const QPixmap expectedBrand = AppIcon::icon().pixmap(QSize(16, 16), window.devicePixelRatioF());
+                check("UI_brand_uses_headphone_icon",
+                      brandIcon && brandIcon->pixmap().toImage() == expectedBrand.toImage());
+                {
+                    TrayController tray(&window, &ctl);
+                    auto *nativeTray = tray.findChild<QSystemTrayIcon *>();
+                    if (tray.available() && nativeTray) {
+                        bool trayMatches = true;
+                        for (int size : {16, 32, 64})
+                            trayMatches &=
+                                nativeTray->icon().pixmap(size).toImage() == AppIcon::icon().pixmap(size).toImage();
+                        check("UI_tray_uses_headphone_icon", trayMatches);
+                    } else {
+                        out << "REVIEW_PROBE UI_tray_uses_headphone_icon SKIP requires system tray\n";
+                    }
+                }
+#ifdef Q_OS_WIN
+                HICON embeddedIcon = nullptr;
+                const std::wstring executable = QCoreApplication::applicationFilePath().toStdWString();
+                const UINT extracted = ExtractIconExW(executable.c_str(), 0, nullptr, &embeddedIcon, 1);
+                check("UI_exe_embedded_icon", extracted == 1 && embeddedIcon != nullptr);
+                if (embeddedIcon) DestroyIcon(embeddedIcon);
+#endif
                 check("UI_progress_below_transport",
                       window.m_seek->mapTo(&window, QPoint()).y() > window.m_transport->mapTo(&window, QPoint()).y());
                 check("UI_volume_transport_same_row", std::abs(window.m_volume->mapTo(&window, QPoint()).y() -
                                                                window.m_transport->mapTo(&window, QPoint()).y()) < 5);
+                {
+                    auto *volume = window.m_volume;
+                    const QRectF readout = volume->readoutRect();
+                    const QRectF groove = volume->grooveRect();
+                    const double radius = volume->knobDiameter() / 2.0;
+                    const QFontMetricsF metrics(Fonts::tiny);
+                    check("UI_volume_readout_fits_longest_text",
+                          volume->width() == 96 && readout.left() >= 0 && readout.right() <= volume->width() &&
+                              readout.width() >= metrics.horizontalAdvance(QStringLiteral("100%")) &&
+                              readout.width() >= metrics.horizontalAdvance(QStringLiteral("静音")));
+                    check("UI_volume_knob_cannot_cover_readout",
+                          groove.left() - radius >= 0.5 && groove.right() + radius + 0.5 < readout.left());
+                    const auto textMatches = [&](double value, bool muted) {
+                        volume->setValue(value);
+                        volume->setMuted(muted);
+                        QImage actual(volume->size(), QImage::Format_ARGB32_Premultiplied);
+                        actual.fill(Qt::transparent);
+                        volume->render(&actual, QPoint(), QRegion(), QWidget::RenderFlags{});
+                        QImage expected(volume->size(), QImage::Format_ARGB32_Premultiplied);
+                        expected.fill(Qt::transparent);
+                        QPainter painter(&expected);
+                        painter.setRenderHint(QPainter::Antialiasing, true);
+                        painter.setFont(Fonts::tiny);
+                        painter.setPen((muted || value == 0) ? Theme::meterRed : Theme::inkOnGlassSoft);
+                        const QString text =
+                            muted ? QStringLiteral("静音") : QStringLiteral("%1%").arg(int(value * 100));
+                        painter.drawText(readout, Qt::AlignVCenter | Qt::AlignRight, text);
+                        painter.end();
+                        const QRect crop = readout.toAlignedRect();
+                        return actual.copy(crop) == expected.copy(crop) && volume->grooveRect() == groove;
+                    };
+                    check("UI_volume_readout_unobscured_pixels", textMatches(0, false) && textMatches(0.99, false) &&
+                                                                     textMatches(1, false) && textMatches(1, true));
+                    volume->setMuted(false);
+                    QMouseEvent atMinimum(QEvent::MouseButtonPress, QPointF(groove.left(), groove.center().y()),
+                                          QPointF(groove.left(), groove.center().y()), Qt::LeftButton, Qt::LeftButton,
+                                          Qt::NoModifier);
+                    QApplication::sendEvent(volume, &atMinimum);
+                    const bool reachedMinimum = volume->value() == 0 && window.userVolume() == 0;
+                    QMouseEvent atMaximum(QEvent::MouseButtonPress, QPointF(groove.right(), groove.center().y()),
+                                          QPointF(groove.right(), groove.center().y()), Qt::LeftButton, Qt::LeftButton,
+                                          Qt::NoModifier);
+                    QApplication::sendEvent(volume, &atMaximum);
+                    check("UI_volume_drag_reaches_endpoints",
+                          reachedMinimum && volume->value() == 1 && window.userVolume() == 1);
+                    const QString report = qEnvironmentVariable("TTPLAYER_PROBE");
+                    if (!report.isEmpty()) volume->grab().save(report + QStringLiteral("/volume-100.png"));
+                    window.setUserVolume(0.8);
+                }
                 window.toggleEqPanel();
                 check("UI_EQ_visible", window.m_eqWindow && window.m_eqWindow->isVisible());
                 auto *eq = window.m_eqWindow;
@@ -1339,6 +1696,118 @@ public:
                 check("UI_typing_does_not_mute", window.userMuted() == muted && editor->text() != previousText);
                 window.toggleLyricPanel();
                 check("UI_lyric_visible", window.m_lyricWindow->isVisible());
+#ifdef Q_OS_WIN
+                window.toggleCoverPanel();
+                window.toggleQueuePanel();
+                const QList<QWidget *> windowsPanels{window.m_playlist, eq, window.m_lyricWindow, window.m_coverWindow,
+                                                     window.m_queueWindow};
+                check("UI_windows_owned_tool_panels",
+                      window.windowType() == Qt::Window &&
+                          std::all_of(windowsPanels.begin(), windowsPanels.end(), [&window](QWidget *sub) {
+                              return sub->isWindow() && sub->windowType() == Qt::Tool && sub->parentWidget() == &window;
+                          }));
+                if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+                    check("UI_windows_resolved_font",
+                          QFontInfo(QApplication::font()).family() == QStringLiteral("Microsoft YaHei"));
+                    QCoreApplication::processEvents();
+                    const auto owned = [&] {
+                        return std::all_of(windowsPanels.begin(), windowsPanels.end(),
+                                           [&window](QWidget *sub) { return ownedToolWindow(sub, &window); });
+                    };
+                    check("UI_windows_native_single_taskbar", owned() && nativeTaskbarWindowCount() == 1);
+                    {
+                        QList<QWidget *> group = windowsPanels;
+                        group.prepend(&window);
+                        PinSurfaceMonitor surface(group);
+                        check("UI_windows_pin_layered_baseline", surface.unchanged(false));
+                        window.applyPinTop(true);
+                        const bool immediatePin = surface.unchanged(true);
+                        QCoreApplication::processEvents();
+                        check("UI_windows_pin_preserves_layered_surface", immediatePin && surface.unchanged(true));
+                        check("UI_windows_pin_preserves_taskbar", owned() && nativeTaskbarWindowCount() == 1);
+                        window.applyPinTop(false);
+                        const bool immediateUnpin = surface.unchanged(false);
+                        QCoreApplication::processEvents();
+                        check("UI_windows_unpin_preserves_layered_surface", immediateUnpin && surface.unchanged(false));
+                        check("UI_windows_unpin_preserves_taskbar", owned() && nativeTaskbarWindowCount() == 1);
+                        bool stable = true;
+                        for (int cycle = 0; cycle < 30; ++cycle) {
+                            for (bool pinned : {true, false}) {
+                                window.applyPinTop(pinned);
+                                stable &= surface.unchanged(pinned);
+                                window.applyPinTop(pinned); // 同态重复请求也不能重建或重写透明样式。
+                                QCoreApplication::processEvents();
+                                stable &= surface.unchanged(pinned) && owned() && nativeTaskbarWindowCount() == 1 &&
+                                          window.probeGroupPinned() == (pinned ? 6 : 0);
+                            }
+                        }
+                        check("UI_windows_pin_toggle_30_preserves_surfaces", stable);
+                    }
+                    window.applyPinTop(true);
+                    {
+                        SkinWindow late(QStringLiteral("置顶继承探针"), false, &window);
+                        window.setWindowPinTop(&late, true);
+                        const WId hwnd = late.internalWinId();
+                        late.show();
+                        QCoreApplication::processEvents();
+                        check("UI_windows_pin_first_show_inherits",
+                              hwnd != 0 && late.internalWinId() == hwnd && ownedToolWindow(&late, &window) &&
+                                  (GetWindowLongPtrW(reinterpret_cast<HWND>(hwnd), GWL_EXSTYLE) & WS_EX_TOPMOST) != 0 &&
+                                  !late.windowHandle()->flags().testFlag(Qt::WindowStaysOnTopHint));
+                    }
+                    eq->close();
+                    window.toggleEqPanel();
+                    QCoreApplication::processEvents();
+                    check("UI_windows_reopen_preserves_taskbar", owned() && nativeTaskbarWindowCount() == 1);
+                    check("UI_windows_pin_reopen_inherits", window.probeGroupPinned() == 6);
+                    window.m_coverWindow->close();
+                    window.applyPinTop(false);
+                    window.toggleCoverPanel();
+                    QCoreApplication::processEvents();
+                    check("UI_windows_unpin_hidden_panel_reopen",
+                          window.probeGroupPinned() == 0 && owned() && nativeTaskbarWindowCount() == 1);
+                    window.applyPinTop(true);
+                    window.showMinimized();
+                    QCoreApplication::processEvents();
+                    check("UI_windows_minimize_hides_panels",
+                          std::none_of(windowsPanels.begin(), windowsPanels.end(), [](QWidget *sub) {
+                              return IsWindowVisible(reinterpret_cast<HWND>(sub->winId())) != FALSE;
+                          }));
+                    window.showNormal();
+                    QCoreApplication::processEvents();
+                    check("UI_windows_restore_panels",
+                          owned() && nativeTaskbarWindowCount() == 1 &&
+                              std::all_of(windowsPanels.begin(), windowsPanels.end(), [](QWidget *sub) {
+                                  return IsWindowVisible(reinterpret_cast<HWND>(sub->winId())) != FALSE;
+                              }));
+                    check("UI_windows_pin_minimize_restore", window.probeGroupPinned() == 6);
+                    window.m_groupHideBypassTray = true;
+                    bool minimizeClicked = false;
+                    for (TTButton *button : eq->findChildren<TTButton *>()) {
+                        if (button->toolTip() != QStringLiteral("最小化")) continue;
+                        button->click();
+                        minimizeClicked = true;
+                        break;
+                    }
+                    QCoreApplication::processEvents();
+                    check("UI_windows_panel_minimize_group",
+                          minimizeClicked && window.probeGroupVisible() == 0 && nativeTaskbarWindowCount() == 0);
+                    window.restoreGroupFromBackground();
+                    QCoreApplication::processEvents();
+                    check("UI_windows_panel_minimize_restore",
+                          window.probeGroupVisible() == 6 && owned() && nativeTaskbarWindowCount() == 1);
+                    check("UI_windows_pin_background_restore", window.probeGroupPinned() == 6);
+                    window.hideGroupToBackground();
+                    window.applyPinTop(false);
+                    window.restoreGroupFromBackground();
+                    QCoreApplication::processEvents();
+                    check("UI_windows_unpin_while_hidden_restore", window.probeGroupVisible() == 6 &&
+                                                                       window.probeGroupPinned() == 0 && owned() &&
+                                                                       nativeTaskbarWindowCount() == 1);
+                } else {
+                    out << "REVIEW_PROBE UI_windows_native_taskbar SKIP requires windows platform plugin\n";
+                }
+#endif
                 for (SkinWindow *sub : QList<SkinWindow *>{window.m_playlist, eq, window.m_lyricWindow}) {
                     check("UI_panel_accepts_drop", sub->acceptDrops());
                     bool received = false;

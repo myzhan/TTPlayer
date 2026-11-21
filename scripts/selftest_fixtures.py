@@ -99,6 +99,9 @@ def generate(folder: Path, matrix: bool):
     target = folder / "formats"
     target.mkdir(exist_ok=True)
     dsd_samples(target)
+    # 播放断续回归：保留完整 12 秒，覆盖真实 producer 的多次 2048 帧顺序读取。
+    if not encode(target / "mp3-320.mp3", "libmp3lame", "mp3", extra=["-b:a", "320k", "-t", "12"]):
+        raise RuntimeError("cannot generate 320Kbps MP3 regression fixture")
 
     skipped = []
     monkey = shutil.which("mac")

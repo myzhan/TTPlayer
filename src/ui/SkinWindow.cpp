@@ -4,6 +4,9 @@
 #include "SkinParts.h"
 #include "Painter.h"
 #include "app/Application.h"
+#ifdef Q_OS_WIN
+#include "MainWindow.h"
+#endif
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>
@@ -64,7 +67,12 @@ Qt::Edges frameResizeEdges(const QWidget *w, QPointF p) {
 } // namespace
 
 SkinWindow::SkinWindow(const QString &title, bool allowMinimize, QWidget *parent) : QWidget(parent) {
+#ifdef Q_OS_WIN
+    // 副面板是工具窗，不占独立任务栏/Alt-Tab 入口；主窗仍是普通 Window。
+    setWindowFlags(Qt::Tool | Qt::FramelessWindowHint);
+#else
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
+#endif
     setAttribute(Qt::WA_TranslucentBackground, true);
     setMouseTracking(true); // 未按键也收 move，边缘光标才能提前变缩放形状
     setWindowTitle(title);
@@ -152,6 +160,13 @@ void SkinWindow::onClose() {
     close();
 }
 void SkinWindow::onMinimize() {
+#ifdef Q_OS_WIN
+    // 工具窗没有任务栏恢复入口，最小化键统一交给主窗收起整组。
+    if (auto *main = qobject_cast<MainWindow *>(parentWidget())) {
+        main->hideGroupToBackground();
+        return;
+    }
+#endif
     showMinimized();
 }
 

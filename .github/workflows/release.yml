@@ -110,7 +110,7 @@ jobs:
           linuxdeploy --appdir build/AppDir \
             --executable build/AppDir/usr/bin/ttplayer \
             --desktop-file packaging/ttplayer.desktop \
-            --icon-file packaging/ttplayer.svg \
+            --icon-file build/AppDir/usr/share/icons/hicolor/256x256/apps/ttplayer.png \
             --plugin qt
           ARCH=x86_64 appimagetool build/AppDir "TTPlayer-$VERSION-linux-x86_64.AppImage"
       - name: Smoke test AppImage
@@ -175,7 +175,7 @@ jobs:
           if-no-files-found: error
 
   windows:
-    # 产物：TTPlayer-<ver>-windows-x64.zip（bin/ 内已含 Qt 插件，解压到可写目录即可运行；SDL3/zlib/libarchive 已静态内置）
+    # 产物：TTPlayer-<ver>-windows-x64.zip（exe 同目录自带 Release VC 运行时及 Qt 插件，无需安装 VC；SDL3/zlib/libarchive 已静态内置）
     name: Windows x64
     runs-on: windows-2022
     timeout-minutes: 75
@@ -228,14 +228,11 @@ jobs:
         run: |
           cmake --install build/release --config Release --prefix build/dist
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          # install 已调用 Qt 部署；这里幂等补齐插件与 VC 运行时。
-          windeployqt --release --no-translations build/dist/bin/ttplayer.exe
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Smoke test
+          # CMake install 统一部署 Qt 插件与 app-local Release VC DLL，不附安装器。
+      - name: Verify app-local runtime and smoke test
         shell: pwsh
         run: |
-          $env:TTPLAYER_QT_STATE = "$env:RUNNER_TEMP/state.json"
-          & build/dist/bin/ttplayer.exe --version
+          python scripts/package.py --verify-windows build/dist
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Pack zip
         shell: pwsh
@@ -326,7 +323,7 @@ jobs:
           body: |
             ## 安装
 
-            - **Windows**：解压到可写目录（不要放 Program Files），运行 `bin/ttplayer.exe`。用户数据保存在 exe 同目录。
+            - **Windows**：解压到可写目录（不要放 Program Files），运行 `bin/ttplayer.exe`。VC 运行时已随包附带，无需另行安装；用户数据保存在 exe 同目录。
             - **Linux**：下载 `.AppImage`，`chmod +x` 后直接运行，无需安装。Qt 6 与 Qt 插件已打包在内；系统只需提供 glibc 2.35 及以上的 OpenGL、X11/xcb、DBus 运行库（Ubuntu 22.04+、Debian 12+、Fedora 36+ 均满足）。
             - **macOS**：打开 dmg，把 ttplayer.app 拖进 Applications。包为 adhoc 签名、未公证，首次启动请右键「打开」。
 

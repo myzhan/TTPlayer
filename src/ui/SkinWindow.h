@@ -54,7 +54,7 @@ protected:
 
     // 标题条关闭键动作：默认 close()（顶层窗无 WA_DeleteOnClose 即隐藏，有则销毁）。
     virtual void onClose();
-    // 标题条最小化键动作：默认 showMinimized()。
+    // 标题条最小化键动作：Windows 工具窗交给主窗收起整组，其他情况 showMinimized()。
     virtual void onMinimize();
 
 private:

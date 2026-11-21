@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "AppIcon.h"
 #include "PlayerKeys.h"
 #include "SpectrumView.h"
 #include "TransportBar.h"
@@ -63,6 +64,9 @@
 #include <QScreen>
 #include <QCloseEvent>
 #include <QShowEvent>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 // 无边框主窗外壳圆角半径（px）：mask 与自绘壳用同一个值，轮廓与描边对齐。
 // 4px 布局内边距让子控件方角落在圆弧内侧，不致露出直角。
@@ -73,6 +77,16 @@ static constexpr qreal kSkinRadius = 10.0;
 static constexpr int kSkinLayoutVersion = 7;
 
 namespace {
+
+// Windows 的工具面板归属主窗，主窗最小化/恢复时由系统收起/带回；其他平台保留原关系。
+QWidget *panelOwner(QWidget *mainWindow) {
+#ifdef Q_OS_WIN
+    return mainWindow;
+#else
+    Q_UNUSED(mainWindow)
+    return nullptr;
+#endif
+}
 
 bool pathWithinRoot(const QString &path, const QString &root) {
     if (path.isEmpty() || root.isEmpty()) return false;
@@ -278,18 +292,12 @@ MainWindow::MainWindow(PlayerController *controller, AudioEnginePtr engine, QWid
     auto *tl = new QHBoxLayout(titleBar);
     tl->setContentsMargins(8, 1, 4, 1);
     tl->setSpacing(3);
-    // 品牌音符图标：矢量渲染到 pixmap，不依赖系统字体，三平台一致
-    auto *musicIcon = new QLabel(titleBar);
-    {
-        QPixmap pm(16, 16);
-        pm.fill(Qt::transparent);
-        QPainter ip(&pm);
-        Skin::drawGlyph(&ip, Skin::Glyph::Music, QRectF(0, 0, 16, 16), Theme::titleText, 0.82);
-        ip.end();
-        musicIcon->setPixmap(pm);
-    }
-    musicIcon->setFixedSize(16, 16);
-    musicIcon->setStyleSheet(QStringLiteral("background:transparent;"));
+    // 品牌图标与窗口、托盘和发布包共用同一枚耳机。
+    auto *brandIcon = new QLabel(titleBar);
+    brandIcon->setObjectName(QStringLiteral("appIcon"));
+    brandIcon->setPixmap(AppIcon::icon().pixmap(QSize(16, 16), devicePixelRatioF()));
+    brandIcon->setFixedSize(16, 16);
+    brandIcon->setStyleSheet(QStringLiteral("background:transparent;"));
     auto *brand = new QLabel(QStringLiteral("千千静听"), titleBar);
     brand->setFont(Fonts::panelTitle);
     brand->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(Theme::titleText.name()));
@@ -320,7 +328,7 @@ MainWindow::MainWindow(PlayerController *controller, AudioEnginePtr engine, QWid
     closeBtn->setFace(TTButton::Face::Glass);
     closeBtn->setPreferredSize({22, 18});
     closeBtn->setToolTip(QStringLiteral("关闭"));
-    tl->addWidget(musicIcon);
+    tl->addWidget(brandIcon);
     tl->addWidget(brand);
     tl->addWidget(m_modeBadge);
     tl->addStretch();
@@ -611,24 +619,36 @@ void MainWindow::updateModeBadge() {
     m_modeBadge->setText(QStringLiteral("[%1]").arg(name));
 }
 
-// 对单扇窗切换 stays-on-top。已建平台窗（show 过）的走 QWindow::setFlags 就地生效：
-// macOS 上 WindowStaysOnTopHint 只是切 NSWindow level、Windows 上只是重排 z-order，
-// 都不必 hide→重建→show——那一下正是「点置顶窗体先消失再出现」的闪烁来源
-//（QWidget::setWindowFlags 对可见窗总会先隐藏，无边框窗重建还可能挪位）。
-// 还没建平台窗的（尚未 show）只记到 QWidget flags，show 时一次性带上，同样不闪。
+// Windows 的 QWindow::setFlags 会重写扩展样式，先移除再恢复 WS_EX_LAYERED，
+// 破坏透明窗的合成表面；原生置顶只改层级，不隐藏、不重建、不改 owner。
+// 其他平台沿用 QWindow 就地改 flags，未建平台窗时才写 QWidget flags。
 void MainWindow::setWindowPinTop(QWidget *w, bool on) {
     if (!w) return;
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+        // 首次置顶隐藏面板时先建 HWND，不把 hint 留在 Qt flags 中，避免重开恢复旧 hint。
+        if (!on && !w->internalWinId()) return;
+        const HWND hwnd = reinterpret_cast<HWND>(w->winId());
+        if (IsWindow(hwnd) && ((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0) == on) return;
+        if (!SetWindowPos(hwnd, on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER)) {
+            const DWORD error = GetLastError();
+            m_status->setText(QStringLiteral("窗口置顶切换失败（%1）").arg(error));
+            qWarning("窗口置顶切换失败（%lu）", static_cast<unsigned long>(error));
+        }
+        return;
+    }
+#endif
     QWindow *win = w->windowHandle();
-    // 以「当前真实 flags」为准判等：平台窗已建时读 win->flags()（w->windowFlags() 走
-    // 就地改这条路不会被同步，留着旧值），未建时才读 QWidget 记录。
+    // QWindow 的就地修改不会同步 QWidget flags，判等读平台窗记录。
     const Qt::WindowFlags cur = win ? win->flags() : w->windowFlags();
-    if (cur.testFlag(Qt::WindowStaysOnTopHint) == on) return; // 已是目标态，免重复
+    if (cur.testFlag(Qt::WindowStaysOnTopHint) == on) return;
     Qt::WindowFlags f = cur;
     f.setFlag(Qt::WindowStaysOnTopHint, on);
     if (win)
-        win->setFlags(f); // 就地改，不 hide/show → 无闪烁
+        win->setFlags(f);
     else
-        w->setWindowFlags(f); // 平台窗未建，记下来 show 时带上
+        w->setWindowFlags(f);
 }
 
 // 置顶：用户置顶 = 整组置顶。主窗 + 当前可见的列表/均衡器/歌词/封面/队列一起 stays-on-top；
@@ -643,7 +663,7 @@ void MainWindow::togglePinTop(bool on) {
 // 面板开合（标题/底部按钮与无头探针共用同一条通路）：懒建 + 开/关，显示时继承当前置顶态。
 void MainWindow::togglePlaylistPanel() {
     if (!m_playlist) {
-        m_playlist = new PlaylistWindow(m_controller, &m_collections);
+        m_playlist = new PlaylistWindow(m_controller, &m_collections, panelOwner(this));
         m_playlist->setEnabled(!m_restoringLibrary);
         connect(m_playlist, &PlaylistWindow::collectionsChanged, this, [this] {
             m_collections.invalidateIndex();
@@ -747,7 +767,7 @@ void MainWindow::togglePlaylistPanel() {
 
 void MainWindow::toggleEqPanel() {
     if (!m_eqWindow) {
-        m_eqWindow = new EqWindow(m_engine);
+        m_eqWindow = new EqWindow(m_engine, panelOwner(this));
         connect(m_eqWindow, &EqWindow::volumeRequested, this, [this](double value) {
             m_vol = value;
             m_muted = false;
@@ -768,7 +788,7 @@ void MainWindow::toggleEqPanel() {
 
 void MainWindow::toggleLyricPanel() {
     if (!m_lyricWindow) {
-        m_lyricWindow = new LyricWindow(m_controller);
+        m_lyricWindow = new LyricWindow(m_controller, panelOwner(this));
         if (m_dock) m_dock->registerPanel(SkinDock::Lyric, m_lyricWindow);
     }
     const bool show = !m_lyricWindow->isVisible();
@@ -781,7 +801,7 @@ void MainWindow::toggleLyricPanel() {
 }
 
 void MainWindow::toggleCoverPanel() {
-    if (!m_coverWindow) m_coverWindow = new CoverWindow(m_controller);
+    if (!m_coverWindow) m_coverWindow = new CoverWindow(m_controller, panelOwner(this));
     const bool show = !m_coverWindow->isVisible();
     if (show) {
         m_coverWindow->reload();
@@ -792,7 +812,7 @@ void MainWindow::toggleCoverPanel() {
 }
 
 void MainWindow::toggleQueuePanel() {
-    if (!m_queueWindow) m_queueWindow = new QueueWindow(m_controller);
+    if (!m_queueWindow) m_queueWindow = new QueueWindow(m_controller, panelOwner(this));
     const bool show = !m_queueWindow->isVisible();
     if (show) {
         m_queueWindow->reload();
@@ -816,8 +836,14 @@ int MainWindow::probeGroupPinned() const {
     int n = 0;
     for (const QWidget *w : group) {
         if (!w || !w->isVisible()) continue;
-        // 就地置顶走的是 QWindow::setFlags，QWidget::windowFlags() 不会同步，
-        // 故以平台窗 win->flags() 为凭据（未建平台窗时才回退读 QWidget 记录）。
+#ifdef Q_OS_WIN
+        if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+            const HWND hwnd = reinterpret_cast<HWND>(w->internalWinId());
+            if (IsWindow(hwnd) && (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0) ++n;
+            continue;
+        }
+#endif
+        // 非 Windows 原生窗口按 QWindow flags 计数，未建窗时回退 QWidget flags。
         QWindow *win = w->windowHandle();
         const Qt::WindowFlags f = win ? win->flags() : w->windowFlags();
         if (f.testFlag(Qt::WindowStaysOnTopHint)) ++n;
@@ -851,8 +877,12 @@ void MainWindow::restoreGroupFromBackground() {
         activateWindow();
         return;
     }
-    for (QWidget *w : std::as_const(m_groupBeforeHide))
+    for (QWidget *w : std::as_const(m_groupBeforeHide)) {
         w->show();
+#ifdef Q_OS_WIN
+        setWindowPinTop(w, m_pinTop);
+#endif
+    }
     m_groupBeforeHide.clear();
     m_groupHidden = false;
     showNormal();
@@ -1351,6 +1381,9 @@ void MainWindow::closeEvent(QCloseEvent *e) {
 // 首次显示才装停靠组：那时 frameGeometry 才是真实的全局位置 / 尺寸。
 void MainWindow::showEvent(QShowEvent *e) {
     QWidget::showEvent(e);
+#ifdef Q_OS_WIN
+    setWindowPinTop(this, m_pinTop);
+#endif
     if (m_dockReady) return;
     m_dockReady = true;
     m_dock = new SkinDock(this);
