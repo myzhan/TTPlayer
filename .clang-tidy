@@ -1,0 +1,52 @@
+---
+# TTPlayer Qt/C++ 静态检查规则（clang-tidy 18.1.8）
+#
+# 两条纪律：
+# 1. 只保留「当前代码树能干净通过」的检查，CI 才能当天就设成门槛；
+#    更严的档（narrowing / const-correctness / include-cleaner）噪音大，
+#    等对应模块顺手改了再逐条加回来，不在这里一次性挂红。
+# 2. 不检查第三方与生成代码：3rd/、build/、*_autogen/ 不在 HeaderFilterRegex 内。
+#
+# 关掉 clang-analyzer-cplusplus.NewDeleteLeaks：Qt 的 QObject 父子所有权它不建模，
+# 会把 new QFutureWatcher(this) 报成泄漏（MainWindow::rescanLibrary 等三处实测均为误报）。
+# 其余 clang-analyzer 检查保留（double free / use-after-free / 空指针仍会报）。
+#
+# 另外关掉四个「会逼着改历史写法」的检查：
+#   - clang-analyzer-optin.*：Padding 之类需要重排公开结构体字段，收益低；
+#   - bugprone-exception-escape：Qt 的 main 包着事件循环，异常出口不可控；
+#   - misc-use-anonymous-namespace：探针函数统一用文件内 static，改成匿名 namespace 只是搬家。
+#   - performance-unnecessary-value-param：AudioEnginePtr 是 shared_ptr，按值传只在探针路径，不动。
+#
+# 跑法见 scripts/lint.py（tidy 子命令）；CI 以 --all 整仓检查 src/，历史债已清零。
+Checks: >
+  -*,
+  clang-analyzer-*,
+  -clang-analyzer-optin.*,
+  -clang-analyzer-cplusplus.NewDeleteLeaks,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
+  -bugprone-narrowing-conversions,
+  -bugprone-macro-parentheses,
+  -bugprone-signed-bitwise,
+  -bugprone-throwing-static-initialization,
+  performance-*,
+  -performance-enum-size,
+  -performance-unnecessary-value-param,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-use-emplace,
+  modernize-use-equals-default,
+  misc-unused-using-decls,
+  misc-redundant-expression,
+  readability-container-size-empty,
+  readability-inconsistent-declaration-parameter-name,
+  readability-redundant-smartptr-get,
+  readability-redundant-string-cstr,
+  readability-duplicate-include,
+  readability-misleading-indentation
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*/src/.*'
+UseColor: false
+FormatStyle: file
+...

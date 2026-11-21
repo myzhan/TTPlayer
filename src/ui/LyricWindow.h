@@ -1,6 +1,6 @@
 #pragma once
 
-// 歌词窗（对应 Swift LyricWindow 的滚动显示，自包含版）：监听控制器位置回显，
+// 歌词窗（滚动显示，自包含版）：监听控制器位置回显，
 // 用同名 .lrc 查当前行，居中高亮、上下渐隐。完整的时间轴校准/整盘 CUE 偏移属后续。
 
 #include "core/PlayerController.h"
@@ -14,7 +14,7 @@ class LyricWindow : public SkinWindow {
 public:
     explicit LyricWindow(PlayerController *controller, QWidget *parent = nullptr);
 
-    void reload();   // 按当前曲目重新查找歌词
+    void reload(); // 按当前曲目重新查找歌词
 
 protected:
     void paintBody(QPainter *p, const QRectF &rect) override;

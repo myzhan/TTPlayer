@@ -33,9 +33,10 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
-        const float a = GlassStyle::enabled() ? GlassStyle::glassAlpha() : 1.0f;
-        Painter::drawBody(&p, QRectF(rect()), Theme::titleTop, Theme::titleBottom, a, 0,
-                          Theme::skinEdge, true);
+        // 标题条跟随所属窗：辅助窗（设置/属性/队列/封面）不透明时不再透出下层。
+        const auto *shell = qobject_cast<SkinWindow *>(window());
+        const float a = shell ? shell->shellAlpha() : (GlassStyle::enabled() ? GlassStyle::glassAlpha() : 1.0f);
+        Painter::drawBody(&p, QRectF(rect()), Theme::titleTop, Theme::titleBottom, a, 0, Theme::skinEdge, true);
     }
     void mousePressEvent(QMouseEvent *e) override {
         if (e->button() == Qt::LeftButton) {
@@ -62,11 +63,10 @@ Qt::Edges frameResizeEdges(const QWidget *w, QPointF p) {
 
 } // namespace
 
-SkinWindow::SkinWindow(const QString &title, bool allowMinimize, QWidget *parent)
-    : QWidget(parent) {
+SkinWindow::SkinWindow(const QString &title, bool allowMinimize, QWidget *parent) : QWidget(parent) {
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
     setAttribute(Qt::WA_TranslucentBackground, true);
-    setMouseTracking(true);   // 未按键也收 move，边缘光标才能提前变缩放形状
+    setMouseTracking(true); // 未按键也收 move，边缘光标才能提前变缩放形状
     setWindowTitle(title);
     setAcceptDrops(true);
 
@@ -75,7 +75,7 @@ SkinWindow::SkinWindow(const QString &title, bool allowMinimize, QWidget *parent
     root->setSpacing(3);
 
     auto *bar = new SkinTitleBar(this);
-    m_titleBar=bar;
+    m_titleBar = bar;
     auto *bl = new QHBoxLayout(bar);
     bl->setContentsMargins(8, 1, 4, 1);
     bl->setSpacing(3);
@@ -111,30 +111,49 @@ SkinWindow::SkinWindow(const QString &title, bool allowMinimize, QWidget *parent
 
 void SkinWindow::paintEvent(QPaintEvent *) {
     QPainter p(this);
-    const float a = GlassStyle::enabled() ? GlassStyle::glassAlpha() : 1.0f;
-    Painter::drawBody(&p, QRectF(rect()), Theme::windowTop, Theme::windowBottom, a, kSkinRadius,
+    Painter::drawBody(&p, QRectF(rect()), Theme::windowTop, Theme::windowBottom, shellAlpha(), kSkinRadius,
                       Theme::skinEdge, true);
     if (m_body) paintBody(&p, QRectF(m_body->geometry()));
 }
 
-void SkinWindow::showEvent(QShowEvent *e) {
-    QWidget::showEvent(e);
-    if (m_body) m_body->update();   // body 透明，靠父窗 paintBody 铺底，尺寸落定后补一次
+void SkinWindow::setGlassTransparencyFollows(bool on) {
+    if (m_followGlass == on) return;
+    m_followGlass = on;
+    update();
+    if (m_titleBar) m_titleBar->update();
 }
 
-void SkinWindow::setTitleBarVisible(bool visible){m_titleBar->setVisible(visible);}
-void SkinWindow::dragEnterEvent(QDragEnterEvent *event){if(event->mimeData()->hasUrls())event->acceptProposedAction();}
-void SkinWindow::dropEvent(QDropEvent *event){
+float SkinWindow::shellAlpha() const {
+    return (m_followGlass && GlassStyle::enabled()) ? GlassStyle::glassAlpha() : 1.0f;
+}
+
+void SkinWindow::showEvent(QShowEvent *e) {
+    QWidget::showEvent(e);
+    if (m_body) m_body->update(); // body 透明，靠父窗 paintBody 铺底，尺寸落定后补一次
+}
+
+void SkinWindow::setTitleBarVisible(bool visible) {
+    m_titleBar->setVisible(visible);
+}
+void SkinWindow::dragEnterEvent(QDragEnterEvent *event) {
+    if (event->mimeData()->hasUrls()) event->acceptProposedAction();
+}
+void SkinWindow::dropEvent(QDropEvent *event) {
     QStringList paths;
-    for(const QUrl &url:event->mimeData()->urls())paths<< (url.isLocalFile()?url.toLocalFile():url.toString());
-    if(paths.isEmpty())return;
+    for (const QUrl &url : event->mimeData()->urls())
+        paths << (url.isLocalFile() ? url.toLocalFile() : url.toString());
+    if (paths.isEmpty()) return;
     emit filesDropped(paths);
-    if(auto *app=dynamic_cast<PlayerApplication *>(qApp);app&&app->openFiles)app->openFiles(paths);
+    if (auto *app = dynamic_cast<PlayerApplication *>(qApp); app && app->openFiles) app->openFiles(paths);
     event->acceptProposedAction();
 }
 
-void SkinWindow::onClose() { close(); }
-void SkinWindow::onMinimize() { showMinimized(); }
+void SkinWindow::onClose() {
+    close();
+}
+void SkinWindow::onMinimize() {
+    showMinimized();
+}
 
 void SkinWindow::mousePressEvent(QMouseEvent *e) {
     if (e->button() == Qt::LeftButton) {
@@ -142,18 +161,23 @@ void SkinWindow::mousePressEvent(QMouseEvent *e) {
         if (edges != Qt::Edges()) {
             if (auto *wh = windowHandle(); wh && wh->startSystemResize(edges)) return;
         }
-        if(!m_titleBar->isVisible())if(auto *wh=windowHandle();wh&&wh->startSystemMove())return;
+        if (!m_titleBar->isVisible())
+            if (auto *wh = windowHandle(); wh && wh->startSystemMove()) return;
     }
     QWidget::mousePressEvent(e);
 }
 
 void SkinWindow::mouseMoveEvent(QMouseEvent *e) {
     const Qt::Edges edges = frameResizeEdges(this, e->position());
-    if ((edges & Qt::LeftEdge) && (edges & Qt::BottomEdge)) setCursor(Qt::SizeBDiagCursor);
-    else if ((edges & Qt::RightEdge) && (edges & Qt::BottomEdge)) setCursor(Qt::SizeFDiagCursor);
-    else if (edges & Qt::LeftEdge) setCursor(Qt::SizeHorCursor);
-    else if (edges & Qt::RightEdge) setCursor(Qt::SizeHorCursor);
-    else if (edges & Qt::BottomEdge) setCursor(Qt::SizeVerCursor);
-    else setCursor(Qt::ArrowCursor);
+    if ((edges & Qt::LeftEdge) && (edges & Qt::BottomEdge))
+        setCursor(Qt::SizeBDiagCursor);
+    else if ((edges & Qt::RightEdge) && (edges & Qt::BottomEdge))
+        setCursor(Qt::SizeFDiagCursor);
+    else if (edges & (Qt::LeftEdge | Qt::RightEdge))
+        setCursor(Qt::SizeHorCursor);
+    else if (edges & Qt::BottomEdge)
+        setCursor(Qt::SizeVerCursor);
+    else
+        setCursor(Qt::ArrowCursor);
     QWidget::mouseMoveEvent(e);
 }

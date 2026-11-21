@@ -15,7 +15,10 @@
 #include <QFontMetrics>
 
 namespace {
-QColor scaledAlpha(QColor c, float a) { c.setAlphaF(c.alphaF() * a); return c; }
+QColor scaledAlpha(QColor c, float a) {
+    c.setAlphaF(c.alphaF() * a);
+    return c;
+}
 
 // 小下拉三角（combo / spinbox 复用）
 void drawChevron(QPainter *p, const QRectF &box, bool up, const QColor &color) {
@@ -27,9 +30,13 @@ void drawChevron(QPainter *p, const QRectF &box, bool up, const QColor &color) {
     const qreal w = qMin<qreal>(6.0, box.width() * 0.4), h = 3.5;
     QPainterPath t;
     if (up) {
-        t.moveTo(cx - w, cy + h); t.lineTo(cx + w, cy + h); t.lineTo(cx, cy - h);
+        t.moveTo(cx - w, cy + h);
+        t.lineTo(cx + w, cy + h);
+        t.lineTo(cx, cy - h);
     } else {
-        t.moveTo(cx - w, cy - h); t.lineTo(cx + w, cy - h); t.lineTo(cx, cy + h);
+        t.moveTo(cx - w, cy - h);
+        t.lineTo(cx + w, cy - h);
+        t.lineTo(cx, cy + h);
     }
     t.closeSubpath();
     p->drawPath(t);
@@ -40,10 +47,9 @@ void drawChevron(QPainter *p, const QRectF &box, bool up, const QColor &color) {
 // ————————————————————————————————————————————————
 // SkinSection
 // ————————————————————————————————————————————————
-SkinSection::SkinSection(const QString &title, QWidget *parent)
-    : QWidget(parent), m_title(title) {
+SkinSection::SkinSection(const QString &title, QWidget *parent) : QWidget(parent), m_title(title) {
     auto *v = new QVBoxLayout(this);
-    v->setContentsMargins(2, 22, 2, 4);   // 顶部留 22 给标题 + 发丝
+    v->setContentsMargins(2, 22, 2, 4); // 顶部留 22 给标题 + 发丝
     v->setSpacing(0);
     m_content = new QWidget(this);
     v->addWidget(m_content);
@@ -67,8 +73,7 @@ void SkinSection::paintEvent(QPaintEvent *) {
 // ————————————————————————————————————————————————
 // SkinCheckBox
 // ————————————————————————————————————————————————
-SkinCheckBox::SkinCheckBox(const QString &text, QWidget *parent)
-    : QAbstractButton(parent), m_text(text) {
+SkinCheckBox::SkinCheckBox(const QString &text, QWidget *parent) : QAbstractButton(parent), m_text(text) {
     setCheckable(true);
     setCursor(Qt::PointingHandCursor);
     setAttribute(Qt::WA_Hover, true);
@@ -106,8 +111,8 @@ void SkinCheckBox::paintEvent(QPaintEvent *) {
     // 文字
     p.setFont(Fonts::base);
     p.setPen(isChecked() ? Theme::inkOnGlass : scaledAlpha(Theme::inkOnGlass, 0.92f));
-    p.drawText(QRectF(box.right() + 8, 0, width() - box.right() - 10, height()),
-               Qt::AlignVCenter | Qt::AlignLeft, m_text);
+    p.drawText(QRectF(box.right() + 8, 0, width() - box.right() - 10, height()), Qt::AlignVCenter | Qt::AlignLeft,
+               m_text);
     Q_UNUSED(a);
 }
 
@@ -126,7 +131,10 @@ SkinTabWidget::SkinTabWidget(QWidget *parent) : QWidget(parent) {
 int SkinTabWidget::addTab(QWidget *page, const QString &label) {
     const int i = m_stack->addWidget(page);
     m_labels << label;
-    if (m_labels.size() == 1) { m_current = 0; m_stack->setCurrentIndex(0); }
+    if (m_labels.size() == 1) {
+        m_current = 0;
+        m_stack->setCurrentIndex(0);
+    }
     update();
     return i;
 }
@@ -158,13 +166,18 @@ void SkinTabWidget::paintEvent(QPaintEvent *) {
         Painter::drawHoverFace(&p, r, hot, false, 5, false);
         if (sel) {
             // 选中：一层极淡 accent + 底部 accent 下划线
-            p.fillPath([&]{ QPainterPath q; q.addRoundedRect(r, 5, 5); return q; }(),
-                       scaledAlpha(Theme::textAccent, 0.16f));
+            p.fillPath(
+                [&] {
+                    QPainterPath q;
+                    q.addRoundedRect(r, 5, 5);
+                    return q;
+                }(),
+                scaledAlpha(Theme::textAccent, 0.16f));
             p.setPen(Qt::NoPen);
             p.setBrush(scaledAlpha(Theme::inkOnGlassAccent, 0.9f));
             p.drawRect(QRectF(r.left() + 6, r.bottom() - 1, r.width() - 12, 2));
         }
-        p.setFont(sel ? Fonts::small : Fonts::small);
+        p.setFont(Fonts::small);
         p.setPen(sel ? Theme::inkOnGlass : scaledAlpha(Theme::inkOnGlass, 0.7f));
         p.drawText(r, Qt::AlignCenter, m_labels[i]);
     }
@@ -173,19 +186,31 @@ void SkinTabWidget::paintEvent(QPaintEvent *) {
 
 void SkinTabWidget::mousePressEvent(QMouseEvent *e) {
     for (int i = 0; i < m_labels.size(); ++i)
-        if (tabRect(i).contains(e->position())) { setCurrentIndex(i); return; }
+        if (tabRect(i).contains(e->position())) {
+            setCurrentIndex(i);
+            return;
+        }
     QWidget::mousePressEvent(e);
 }
 
 void SkinTabWidget::mouseMoveEvent(QMouseEvent *e) {
     int h = -1;
     for (int i = 0; i < m_labels.size(); ++i)
-        if (tabRect(i).contains(e->position())) { h = i; break; }
-    if (h != m_hot) { m_hot = h; update(); }
+        if (tabRect(i).contains(e->position())) {
+            h = i;
+            break;
+        }
+    if (h != m_hot) {
+        m_hot = h;
+        update();
+    }
 }
 
 void SkinTabWidget::leaveEvent(QEvent *) {
-    if (m_hot != -1) { m_hot = -1; update(); }
+    if (m_hot != -1) {
+        m_hot = -1;
+        update();
+    }
 }
 
 // ————————————————————————————————————————————————
@@ -201,8 +226,10 @@ SkinComboBox::SkinComboBox(QWidget *parent) : QWidget(parent) {
 void SkinComboBox::addItem(const QString &text, const QVariant &data) {
     m_texts << text;
     m_datas << data;
-    if (m_current < 0) setCurrentIndex(0);
-    else update();
+    if (m_current < 0)
+        setCurrentIndex(0);
+    else
+        update();
 }
 
 void SkinComboBox::setCurrentIndex(int i) {
@@ -223,8 +250,7 @@ void SkinComboBox::paintEvent(QPaintEvent *) {
     p.setFont(Fonts::base);
     p.setPen(Theme::inkOnGlass);
     const QString cur = m_current >= 0 ? m_texts.value(m_current) : QString();
-    p.drawText(QRectF(8, 0, width() - 26, height()),
-               Qt::AlignVCenter | Qt::AlignLeft, cur);
+    p.drawText(QRectF(8, 0, width() - 26, height()), Qt::AlignVCenter | Qt::AlignLeft, cur);
     drawChevron(&p, QRectF(width() - 20, 0, 16, height()), false, scaledAlpha(Theme::inkOnGlass, 0.8f));
 }
 
@@ -232,8 +258,14 @@ void SkinComboBox::mousePressEvent(QMouseEvent *) {
     if (!m_texts.isEmpty()) openPopup();
 }
 
-void SkinComboBox::enterEvent(QEnterEvent *) { m_hot = true; update(); }
-void SkinComboBox::leaveEvent(QEvent *) { m_hot = false; update(); }
+void SkinComboBox::enterEvent(QEnterEvent *) {
+    m_hot = true;
+    update();
+}
+void SkinComboBox::leaveEvent(QEvent *) {
+    m_hot = false;
+    update();
+}
 
 void SkinComboBox::openPopup() {
     auto *pop = new QWidget(nullptr, Qt::Popup);
@@ -268,7 +300,11 @@ SkinSpinBox::SkinSpinBox(QWidget *parent) : QWidget(parent) {
     connect(&GlassNotifier::instance(), &GlassNotifier::changed, this, [this] { update(); });
 }
 
-void SkinSpinBox::setRange(int lo, int hi) { m_lo = lo; m_hi = hi; setValue(m_value); }
+void SkinSpinBox::setRange(int lo, int hi) {
+    m_lo = lo;
+    m_hi = hi;
+    setValue(m_value);
+}
 
 void SkinSpinBox::setValue(int v) {
     const int c = qBound(m_lo, v, m_hi);
@@ -285,7 +321,9 @@ QRectF SkinSpinBox::downRect() const {
     return QRectF(width() - 18, height() / 2.0, 17, height() / 2.0 - 1);
 }
 
-void SkinSpinBox::step(int dir) { setValue(m_value + dir); }
+void SkinSpinBox::step(int dir) {
+    setValue(m_value + dir);
+}
 
 void SkinSpinBox::paintEvent(QPaintEvent *) {
     QPainter p(this);
@@ -309,18 +347,32 @@ void SkinSpinBox::paintEvent(QPaintEvent *) {
 }
 
 void SkinSpinBox::mousePressEvent(QMouseEvent *e) {
-    if (upRect().contains(e->position())) step(+1);
-    else if (downRect().contains(e->position())) step(-1);
+    if (upRect().contains(e->position()))
+        step(+1);
+    else if (downRect().contains(e->position()))
+        step(-1);
 }
 
-void SkinSpinBox::enterEvent(QEnterEvent *) { setMouseTracking(true); }
-void SkinSpinBox::leaveEvent(QEvent *) { if (m_hotBtn) { m_hotBtn = 0; update(); } }
+void SkinSpinBox::enterEvent(QEnterEvent *) {
+    setMouseTracking(true);
+}
+void SkinSpinBox::leaveEvent(QEvent *) {
+    if (m_hotBtn) {
+        m_hotBtn = 0;
+        update();
+    }
+}
 
 void SkinSpinBox::mouseMoveEvent(QMouseEvent *e) {
     int h = 0;
-    if (upRect().contains(e->position())) h = 1;
-    else if (downRect().contains(e->position())) h = -1;
-    if (h != m_hotBtn) { m_hotBtn = h; update(); }
+    if (upRect().contains(e->position()))
+        h = 1;
+    else if (downRect().contains(e->position()))
+        h = -1;
+    if (h != m_hotBtn) {
+        m_hotBtn = h;
+        update();
+    }
 }
 
 // ————————————————————————————————————————————————
@@ -333,7 +385,11 @@ SkinSlider::SkinSlider(QWidget *parent) : QWidget(parent) {
     connect(&GlassNotifier::instance(), &GlassNotifier::changed, this, [this] { update(); });
 }
 
-void SkinSlider::setRange(int lo, int hi) { m_lo = lo; m_hi = hi; update(); }
+void SkinSlider::setRange(int lo, int hi) {
+    m_lo = lo;
+    m_hi = hi;
+    update();
+}
 
 void SkinSlider::setValue(int v) {
     const int c = qBound(m_lo, v, m_hi);
@@ -384,12 +440,23 @@ void SkinSlider::mousePressEvent(QMouseEvent *e) {
     m_dragging = true;
     setFromX(e->position().x());
 }
-void SkinSlider::mouseMoveEvent(QMouseEvent *e) { if (m_dragging) setFromX(e->position().x()); }
-void SkinSlider::mouseReleaseEvent(QMouseEvent *) {
-    if (m_dragging) { m_dragging = false; emit sliderReleased(); }
+void SkinSlider::mouseMoveEvent(QMouseEvent *e) {
+    if (m_dragging) setFromX(e->position().x());
 }
-void SkinSlider::enterEvent(QEnterEvent *) { m_hot = true; update(); }
-void SkinSlider::leaveEvent(QEvent *) { m_hot = false; update(); }
+void SkinSlider::mouseReleaseEvent(QMouseEvent *) {
+    if (m_dragging) {
+        m_dragging = false;
+        emit sliderReleased();
+    }
+}
+void SkinSlider::enterEvent(QEnterEvent *) {
+    m_hot = true;
+    update();
+}
+void SkinSlider::leaveEvent(QEvent *) {
+    m_hot = false;
+    update();
+}
 
 // ————————————————————————————————————————————————
 // SkinListView
@@ -403,23 +470,40 @@ SkinListView::SkinListView(QWidget *parent) : QWidget(parent) {
 void SkinListView::setItems(const QStringList &items) {
     m_items = items;
     m_datas.clear();
-    for (int i = 0; i < m_items.size(); ++i) m_datas << QVariant();
+    for (int i = 0; i < m_items.size(); ++i)
+        m_datas << QVariant();
     if (m_current >= m_items.size()) m_current = m_items.isEmpty() ? -1 : 0;
     clampScroll();
     update();
 }
-void SkinListView::addItem(const QString &text) { m_items << text; m_datas << QVariant(); update(); }
-void SkinListView::addItem(const QString &text, const QVariant &data) { m_items << text; m_datas << data; update(); }
+void SkinListView::addItem(const QString &text) {
+    m_items << text;
+    m_datas << QVariant();
+    update();
+}
+void SkinListView::addItem(const QString &text, const QVariant &data) {
+    m_items << text;
+    m_datas << data;
+    update();
+}
 void SkinListView::removeRow(int row) {
     if (row < 0 || row >= m_items.size()) return;
     m_items.removeAt(row);
     m_datas.removeAt(row);
-    if (m_current == row) m_current = m_items.isEmpty() ? -1 : qBound(0, row, m_items.size() - 1);
-    else if (m_current > row) --m_current;
+    if (m_current == row)
+        m_current = m_items.isEmpty() ? -1 : qBound(0, row, m_items.size() - 1);
+    else if (m_current > row)
+        --m_current;
     clampScroll();
     update();
 }
-void SkinListView::clear() { m_items.clear(); m_datas.clear(); m_current = -1; m_scroll = 0; update(); }
+void SkinListView::clear() {
+    m_items.clear();
+    m_datas.clear();
+    m_current = -1;
+    m_scroll = 0;
+    update();
+}
 
 void SkinListView::setCurrentRow(int row) {
     if (row == m_current) return;
@@ -449,7 +533,7 @@ void SkinListView::paintEvent(QPaintEvent *) {
     p.setClipRect(rect());
     for (int i = 0; i < m_items.size(); ++i) {
         const QRectF row(0, i * m_rowH - m_scroll, width(), m_rowH);
-        if (row.bottom() < 0 || row.top() > height()) continue;   // 滚出视口不画
+        if (row.bottom() < 0 || row.top() > height()) continue; // 滚出视口不画
         if (i == m_current) {
             p.fillRect(row.adjusted(1, 1, -1, -1), scaledAlpha(Theme::textAccent, 0.22f));
             p.setPen(Qt::NoPen);
@@ -472,7 +556,10 @@ void SkinListView::paintEvent(QPaintEvent *) {
 
 void SkinListView::mousePressEvent(QMouseEvent *e) {
     const int r = rowAt(e->position());
-    if (r >= 0) { setCurrentRow(r); emit itemClicked(r); }
+    if (r >= 0) {
+        setCurrentRow(r);
+        emit itemClicked(r);
+    }
 }
 void SkinListView::mouseDoubleClickEvent(QMouseEvent *e) {
     const int r = rowAt(e->position());
@@ -480,16 +567,27 @@ void SkinListView::mouseDoubleClickEvent(QMouseEvent *e) {
 }
 void SkinListView::mouseMoveEvent(QMouseEvent *e) {
     const int r = rowAt(e->position());
-    if (r != m_hot) { m_hot = r; update(); }
+    if (r != m_hot) {
+        m_hot = r;
+        update();
+    }
 }
 void SkinListView::wheelEvent(QWheelEvent *e) {
-    if (maxScroll() <= 0) { e->ignore(); return; }
+    if (maxScroll() <= 0) {
+        e->ignore();
+        return;
+    }
     const int step = e->angleDelta().y() / 120 * m_rowH * 2;
     m_scroll = qBound(0, m_scroll - step, maxScroll());
     update();
     e->accept();
 }
-void SkinListView::leaveEvent(QEvent *) { if (m_hot != -1) { m_hot = -1; update(); } }
+void SkinListView::leaveEvent(QEvent *) {
+    if (m_hot != -1) {
+        m_hot = -1;
+        update();
+    }
+}
 
 // ————————————————————————————————————————————————
 // SkinLineEdit
@@ -498,33 +596,45 @@ SkinLineEdit::SkinLineEdit(QWidget *parent) : QWidget(parent) {
     auto *v = new QVBoxLayout(this);
     v->setContentsMargins(6, 2, 6, 2);
     m_edit = new QLineEdit(this);
-    setFocusProxy(m_edit);   // 包装器 setFocus 直达内部编辑框（搜索框展开即聚焦）
+    setFocusProxy(m_edit); // 包装器 setFocus 直达内部编辑框（搜索框展开即聚焦）
     // 去 Fusion 白灰方块：透明底、无边框、深字、accent 光标
-    m_edit->setStyleSheet(QStringLiteral(
-        "QLineEdit{background:transparent;border:none;color:%1;}"
-        "QLineEdit:focus{border:none;}")
-        .arg(Theme::inkOnGlass.name()));
+    m_edit->setStyleSheet(QStringLiteral("QLineEdit{background:transparent;border:none;color:%1;}"
+                                         "QLineEdit:focus{border:none;}")
+                              .arg(Theme::inkOnGlass.name()));
     v->addWidget(m_edit);
     connect(m_edit, &QLineEdit::textChanged, this, &SkinLineEdit::textChanged);
     connect(m_edit, &QLineEdit::returnPressed, this, &SkinLineEdit::returnPressed);
     connect(&GlassNotifier::instance(), &GlassNotifier::changed, this, [this] { update(); });
 }
 
-QString SkinLineEdit::text() const { return m_edit->text(); }
-void SkinLineEdit::setText(const QString &t) { m_edit->setText(t); }
-void SkinLineEdit::clear() { m_edit->clear(); }
-void SkinLineEdit::selectAll() { m_edit->selectAll(); }
-void SkinLineEdit::setPlaceholderText(const QString &t) { m_edit->setPlaceholderText(t); }
-void SkinLineEdit::setClearButtonEnabled(bool on) { m_edit->setClearButtonEnabled(on); }
-QSize SkinLineEdit::sizeHint() const { return {160, 28}; }
+QString SkinLineEdit::text() const {
+    return m_edit->text();
+}
+void SkinLineEdit::setText(const QString &t) {
+    m_edit->setText(t);
+}
+void SkinLineEdit::clear() {
+    m_edit->clear();
+}
+void SkinLineEdit::selectAll() {
+    m_edit->selectAll();
+}
+void SkinLineEdit::setPlaceholderText(const QString &t) {
+    m_edit->setPlaceholderText(t);
+}
+void SkinLineEdit::setClearButtonEnabled(bool on) {
+    m_edit->setClearButtonEnabled(on);
+}
+QSize SkinLineEdit::sizeHint() const {
+    return {160, 28};
+}
 
 void SkinLineEdit::paintEvent(QPaintEvent *) {
     QPainter p(this);
     const float a = GlassStyle::enabled() ? GlassStyle::glassAlpha() : 1.0f;
     // 底部一条发丝线；聚焦时变 accent（轻亮）
     const bool focused = m_edit && m_edit->hasFocus();
-    p.setPen(QPen(scaledAlpha(focused ? Theme::inkOnGlassAccent : Theme::hairline,
-                              focused ? 0.9f : a), 1));
+    p.setPen(QPen(scaledAlpha(focused ? Theme::inkOnGlassAccent : Theme::hairline, focused ? 0.9f : a), 1));
     const qreal y = height() - 1.5;
     p.drawLine(QPointF(2, y), QPointF(width() - 2, y));
 }

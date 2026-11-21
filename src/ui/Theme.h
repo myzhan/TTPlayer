@@ -28,7 +28,7 @@ extern const QColor buttonHotTop, buttonHotBottom, buttonFace, buttonHot, button
 extern const QColor buttonEdge, border;
 // 扁平文字按钮（深底：显示区底部的「列表/均衡器/歌词」）
 extern const QColor flatText, flatTextHot, flatHotBG, flatEdgeHot;
-// 扁平文字按钮（浅底：列表工具条）
+// 扁平文字按钮（浅底：TTButton）
 extern const QColor flatTextOnLight, flatTextOnLightHot, flatHotOnLightBG;
 // 频谱（橙黄柱）
 extern const QColor spectrumTop, spectrumBottom, spectrumPeak, spectrumGrid;
@@ -41,7 +41,7 @@ extern const QColor inkOnGlass, inkOnGlassSoft, inkOnGlassAccent;
 
 } // namespace Theme
 
-/// 字体（对齐 Swift Theme：system 13/12/11 + bold 13）
+/// 字体（system 13/12/11 + bold 13）
 /// 不锁 macOS 专有的 .AppleSystemUIFont（Windows/Linux 解析不到会退到各自系统字体），
 /// 而是给一组跨平台优先级字体栈 + sans-serif 兜底（消除 "missing font family" 告警）。
 namespace Fonts {
@@ -55,7 +55,8 @@ namespace Theme {
 void applyAppStyle(QApplication *app);
 }
 
-/// 半透明玻璃全局开关（三窗一体，一个面板不透明就会看出「实心块」）。
+/// 半透明玻璃全局开关：主窗、播放列表、均衡器、歌词四个主面板共用同一 alpha；
+/// 设置/属性/队列/封面等辅助窗不跟随，始终保持不透明，避免重叠时透底看不清。
 /// 单例 QObject：变更 broadcast changed() 信号，自绘控件 connect 到它的 update。
 /// 用信号而非手写回调表：控件析构时 Qt 自动断开连接，不会悬垂。
 class GlassNotifier : public QObject {
@@ -77,7 +78,7 @@ public:
     static bool enabled() { return s_enabled; }
 
     static void setEnabled(bool on);
-    static void setTransparency(float v);   // 变化时发 GlassNotifier::changed
+    static void setTransparency(float v); // 变化时发 GlassNotifier::changed
 
 private:
     static inline float s_transparency = 0.15f;

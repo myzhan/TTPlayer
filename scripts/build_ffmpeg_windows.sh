@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Windows：在 MSYS2（UCRT64 shell）里从 3rd/ffmpeg 源码现编“音频最小化”静态 FFmpeg，
+# Windows（MinGW）：在 MSYS2 UCRT64 shell 里从 3rd/ffmpeg 源码现编“音频最小化”静态 FFmpeg，
 # 产出到 3rd/ffmpeg-build/{lib,include}（MinGW 产物同样是 libavformat.a 等）。
 # 与 mac/linux 同一份组件清单（scripts/ffmpeg_components.sh）。
 #
@@ -9,17 +9,17 @@
 #
 # 幂等：源码 commit、本脚本、组件清单三者一致且库齐全才跳过；--force 强制重来。
 set -e
-SCRIPT_HASH=$(sha256sum "$0" | awk '{print $1}')
-COMP_HASH=$(sha256sum "$(dirname "$0")/ffmpeg_components.sh" | awk '{print $1}')
-cd "$(dirname "$0")/.."
 
-SRC=3rd/ffmpeg
-PREFIX=$(pwd)/3rd/ffmpeg-build
-STAMP="$PREFIX/.built-commit"
-CONFIG_STAMP="$PREFIX/.built-config"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+cd "$SCRIPT_DIR/.."
+ROOT=$(pwd)
+source "$SCRIPT_DIR/ffmpeg_components.sh"
+
+SRC="$ROOT/3rd/ffmpeg"
+PREFIX="$ROOT/3rd/ffmpeg-build"
 
 if [[ ! -f "$SRC/configure" ]]; then
-    echo "错误：$SRC 不存在或未初始化子模块" >&2
+    echo "错误：3rd/ffmpeg 不存在或未初始化子模块" >&2
     exit 1
 fi
 # 明确警告：非 UCRT64 环境编出来的 .a ABI 对不上 MinGW Qt
@@ -28,32 +28,24 @@ case "$(uname -s)" in
     *) echo "警告：当前不在 UCRT64 shell（uname=$(uname -s)），请在 MSYS2 UCRT64 里运行本脚本" >&2 ;;
 esac
 
+require_frozen_ffmpeg "$SRC"
 COMMIT=$(git -C "$SRC" rev-parse HEAD)
-source "$(pwd)/scripts/ffmpeg_components.sh"
+SCRIPT_HASH=$(sha256sum "$SCRIPT_DIR/build_ffmpeg_windows.sh" | awk '{print $1}')
+COMP_HASH=$(sha256sum "$SCRIPT_DIR/ffmpeg_components.sh" | awk '{print $1}')
 CONFIG_KEY="$COMMIT|$SCRIPT_HASH|$COMP_HASH|$(uname -m)|windows"
-NEED_BUILD=1
-if [[ "${1:-}" != "--force" && -f "$CONFIG_STAMP" && -f "$STAMP" ]]; then
-    if [[ "$(cat "$CONFIG_STAMP")" == "$CONFIG_KEY" && "$(cat "$STAMP")" == "$COMMIT" ]]; then
-        NEED_BUILD=0
-        for lib in avformat avcodec avutil swresample; do
-            [[ -f "$PREFIX/lib/lib$lib.a" ]] || NEED_BUILD=1
-        done
-    fi
-fi
 
-if [[ $NEED_BUILD -eq 0 ]]; then
+if [[ "${1:-}" != "--force" ]] && ffmpeg_is_built "$PREFIX" "$CONFIG_KEY" "$COMMIT"; then
     echo "FFmpeg 静态库已就绪（commit ${COMMIT:0:8}），跳过编译；需重来用 --force"
     exit 0
 fi
 
-mkdir -p "$PREFIX/lib" "$PREFIX/include"
-rm -f "$STAMP" "$CONFIG_STAMP"
+ffmpeg_begin_build "$PREFIX"
 
-SRC_DIR_ABS=$(cd "$SRC" && pwd)
 BDIR="$PREFIX/.obj-mingw"
-rm -rf "$BDIR"; mkdir -p "$BDIR"
+rm -rf "$BDIR"
+mkdir -p "$BDIR"
 # MinGW 原生 x86_64：asm 交给 yasm/nasm，不 --disable-asm；不 --enable-cross-compile（本机即目标）
-( cd "$BDIR" && "$SRC_DIR_ABS/configure" \
+( cd "$BDIR" && "$SRC/configure" \
     --prefix="$PREFIX" \
     --enable-static --disable-shared \
     --disable-doc --disable-programs --disable-debug \
@@ -63,9 +55,7 @@ rm -rf "$BDIR"; mkdir -p "$BDIR"
     --disable-avdevice --disable-swscale \
     "${COMPONENTS[@]}" )
 
-JOBS=$(nproc)
-( cd "$BDIR" && make -j"$JOBS" && (make install-headers install-lib install-priv-headers 2>/dev/null || make install) )
+ffmpeg_make_install "$BDIR" "$(nproc)"
 
-echo "$COMMIT" > "$STAMP"
-echo "$CONFIG_KEY" > "$CONFIG_STAMP"
+ffmpeg_finish_build "$PREFIX" "$CONFIG_KEY" "$COMMIT"
 echo "FFmpeg 静态库编译完成：$PREFIX"

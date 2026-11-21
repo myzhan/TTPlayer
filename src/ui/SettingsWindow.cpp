@@ -34,16 +34,18 @@ TTButton *mkTextBtn(const QString &t, QWidget *parent) {
 
 SettingsWindow::SettingsWindow(MainWindow *main, QWidget *parent)
     : SkinWindow(QStringLiteral("设置"), false, parent), m_main(main) {
-    resize(480, 440 + 30);   // 高度补上自绘标题条（~30）
+    // 设置窗不跟随半透明：拖透明度滑块时自身始终读得清，只有四个主面板变化。
+    setGlassTransparencyFollows(false);
+    resize(480, 440 + 30); // 高度补上自绘标题条（~30）
 
     auto *outer = new QVBoxLayout(body());
     auto *tabs = new SkinTabWidget(body());
-    tabs->addTab(buildPlayback(),    QStringLiteral("播放"));
-    tabs->addTab(buildAudioFx(),     QStringLiteral("音效"));
-    tabs->addTab(buildOutput(),      QStringLiteral("输出设备"));
-    tabs->addTab(buildLyric(),       QStringLiteral("歌词"));
-    tabs->addTab(buildAppearance(),  QStringLiteral("外观"));
-    tabs->addTab(buildLibrary(),     QStringLiteral("媒体库"));
+    tabs->addTab(buildPlayback(), QStringLiteral("播放"));
+    tabs->addTab(buildAudioFx(), QStringLiteral("音效"));
+    tabs->addTab(buildOutput(), QStringLiteral("输出设备"));
+    tabs->addTab(buildLyric(), QStringLiteral("歌词"));
+    tabs->addTab(buildAppearance(), QStringLiteral("外观"));
+    tabs->addTab(buildLibrary(), QStringLiteral("媒体库"));
     outer->addWidget(tabs);
 
     auto *row = new QHBoxLayout;
@@ -67,7 +69,10 @@ QWidget *SettingsWindow::buildPlayback() {
     m_mode->addItem(QStringLiteral("单曲循环"), int(PlayMode::SingleLoop));
     m_mode->addItem(QStringLiteral("随机播放"), int(PlayMode::Random));
     for (int i = 0; i < m_mode->count(); ++i)
-        if (m_mode->itemData(i).toInt() == int(m_main->controller()->mode())) { m_mode->setCurrentIndex(i); break; }
+        if (m_mode->itemData(i).toInt() == int(m_main->controller()->mode())) {
+            m_mode->setCurrentIndex(i);
+            break;
+        }
     connect(m_mode, &SkinComboBox::activated, this, [this](int i) {
         m_main->controller()->setMode(PlayMode(m_mode->itemData(i).toInt()));
         m_main->requestSave();
@@ -99,7 +104,7 @@ QWidget *SettingsWindow::buildPlayback() {
     for (int m : {15, 30, 45, 60})
         m_sleepPreset->addItem(QStringLiteral("%1 分钟").arg(m), m);
     auto *custom = new SkinSpinBox(sleepSec->content());
-    custom->setRange(1, 7*24*60);
+    custom->setRange(1, 7 * 24 * 60);
     custom->setSuffix(QStringLiteral(" 分钟"));
     auto *applyBtn = mkTextBtn(QStringLiteral("应用"), sleepSec->content());
     row1->addWidget(m_sleepPreset);
@@ -150,7 +155,10 @@ QWidget *SettingsWindow::buildAudioFx() {
     m_rgMode->addItem(QStringLiteral("按曲目"), int(ReplayGainMode::Track));
     m_rgMode->addItem(QStringLiteral("按专辑"), int(ReplayGainMode::Album));
     for (int i = 0; i < m_rgMode->count(); ++i)
-        if (m_rgMode->itemData(i).toInt() == int(m_main->controller()->replayGainMode())) { m_rgMode->setCurrentIndex(i); break; }
+        if (m_rgMode->itemData(i).toInt() == int(m_main->controller()->replayGainMode())) {
+            m_rgMode->setCurrentIndex(i);
+            break;
+        }
     connect(m_rgMode, &SkinComboBox::activated, this, [this](int i) {
         m_main->controller()->setReplayGainMode(ReplayGainMode(m_rgMode->itemData(i).toInt()));
         m_main->requestSave();
@@ -212,8 +220,15 @@ QWidget *SettingsWindow::buildOutput() {
     });
     f->addWidget(m_device);
     auto *actual = new QLabel(sec->content());
-    const auto update=[this,actual]{actual->setText(QStringLiteral("当前实际输出：%1\n%2").arg(m_main->engine()->actualOutputDevice(),m_main->engine()->outputProblem()));};
-    update();auto *timer=new QTimer(actual);timer->setInterval(1000);connect(timer,&QTimer::timeout,actual,update);timer->start();
+    const auto update = [this, actual] {
+        actual->setText(QStringLiteral("当前实际输出：%1\n%2")
+                            .arg(m_main->engine()->actualOutputDevice(), m_main->engine()->outputProblem()));
+    };
+    update();
+    auto *timer = new QTimer(actual);
+    timer->setInterval(1000);
+    connect(timer, &QTimer::timeout, actual, update);
+    timer->start();
     f->addWidget(actual);
     if (devs.isEmpty()) {
         auto *tip = new QLabel(QStringLiteral("未枚举到输出设备（可能无音频硬件）"), sec->content());
@@ -250,15 +265,18 @@ QWidget *SettingsWindow::buildLyric() {
 
     connect(earlier, &TTButton::clicked, this, [this] {
         m_main->controller()->nudgeLyricShift(-PlayerController::kLyricShiftStep);
-        m_main->requestSave(); refreshLyricStatus();
+        m_main->requestSave();
+        refreshLyricStatus();
     });
     connect(later, &TTButton::clicked, this, [this] {
         m_main->controller()->nudgeLyricShift(PlayerController::kLyricShiftStep);
-        m_main->requestSave(); refreshLyricStatus();
+        m_main->requestSave();
+        refreshLyricStatus();
     });
     connect(reset, &TTButton::clicked, this, [this] {
         m_main->controller()->resetLyricShift();
-        m_main->requestSave(); refreshLyricStatus();
+        m_main->requestSave();
+        refreshLyricStatus();
     });
 
     connect(m_main->controller(), &PlayerController::lyricShiftChanged, this, [this] { refreshLyricStatus(); });
@@ -281,7 +299,7 @@ QWidget *SettingsWindow::buildAppearance() {
     auto *sec = new SkinSection(QStringLiteral("玻璃外观"), page);
     auto *f = new QVBoxLayout(sec->content());
 
-    auto *glass = new SkinCheckBox(QStringLiteral("半透明玻璃"), sec->content());
+    auto *glass = new SkinCheckBox(QStringLiteral("半透明玻璃（主面板 / 播放列表 / 均衡器 / 歌词）"), sec->content());
     glass->setChecked(GlassStyle::enabled());
     connect(glass, &SkinCheckBox::toggled, this, [this](bool on) {
         GlassStyle::setEnabled(on);
@@ -297,7 +315,8 @@ QWidget *SettingsWindow::buildAppearance() {
     m_transparency->setValue(int(std::lround(GlassStyle::transparency() * 100)));
     m_transparencyLabel = new QLabel(sec->content());
     m_transparencyLabel->setText(QStringLiteral("%1%").arg(m_transparency->value()));
-    m_transparencyLabel->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(Theme::inkOnGlassSoft.name()));
+    m_transparencyLabel->setStyleSheet(
+        QStringLiteral("color:%1;background:transparent;").arg(Theme::inkOnGlassSoft.name()));
     row->addWidget(lbl);
     row->addWidget(m_transparency);
     row->addWidget(m_transparencyLabel);
@@ -322,7 +341,8 @@ QWidget *SettingsWindow::buildLibrary() {
 
     m_folders = new SkinListView(sec->content());
     m_folders->setRowHeight(24);
-    for (const QString &p : m_main->libraryFolders()) m_folders->addItem(p);
+    for (const QString &p : m_main->libraryFolders())
+        m_folders->addItem(p);
     f->addWidget(m_folders);
 
     auto *row = new QHBoxLayout;
@@ -332,8 +352,9 @@ QWidget *SettingsWindow::buildLibrary() {
     row->addWidget(add);
     row->addWidget(remove);
     row->addWidget(rescan);
-    auto *cancel=mkTextBtn(QStringLiteral("取消扫描"),sec->content());row->addWidget(cancel);
-    connect(cancel,&TTButton::clicked,this,[this]{m_main->cancelLibraryScan();});
+    auto *cancel = mkTextBtn(QStringLiteral("取消扫描"), sec->content());
+    row->addWidget(cancel);
+    connect(cancel, &TTButton::clicked, this, [this] { m_main->cancelLibraryScan(); });
     row->addStretch();
     f->addLayout(row);
 
@@ -351,18 +372,30 @@ QWidget *SettingsWindow::buildLibrary() {
         m_folders->removeRow(rowIdx);
     });
     connect(rescan, &TTButton::clicked, this, [this] { m_main->rescanLibrary(); });
-    auto *relocate=mkTextBtn(QStringLiteral("重新定位目录…"),sec->content());f->addWidget(relocate);
-    connect(relocate,&TTButton::clicked,this,[this] {
-        const int row=m_folders->currentRow();if(row<0)return;
-        const QString old=m_folders->rowText(row);
-        const QString path=QFileDialog::getExistingDirectory(this,QStringLiteral("选择搬迁后的音乐目录"));if(path.isEmpty())return;
-        const QString error=m_main->relocateLibraryRoot(old,path);
-        if(!error.isEmpty())QMessageBox::information(this,QStringLiteral("重新定位"),error);
-        else {m_folders->clear();for(const QString &root:m_main->libraryFolders())m_folders->addItem(root);}
+    auto *relocate = mkTextBtn(QStringLiteral("重新定位目录…"), sec->content());
+    f->addWidget(relocate);
+    connect(relocate, &TTButton::clicked, this, [this] {
+        const int row = m_folders->currentRow();
+        if (row < 0) return;
+        const QString old = m_folders->rowText(row);
+        const QString path = QFileDialog::getExistingDirectory(this, QStringLiteral("选择搬迁后的音乐目录"));
+        if (path.isEmpty()) return;
+        const QString error = m_main->relocateLibraryRoot(old, path);
+        if (!error.isEmpty())
+            QMessageBox::information(this, QStringLiteral("重新定位"), error);
+        else {
+            m_folders->clear();
+            for (const QString &root : m_main->libraryFolders())
+                m_folders->addItem(root);
+        }
     });
-    auto *status=new QLabel(sec->content());status->setWordWrap(true);f->addWidget(status);
-    auto *timer=new QTimer(status);timer->setInterval(250);
-    connect(timer,&QTimer::timeout,status,[this,status]{status->setText(m_main->operationStatus());});timer->start();
+    auto *status = new QLabel(sec->content());
+    status->setWordWrap(true);
+    f->addWidget(status);
+    auto *timer = new QTimer(status);
+    timer->setInterval(250);
+    connect(timer, &QTimer::timeout, status, [this, status] { status->setText(m_main->operationStatus()); });
+    timer->start();
 
     v->addWidget(sec);
     v->addStretch();

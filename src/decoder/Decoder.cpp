@@ -14,12 +14,12 @@ std::unique_ptr<Decoder> Decoder::openFile(const QString &path, std::shared_ptr<
     return d;
 }
 
-std::unique_ptr<Decoder> Decoder::openStream(std::shared_ptr<StreamSource> src, const QString &displayName, std::shared_ptr<std::atomic<bool>> cancel) {
+std::unique_ptr<Decoder> Decoder::openStream(std::shared_ptr<StreamSource> src, const QString &displayName,
+                                             std::shared_ptr<std::atomic<bool>> cancel) {
     std::unique_ptr<Decoder> d(new Decoder());
     d->m_externalCancel = std::move(cancel);
     if (!d->initStream(std::move(src))) {
-        if (!displayName.isEmpty())
-            qWarning("[decoder] open stream failed: %s", displayName.toUtf8().constData());
+        if (!displayName.isEmpty()) qWarning("[decoder] open stream failed: %s", displayName.toUtf8().constData());
         d.reset();
     }
     return d;
@@ -30,10 +30,13 @@ void Decoder::cleanup() {
     if (m_frame) av_frame_free(&m_frame);
     if (m_swr) swr_free(&m_swr);
     if (m_cc) avcodec_free_context(&m_cc);
-    if (m_fmt) avformat_close_input(&m_fmt);   // AVFMT_FLAG_CUSTOM_IO 时不碰 pb
+    if (m_fmt) avformat_close_input(&m_fmt); // AVFMT_FLAG_CUSTOM_IO 时不碰 pb
     // 自定义 AVIO：只释放当前 pb（avio_context_free 会 av_free 它自己那份 buffer）；
     // 不拿初始 m_ioBuffer 指针去 free——probe 期间 FFmpeg 可能 realloc 过（踩坑记忆）
-    if (m_pb) { avio_context_free(&m_pb); m_pb = nullptr; }
+    if (m_pb) {
+        avio_context_free(&m_pb);
+        m_pb = nullptr;
+    }
     m_ioBuffer = nullptr;
 }
 
@@ -43,12 +46,12 @@ Decoder::~Decoder() {
 
 int Decoder::readPacket(void *opaque, uint8_t *buf, int buf_size) {
     Decoder *d = static_cast<Decoder *>(opaque);
-    if (d->isCancelled()) return AVERROR_EXIT;   // R08：已取消 → 不再阻塞等网络/磁盘
+    if (d->isCancelled()) return AVERROR_EXIT; // R08：已取消 → 不再阻塞等网络/磁盘
     if (!d->m_streamSrc) return AVERROR(EIO);
     const int64_t n = d->m_streamSrc->read(buf, buf_size);
     if (d->isCancelled()) return AVERROR_EXIT;
     if (n == 0) return AVERROR_EOF;
-    if (n < 0) return int(n);   // StreamSource 约定负值已是 AVERROR
+    if (n < 0) return int(n); // StreamSource 约定负值已是 AVERROR
     return int(n);
 }
 
@@ -61,7 +64,7 @@ int Decoder::interruptCb(void *opaque) {
 
 void Decoder::requestCancel() {
     m_abort.store(true);
-    if (m_streamSrc) m_streamSrc->cancel();   // 唤醒卡在背压/等字节的取流线（仅置位+notify）
+    if (m_streamSrc) m_streamSrc->cancel(); // 唤醒卡在背压/等字节的取流线（仅置位+notify）
 }
 
 int64_t Decoder::seekPacket(void *opaque, int64_t offset, int whence) {
@@ -85,7 +88,7 @@ bool Decoder::openFormat(const QString *path) {
         ret = avformat_open_input(&m_fmt, path->toUtf8().constData(), nullptr, nullptr);
     } else {
         ret = avformat_open_input(&m_fmt, nullptr, nullptr, nullptr);
-        if (m_fmt) m_pb = m_fmt->pb;   // probe 可能换掉 pb，取当前这份用于释放
+        if (m_fmt) m_pb = m_fmt->pb; // probe 可能换掉 pb，取当前这份用于释放
     }
     if (ret < 0 || !m_fmt) {
         m_error = ff::errstr(ret);
@@ -114,13 +117,22 @@ bool Decoder::initStream(std::shared_ptr<StreamSource> src) {
     ff::ensureInit();
     m_streamSrc = std::move(src);
     m_fmt = avformat_alloc_context();
-    if (!m_fmt) { cleanup(); return false; }
+    if (!m_fmt) {
+        cleanup();
+        return false;
+    }
     static constexpr int kIoBuf = 32768;
     m_ioBuffer = static_cast<uint8_t *>(av_malloc(kIoBuf));
-    if (!m_ioBuffer) { cleanup(); return false; }
+    if (!m_ioBuffer) {
+        cleanup();
+        return false;
+    }
     m_pb = avio_alloc_context(m_ioBuffer, kIoBuf, 0, this, readPacket, nullptr,
                               m_streamSrc->seekable() ? seekPacket : nullptr);
-    if (!m_pb) { cleanup(); return false; }
+    if (!m_pb) {
+        cleanup();
+        return false;
+    }
     m_fmt->pb = m_pb;
     m_fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
     // openFormat 会把 m_pb 校正为 m_fmt->pb（probe 可能 realloc）
@@ -132,8 +144,7 @@ bool Decoder::finishInit() {
     int ret = 0;
     // 快照容器级 metadata（键统一小写）：ReplayGain 标签随各家标签器写法大小写不一，
     // 下游按小写键查找；avformat 已把 Vorbis comment / ID3 TXXX / MP4 ilst 归一到这一份 dict
-    for (const AVDictionaryEntry *e = nullptr;
-         (e = av_dict_get(m_fmt->metadata, "", e, AV_DICT_IGNORE_SUFFIX));)
+    for (const AVDictionaryEntry *e = nullptr; (e = av_dict_get(m_fmt->metadata, "", e, AV_DICT_IGNORE_SUFFIX));)
         m_tags.insert(QString::fromUtf8(e->key).toLower(), QString::fromUtf8(e->value));
     const int32_t idx = av_find_best_stream(m_fmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
     if (idx < 0 || !m_fmt->streams[idx]) {
@@ -161,7 +172,7 @@ bool Decoder::finishInit() {
         return false;
     }
     // 把包的时基交给解码器：它丢掉 priming / padding 时靠这个把 frame->pts 一起挪过去。
-    // 不设（Swift 版实测）mp3 会丢 1105 个样本而时间戳不动——拿 pts 推可听帧号就会一直多 1105
+    // 不设（实测）mp3 会丢 1105 个样本而时间戳不动——拿 pts 推可听帧号就会一直多 1105
     m_cc->pkt_timebase = m_timeBase;
     ret = avcodec_open2(m_cc, dec, nullptr);
     if (ret < 0) {
@@ -181,8 +192,7 @@ bool Decoder::finishInit() {
     AVChannelLayout outLayout;
     av_channel_layout_default(&outLayout, 2);
     AVChannelLayout inLayout = m_cc->ch_layout;
-    ret = swr_alloc_set_opts2(&m_swr, &outLayout, AV_SAMPLE_FMT_FLTP, m_outRate,
-                              &inLayout, inFmt, inRate, 0, nullptr);
+    ret = swr_alloc_set_opts2(&m_swr, &outLayout, AV_SAMPLE_FMT_FLTP, m_outRate, &inLayout, inFmt, inRate, 0, nullptr);
     if (ret < 0 || !m_swr || swr_init(m_swr) < 0) {
         m_error = QStringLiteral("重采样器建立失败");
         cleanup();
@@ -205,7 +215,7 @@ bool Decoder::finishInit() {
     int64_t br = par->bit_rate;
     if (br <= 0) br = m_fmt->bit_rate;
     m_bitRateKbps = br > 0 ? int(br / 1000) : 0;
-    m_outTB = AVRational {1, m_outRate > 0 ? m_outRate : 1};
+    m_outTB = AVRational{1, m_outRate > 0 ? m_outRate : 1};
     if (isDSD) {
         m_formatName = ff::dsdLabel(par->codec_id, int(inRate) * 8);
     } else {
@@ -217,7 +227,7 @@ bool Decoder::finishInit() {
     if (st->duration > 0)
         m_totalFrames = av_rescale_q(st->duration, st->time_base, m_outTB);
     else if (m_fmt->duration > 0)
-        m_totalFrames = av_rescale_q(m_fmt->duration, AVRational {1, AV_TIME_BASE}, m_outTB);
+        m_totalFrames = av_rescale_q(m_fmt->duration, AVRational{1, AV_TIME_BASE}, m_outTB);
     else if (st->nb_frames > 0)
         m_totalFrames = st->nb_frames;
 
@@ -231,7 +241,7 @@ bool Decoder::finishInit() {
     // 真解出第一帧后会用实测的 pts 基准覆写一次（见 emitFrame）。
     // 这个推算在 mp3（报 0，真基准 1105）与 aac（报 1024，真基准 0）两边都是错的，
     // 而基准只错在「第一帧解出来之前」——所以开完文件就立即推一次，不要等到第一次 seek
-    m_ptsBase = av_rescale_q(m_cc->initial_padding, AVRational {1, inRate}, m_outTB);
+    m_ptsBase = av_rescale_q(m_cc->initial_padding, AVRational{1, inRate}, m_outTB);
     // A live stream cannot replay a primed frame at a new device rate.
     // Decode its first frame once the output rate is known.
     if (!forwardOnly()) primeAudibleBase();
@@ -253,13 +263,16 @@ void Decoder::primeAudibleBase() {
 /// （swr 带滤波器记忆，不重置会沿用上次尾巴的 warm 态而漂移）
 void Decoder::configureSwr() {
     if (!m_cc) return;
-    if (m_swr) { swr_free(&m_swr); m_swr = nullptr; }
+    if (m_swr) {
+        swr_free(&m_swr);
+        m_swr = nullptr;
+    }
     AVChannelLayout outLayout;
     av_channel_layout_default(&outLayout, 2);
     AVChannelLayout inLayout = m_cc->ch_layout;
-    if (swr_alloc_set_opts2(&m_swr, &outLayout, AV_SAMPLE_FMT_FLTP, m_outRate,
-                            &inLayout, m_swrInFormat, m_swrInRate, 0, nullptr) < 0
-        || !m_swr || swr_init(m_swr) < 0) {
+    if (swr_alloc_set_opts2(&m_swr, &outLayout, AV_SAMPLE_FMT_FLTP, m_outRate, &inLayout, m_swrInFormat, m_swrInRate, 0,
+                            nullptr) < 0 ||
+        !m_swr || swr_init(m_swr) < 0) {
         m_swr = nullptr;
     }
 }
@@ -279,12 +292,12 @@ void Decoder::seek(int64_t frame) {
     m_nextOutPos = target;
     m_runningOutPos = target;
     m_discardUntil = target;
-    m_ptsCalibrated = true;   // seek 之后的首帧 pts 不是第 0 帧的，基准不能再重认
+    m_ptsCalibrated = true; // seek 之后的首帧 pts 不是第 0 帧的，基准不能再重认
 }
 
 int Decoder::read(float *outL, float *outR, int need, int64_t fromPos) {
     if (need <= 0 || !m_fmt) return 0;
-    if (m_abort.load()) return 0;   // R08：取消后不再产出，回调侧会当 EOF 处理
+    if (m_abort.load()) return 0; // R08：取消后不再产出，回调侧会当 EOF 处理
     if (!forwardOnly() && (fromPos != m_nextOutPos || m_discardUntil >= 0)) seek(fromPos);
 
     int produced = 0;
@@ -305,8 +318,8 @@ int Decoder::read(float *outL, float *outR, int need, int64_t fromPos) {
 
 int64_t Decoder::countProducedFrames() {
     int64_t total = 0, pos = 0;
-    std::vector<float> buf(8192 * 2);
-    while (total < 200000000) {   // 坏文件不能无限数下去（~76 分钟上限）
+    std::vector<float> buf(std::size_t{8192} * 2);
+    while (total < 200000000) { // 坏文件不能无限数下去（~76 分钟上限）
         const int got = read(buf.data(), buf.data() + 8192, 8192, pos);
         if (got <= 0) break;
         pos += got;
@@ -316,17 +329,18 @@ int64_t Decoder::countProducedFrames() {
 }
 
 bool Decoder::resampleTo(int rate) {
-    if(rate<=0||!m_cc)return false;
-    if(rate==m_outRate)return true;
-    m_totalFrames=av_rescale(m_totalFrames,rate,m_outRate);
-    m_ptsBase=av_rescale(m_ptsBase,rate,m_outRate);
-    m_sampleRate=m_outRate=rate;m_outTB=AVRational{1,rate};
+    if (rate <= 0 || !m_cc) return false;
+    if (rate == m_outRate) return true;
+    m_totalFrames = av_rescale(m_totalFrames, rate, m_outRate);
+    m_ptsBase = av_rescale(m_ptsBase, rate, m_outRate);
+    m_sampleRate = m_outRate = rate;
+    m_outTB = AVRational{1, rate};
     if (forwardOnly()) {
         configureSwr();
     } else {
         seek(0);
     }
-    return m_swr!=nullptr;
+    return m_swr != nullptr;
 }
 
 /// 标准 FFmpeg 解码流水：receive 帧，没帧就 send 包；EOF 后冲 swr 尾。
@@ -336,14 +350,20 @@ bool Decoder::fillStage() {
         int r = avcodec_receive_frame(m_cc, m_frame);
         if (r == AVERROR(EAGAIN)) {
             if (!feedOnePacket()) {
-                if (!m_flushSent) { avcodec_send_packet(m_cc, nullptr); m_flushSent = true; }
+                if (!m_flushSent) {
+                    avcodec_send_packet(m_cc, nullptr);
+                    m_flushSent = true;
+                }
             }
             continue;
         }
         if (r == AVERROR_EOF) return drainSwrTail();
         if (r < 0) return false;
         // 已产出的 flush 后再 receive 仍可能持续给 EOF；drain 完尾巴就收手
-        if (emitFrame(m_frame)) { av_frame_unref(m_frame); return true; }
+        if (emitFrame(m_frame)) {
+            av_frame_unref(m_frame);
+            return true;
+        }
         av_frame_unref(m_frame);
     }
 }
@@ -352,7 +372,7 @@ bool Decoder::fillStage() {
 bool Decoder::feedOnePacket() {
     if (!m_fmt || !m_cc) return false;
     while (true) {
-        if (m_abort.load()) return false;   // R08：取消后不再从网络/磁盘拉包
+        if (m_abort.load()) return false; // R08：取消后不再从网络/磁盘拉包
         av_packet_unref(m_packet);
         if (av_read_frame(m_fmt, m_packet) < 0) return false;
         if (m_packet->stream_index == m_streamIndex) {

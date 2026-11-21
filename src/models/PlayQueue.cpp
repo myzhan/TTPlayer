@@ -16,7 +16,8 @@ Track PlayQueue::currentTrack() const {
 QList<QueueItem> PlayQueue::pending() const {
     if (!m_cursor) return m_items;
     QList<QueueItem> out;
-    for (int i = *m_cursor + 1; i < m_items.size(); ++i) out.append(m_items[i]);
+    for (int i = *m_cursor + 1; i < m_items.size(); ++i)
+        out.append(m_items[i]);
     return out;
 }
 
@@ -33,7 +34,8 @@ int PlayQueue::indexOf(const QUuid &id) const {
 void PlayQueue::begin(const QList<Track> &tracks, int index) {
     invalidatePick();
     m_items.clear();
-    for (const Track &t : tracks) m_items.append(QueueItem {.track = t, .source = QueueSource::Basic});
+    for (const Track &t : tracks)
+        m_items.append(QueueItem{.track = t, .source = QueueSource::Basic});
     m_cursor = idxOk(index) ? std::optional<int>(index) : std::nullopt;
     m_history.clear();
     if (m_cursor) m_history.append(m_items[*m_cursor].id);
@@ -57,8 +59,7 @@ void PlayQueue::restoreScene(const QList<QueueItem> &items, std::optional<int> c
     for (int i : historyIndexes)
         if (idxOk(i)) m_history.append(m_items[i].id);
     // 当前条目必须在历史里（它是「最近听过的那一条」），否则随机「上一首」会少一步
-    if (m_history.isEmpty() || m_history.last() != m_items[*m_cursor].id)
-        m_history.append(m_items[*m_cursor].id);
+    if (m_history.isEmpty() || m_history.last() != m_items[*m_cursor].id) m_history.append(m_items[*m_cursor].id);
 }
 
 const QueueItem *PlayQueue::focus(const QUuid &id) {
@@ -82,16 +83,19 @@ void PlayQueue::insertNext(const QList<Track> &tracks) {
     if (tracks.isEmpty()) return;
     invalidatePick();
     QList<QueueItem> fresh;
-    for (const Track &t : tracks) fresh.append(QueueItem {.track = t, .source = QueueSource::Next});
+    for (const Track &t : tracks)
+        fresh.append(QueueItem{.track = t, .source = QueueSource::Next});
     // 还没建立上下文（没播任何东西）时，插到最前面就是「接下来第一首」
     int pos = m_cursor ? *m_cursor + 1 : 0;
-    for (const QueueItem &it : fresh) m_items.insert(pos++, it);
+    for (const QueueItem &it : fresh)
+        m_items.insert(pos++, it);
 }
 
 void PlayQueue::appendLater(const QList<Track> &tracks) {
     if (tracks.isEmpty()) return;
     invalidatePick();
-    for (const Track &t : tracks) m_items.append(QueueItem {.track = t, .source = QueueSource::Later});
+    for (const Track &t : tracks)
+        m_items.append(QueueItem{.track = t, .source = QueueSource::Later});
 }
 
 void PlayQueue::remove(const QSet<QUuid> &ids) {
@@ -107,9 +111,13 @@ void PlayQueue::remove(const QSet<QUuid> &ids) {
 
 void PlayQueue::clearPending() {
     invalidatePick();
-    if (!m_cursor || !idxOk(*m_cursor)) { reset(); return; }
+    if (!m_cursor || !idxOk(*m_cursor)) {
+        reset();
+        return;
+    }
     const int c = *m_cursor;
-    while (m_items.size() > c + 1) m_items.removeLast();
+    while (m_items.size() > c + 1)
+        m_items.removeLast();
 }
 
 bool PlayQueue::movePending(const QUuid &id, int position) {
@@ -130,12 +138,17 @@ bool PlayQueue::reorderPending(const QList<QUuid> &order) {
     QList<QueueItem> rebuilt;
     for (const QUuid &id : order) {
         int i = -1;
-        for (int j = 0; j < tail.size(); ++j) if (tail[j].id == id) { i = j; break; }
+        for (int j = 0; j < tail.size(); ++j)
+            if (tail[j].id == id) {
+                i = j;
+                break;
+            }
         if (i < 0) return false;
         rebuilt.append(tail.takeAt(i));
     }
     invalidatePick();
-    for (const QueueItem &it : rebuilt) m_items[c + 1 + rebuilt.indexOf(it)] = it;
+    for (const QueueItem &it : rebuilt)
+        m_items[c + 1 + rebuilt.indexOf(it)] = it;
     return true;
 }
 
@@ -148,8 +161,8 @@ void PlayQueue::dropTracks(const QSet<QString> &keys) {
     const bool hasCur = cur != nullptr;
     for (int i = m_items.size() - 1; i >= 0; --i) {
         // 正在播的那条形列外：删行不打断音频、不跳曲
-        if (keys.contains(m_items[i].track.identityKey())
-            && !(hasCur && m_items[i].id == curID && m_items[i].track.identityKey() == curKey))
+        if (keys.contains(m_items[i].track.identityKey()) &&
+            !(hasCur && m_items[i].id == curID && m_items[i].track.identityKey() == curKey))
             m_items.removeAt(i);
     }
     if (hasCur) m_cursor = indexOf(curID);
@@ -161,8 +174,9 @@ const QueueItem *PlayQueue::nextPendingItem() const {
     return m_items.isEmpty() ? nullptr : &m_items.first();
 }
 
-void PlayQueue::replaceTrack(const QString &key,const Track &track) {
-    for(QueueItem &item:m_items)if(item.track.identityKey()==key)item.track=track;
+void PlayQueue::replaceTrack(const QString &key, const Track &track) {
+    for (QueueItem &item : m_items)
+        if (item.track.identityKey() == key) item.track = track;
     invalidatePick();
 }
 
@@ -173,20 +187,26 @@ const QueueItem *PlayQueue::nextOnFinish(PlayMode mode) const {
     const QueueItem *next = nextPendingItem();
     if (next && next->playNext()) return next;
     switch (mode) {
-    case PlayMode::Random:     return randomPeek();
-    case PlayMode::SingleLoop: return current();
-    case PlayMode::Order:      return next;
-    case PlayMode::ListLoop:   return next ? next : (m_items.isEmpty() ? nullptr : &m_items.first());
+    case PlayMode::Random:
+        return randomPeek();
+    case PlayMode::SingleLoop:
+        return current();
+    case PlayMode::Order:
+        return next;
+    case PlayMode::ListLoop:
+        return next ? next : (m_items.isEmpty() ? nullptr : &m_items.first());
     }
     return nullptr;
 }
 
 const QueueItem *PlayQueue::advanceByUser(PlayMode mode) {
-    // 注意不能在入口就 invalidatePick：那会把预取刚定下的答案抹掉（Swift 版是 defer 出口作废，
+    // 注意不能在入口就 invalidatePick：那会把预取刚定下的答案抹掉（出口作废，
     // 而 focus() 内部本就作废）
     const QueueItem *next = nextPendingItem();
     if (next && next->playNext()) return focus(next->id);
-    if (mode == PlayMode::Random) { if (const QueueItem *p = randomPeek()) return focus(p->id); }
+    if (mode == PlayMode::Random) {
+        if (const QueueItem *p = randomPeek()) return focus(p->id);
+    }
     if (next) return focus(next->id);
     // 到了末尾：单曲循环也不能把手动「下一首」变成原地重播（那等于按了没反应），
     // 回到队首接着走；整个上下文只有一条时才只能重播它
@@ -217,16 +237,23 @@ const QueueItem *PlayQueue::retreat(PlayMode mode) {
         m_history.removeLast();
         const QUuid prev = m_history.last();
         const int i = indexOf(prev);
-        if (i >= 0) { m_cursor = i; return &m_items[i]; }
+        if (i >= 0) {
+            m_cursor = i;
+            return &m_items[i];
+        }
     }
     if (m_cursor && *m_cursor > 0) return focus(m_items[*m_cursor - 1].id);
     if (mode == PlayMode::ListLoop && !m_items.isEmpty()) return focus(m_items.last().id);
     return current();
 }
 
-const QueueItem *PlayQueue::itemWhereId(const QUuid &id) const { return item(id); }
+const QueueItem *PlayQueue::itemWhereId(const QUuid &id) const {
+    return item(id);
+}
 
-const QueueItem *PlayQueue::focusItem(const QUuid &id) { return focus(id); }
+const QueueItem *PlayQueue::focusItem(const QUuid &id) {
+    return focus(id);
+}
 
 void PlayQueue::pruneHistory() {
     for (int i = m_history.size() - 1; i >= 0; --i)
@@ -235,9 +262,12 @@ void PlayQueue::pruneHistory() {
 
 const QueueItem *PlayQueue::tailItem(PlayMode mode) {
     switch (mode) {
-    case PlayMode::Order:      return nullptr;
-    case PlayMode::ListLoop:   return m_items.isEmpty() ? nullptr : focus(m_items.first().id);
-    case PlayMode::SingleLoop: return current();
+    case PlayMode::Order:
+        return nullptr;
+    case PlayMode::ListLoop:
+        return m_items.isEmpty() ? nullptr : focus(m_items.first().id);
+    case PlayMode::SingleLoop:
+        return current();
     case PlayMode::Random: {
         const QueueItem *it = randomPeek();
         return it ? focus(it->id) : nullptr;
@@ -254,9 +284,13 @@ const QueueItem *PlayQueue::randomPeek() const {
     static const std::function<int(int, int)> fallback = [](int count, int cur) {
         int pick = QRandomGenerator::global()->bounded(count);
         int tries = 0;
-        while (pick == cur && tries < 16) { pick = QRandomGenerator::global()->bounded(count); ++tries; }
+        while (pick == cur && tries < 16) {
+            pick = QRandomGenerator::global()->bounded(count);
+            ++tries;
+        }
         return pick;
     };
-    const int pick = fn ? fn(m_items.size(), m_cursor ? *m_cursor : -1) : fallback(m_items.size(), m_cursor ? *m_cursor : -1);
+    const int pick =
+        fn ? fn(m_items.size(), m_cursor ? *m_cursor : -1) : fallback(m_items.size(), m_cursor ? *m_cursor : -1);
     return idxOk(pick) ? &m_items[pick] : &m_items[0];
 }

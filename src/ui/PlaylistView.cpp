@@ -16,12 +16,13 @@
 #include <QApplication>
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 
 // mm:ss（电台/未知时长不走这里）
 QString clock(double sec) {
-    const int s = int(sec + 0.5);
+    const int s = int(std::lround(sec));
     return QStringLiteral("%1:%2").arg(s / 60).arg(s % 60, 2, 10, QLatin1Char('0'));
 }
 
@@ -33,7 +34,7 @@ PlaylistView::PlaylistView(PlayerController *controller, QWidget *parent)
     setFrameShape(QFrame::NoFrame);
     setFocusPolicy(Qt::StrongFocus);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    viewport()->setMouseTracking(true);   // 统一毛玻璃：未按键也收 move，hover 行才能轻亮
+    viewport()->setMouseTracking(true); // 统一毛玻璃：未按键也收 move，hover 行才能轻亮
 
     connect(controller, &PlayerController::listChanged, this, &PlaylistView::reload);
     connect(controller, &PlayerController::trackChanged, this, &PlaylistView::reload);
@@ -44,14 +45,17 @@ PlaylistView::PlaylistView(PlayerController *controller, QWidget *parent)
 }
 
 void PlaylistView::reload() {
-    const Scene previous=scene();
+    const Scene previous = scene();
     m_tracks = m_controller->tracks();
     const Track cur = m_controller->currentTrack();
     const QString key = cur.isNull() ? QString() : cur.identityKey();
     m_currentRow = -1;
     if (!key.isEmpty()) {
         for (int i = 0; i < m_tracks.size(); ++i)
-            if (m_tracks[i].identityKey() == key) { m_currentRow = i; break; }
+            if (m_tracks[i].identityKey() == key) {
+                m_currentRow = i;
+                break;
+            }
     }
     if (m_selectedRow >= m_tracks.size()) m_selectedRow = m_tracks.size() - 1;
     // 选区夹回新长度（删行/重扫后旧行号失效，丢弃越界的选中项）
@@ -68,16 +72,24 @@ void PlaylistView::reload() {
 }
 
 PlaylistView::Scene PlaylistView::scene() const {
-    Scene result;result.scroll=verticalScrollBar()->value();
-    for(int row:selectedRows())if(row>=0&&row<m_tracks.size())result.selected<<m_tracks[row].identityKey();
+    Scene result;
+    result.scroll = verticalScrollBar()->value();
+    for (int row : selectedRows())
+        if (row >= 0 && row < m_tracks.size()) result.selected << m_tracks[row].identityKey();
     return result;
 }
 void PlaylistView::restoreScene(const Scene &scene) {
-    m_selection.clear();m_selectedRow=-1;m_anchor=-1;
-    for(int row=0;row<m_tracks.size();++row)if(scene.selected.contains(m_tracks[row].identityKey())) {
-        m_selection.insert(row);m_selectedRow=row;
-    }
-    m_anchor=m_selectedRow;verticalScrollBar()->setValue(scene.scroll);viewport()->update();
+    m_selection.clear();
+    m_selectedRow = -1;
+    m_anchor = -1;
+    for (int row = 0; row < m_tracks.size(); ++row)
+        if (scene.selected.contains(m_tracks[row].identityKey())) {
+            m_selection.insert(row);
+            m_selectedRow = row;
+        }
+    m_anchor = m_selectedRow;
+    verticalScrollBar()->setValue(scene.scroll);
+    viewport()->update();
 }
 
 void PlaylistView::updateScrollRange() {
@@ -134,12 +146,10 @@ void PlaylistView::paintEvent(QPaintEvent *) {
         const bool isSelected = m_selection.contains(row);
 
         // 交替行：深底上极淡亮色带（不撞选中/hover）。
-        if (!isSelected && row != m_hoverRow && !isCurrent && (row & 1))
-            p.fillRect(line, QColor(255, 255, 255, 10));
+        if (!isSelected && row != m_hoverRow && !isCurrent && (row & 1)) p.fillRect(line, QColor(255, 255, 255, 10));
 
         // hover 行轻亮（静止不画，鼠标悬停才叠一层柔白）：非选中/非当前才叠。
-        if (row == m_hoverRow && !isSelected && !isCurrent)
-            p.fillRect(line, QColor(255, 255, 255, 26));
+        if (row == m_hoverRow && !isSelected && !isCurrent) p.fillRect(line, QColor(255, 255, 255, 26));
 
         // 选中行：accent 橙黄轻条（深底上亮字 + 橙条可读）。
         if (isSelected && !isCurrent) {
@@ -149,11 +159,11 @@ void PlaylistView::paintEvent(QPaintEvent *) {
         }
 
         // 名称列：「序号. 艺术家 - 标题」
-        const QString head = t.artist().isEmpty() ? t.title()
-                                                 : QStringLiteral("%1 - %2").arg(t.artist(), t.title());
+        const QString head = t.artist().isEmpty() ? t.title() : QStringLiteral("%1 - %2").arg(t.artist(), t.title());
         QString name = QStringLiteral("%1. %2").arg(row + 1).arg(head);
-        if(!t.decodeProblem().isEmpty())name+=QStringLiteral("  [无法播放：%1]").arg(t.decodeProblem());
-        if(m_searching&&m_collections)name+=QStringLiteral("  [%1]").arg(m_collections->pagesOf(t.identityKey()).join(QStringLiteral(" · ")));
+        if (!t.decodeProblem().isEmpty()) name += QStringLiteral("  [无法播放：%1]").arg(t.decodeProblem());
+        if (m_searching && m_collections)
+            name += QStringLiteral("  [%1]").arg(m_collections->pagesOf(t.identityKey()).join(QStringLiteral(" · ")));
         if (isCurrent) name.prepend(QStringLiteral("▶ "));
 
         QFont nameFont = isCurrent ? Fonts::title : Fonts::small;
@@ -165,15 +175,17 @@ void PlaylistView::paintEvent(QPaintEvent *) {
 
         // 时长列：右对齐、等宽数字；电台「直播」，未知「...」
         QString durText;
-        if (t.isRadio()) durText = QStringLiteral("直播");
-        else if (t.duration() > 0) durText = clock(t.duration());
-        else durText = QStringLiteral("...");
+        if (t.isRadio())
+            durText = QStringLiteral("直播");
+        else if (t.duration() > 0)
+            durText = clock(t.duration());
+        else
+            durText = QStringLiteral("...");
         QFont durFont = Fonts::small;
         durFont.setStyleStrategy(QFont::PreferMatch);
         p.setFont(durFont);
         p.setPen(isCurrent ? Theme::inkOnGlassAccent : Theme::inkOnGlassSoft);
-        p.drawText(QRectF(durX + 4, top, kDurW - 8, kRowH),
-                   Qt::AlignVCenter | Qt::AlignRight, durText);
+        p.drawText(QRectF(durX + 4, top, kDurW - 8, kRowH), Qt::AlignVCenter | Qt::AlignRight, durText);
     }
 
     // 拖拽插入指示：目标行顶部一条 2px accent 线
@@ -194,27 +206,40 @@ void PlaylistView::mousePressEvent(QMouseEvent *event) {
         const int row = rowAtPos(event->pos());
         selectAt(row, event->modifiers());
         // 按下在有效行上→记为潜在拖拽起点（选中行不在选区内时 selectAt 已收到单行）
-        if (row >= 0) { m_pressing = true; m_pressPos = event->pos(); m_dragging = false; m_dragTarget = -1; }
+        if (row >= 0) {
+            m_pressing = true;
+            m_pressPos = event->pos();
+            m_dragging = false;
+            m_dragTarget = -1;
+        }
     }
     QAbstractScrollArea::mousePressEvent(event);
 }
 
 void PlaylistView::mouseMoveEvent(QMouseEvent *event) {
     if (m_pressing && (event->buttons() & Qt::LeftButton)) {
-        if (!m_dragging
-            && (event->pos() - m_pressPos).manhattanLength() >= QApplication::startDragDistance())
+        if (!m_dragging && (event->pos() - m_pressPos).manhattanLength() >= QApplication::startDragDistance())
             m_dragging = true;
-        if (m_dragging) { m_dragTarget = rowAtPos(event->pos()); viewport()->update(); }
+        if (m_dragging) {
+            m_dragTarget = rowAtPos(event->pos());
+            viewport()->update();
+        }
         return;
     }
     // 非拖拽：维护 hover 行（只在变化时重绘）。
     const int hr = rowAtPos(event->pos());
-    if (hr != m_hoverRow) { m_hoverRow = hr; viewport()->update(); }
+    if (hr != m_hoverRow) {
+        m_hoverRow = hr;
+        viewport()->update();
+    }
     QAbstractScrollArea::mouseMoveEvent(event);
 }
 
 void PlaylistView::leaveEvent(QEvent *event) {
-    if (m_hoverRow != -1) { m_hoverRow = -1; viewport()->update(); }
+    if (m_hoverRow != -1) {
+        m_hoverRow = -1;
+        viewport()->update();
+    }
     QAbstractScrollArea::leaveEvent(event);
 }
 
@@ -242,14 +267,19 @@ void PlaylistView::selectAt(int row, Qt::KeyboardModifiers mods) {
         }
     } else if (mods & Qt::ControlModifier) {
         // Ctrl：切换单行（增/减），锚点移到这一行
-        if (m_selection.contains(row)) m_selection.remove(row);
-        else { m_selection.insert(row); m_anchor = row; }
+        if (m_selection.contains(row))
+            m_selection.remove(row);
+        else {
+            m_selection.insert(row);
+            m_anchor = row;
+        }
         m_selectedRow = row;
     } else if (mods & Qt::ShiftModifier) {
         // Shift：从锚点到当前行的连续区间（覆盖式，与经典列表一致）
         const int a = m_anchor < 0 ? row : m_anchor;
         m_selection.clear();
-        for (int i = qMin(a, row); i <= qMax(a, row); ++i) m_selection.insert(i);
+        for (int i = qMin(a, row); i <= qMax(a, row); ++i)
+            m_selection.insert(i);
         m_selectedRow = row;
     } else {
         // 普通点击：重设为单行
@@ -263,8 +293,12 @@ void PlaylistView::selectAt(int row, Qt::KeyboardModifiers mods) {
 
 void PlaylistView::selectAllRows() {
     m_selection.clear();
-    for (int i = 0; i < m_tracks.size(); ++i) m_selection.insert(i);
-    if (!m_tracks.isEmpty()) { m_selectedRow = m_tracks.size() - 1; m_anchor = m_selectedRow; }
+    for (int i = 0; i < m_tracks.size(); ++i)
+        m_selection.insert(i);
+    if (!m_tracks.isEmpty()) {
+        m_selectedRow = m_tracks.size() - 1;
+        m_anchor = m_selectedRow;
+    }
     viewport()->update();
 }
 
@@ -293,89 +327,238 @@ void PlaylistView::wheelEvent(QWheelEvent *event) {
     verticalScrollBar()->setValue(verticalScrollBar()->value() + delta);
 }
 
-// 右键选中那一行并弹菜单：播放类（下一首/稍后）与集合类（加入歌单/收藏/移除）。
-// 本视图只负责弹菜单与发信号，真正动队列 / 集合 / 落盘由上层（PlaylistWindow）做。
+// 右键菜单：选中行上给播放/集合/文件动作，空白处也能拿到添加/排序/模式/队列/歌单管理。
+// 原工具条那排按钮已收进这里；本视图只负责弹菜单与发信号，真正动队列 / 集合 / 落盘
+// 由上层（PlaylistWindow）做。
 void PlaylistView::contextMenuEvent(QContextMenuEvent *event) {
     const int row = rowAtPos(event->pos());
-    if (row < 0 || row >= m_tracks.size()) {
-        QAbstractScrollArea::contextMenuEvent(event);
-        return;
+    const bool onRow = row >= 0 && row < m_tracks.size();
+    if (onRow) {
+        m_selectedRow = row;
+        // 右键的行不在现有选区里→把选区收到这一行（在选区内则保留整段批量）
+        if (!m_selection.contains(row)) {
+            m_selection.clear();
+            m_selection.insert(row);
+            m_anchor = row;
+        }
+        viewport()->update();
     }
-    m_selectedRow = row;
-    // 右键的行不在现有选区里→把选区收到这一行（在选区内则保留整段批量）
-    if (!m_selection.contains(row)) { m_selection.clear(); m_selection.insert(row); m_anchor = row; }
-    viewport()->update();
-    const QList<int> rows = selectedRows();
+    const QList<int> rows = onRow ? selectedRows() : QList<int>();
 
     QMenu menu(this);
-    QAction *playNext = menu.addAction(QStringLiteral("下一首播放"));
-    QAction *playLater = menu.addAction(QStringLiteral("稍后播放"));
-    menu.addSeparator();
-
-    const Track t = m_tracks[row];
-    const bool isFav = m_collections && m_collections->isFavorite(t.identityKey());
-    QAction *favToggle = menu.addAction(isFav ? QStringLiteral("取消收藏")
-                                              : QStringLiteral("加入收藏"));
-    // 「加入歌单」子菜单：收藏 + 各自建歌单（没有集合层就不列）
+    Track t;
+    QAction *playNext = nullptr;
+    QAction *playLater = nullptr;
+    QAction *favToggle = nullptr;
     QAction *pickedFav = nullptr;
-    QList<QPair<QAction *, QString>> listActs;
-    if (m_collections) {
-        QMenu *sub = menu.addMenu(QStringLiteral("加入歌单"));
-        pickedFav = sub->addAction(QStringLiteral("我的收藏"));
-        for (const UserPlaylist &pl : m_collections->playlists().items())
-            listActs.append({sub->addAction(pl.name), pl.id});
-    }
-    menu.addSeparator();
-    QAction *remove = menu.addAction(QStringLiteral("从列表移除"));
-    QAction *properties=menu.addAction(QStringLiteral("属性"));
-    QAction *edit=menu.addAction(QStringLiteral("编辑显示信息…"));
-    QAction *reveal=menu.addAction(QStringLiteral("在文件管理器中打开目录"));
-    QAction *relocate=menu.addAction(QStringLiteral("重新定位文件…"));
-    reveal->setEnabled(!t.isRadio());relocate->setEnabled(!t.isRadio());
-    QAction *address=t.isRadio()?menu.addAction(QStringLiteral("修改电台地址…")):nullptr;
-    QAction *retry=t.isRadio()?menu.addAction(QStringLiteral("重试这个电台")):nullptr;
-
-    // 电台行：额外给「重命名台名…」与「移入分类」（R13）。台名/归属都记在地址上。
+    QAction *remove = nullptr;
+    QAction *properties = nullptr;
+    QAction *edit = nullptr;
+    QAction *reveal = nullptr;
+    QAction *relocate = nullptr;
+    QAction *address = nullptr;
+    QAction *retry = nullptr;
     QAction *aliasAct = nullptr;
+    QList<QPair<QAction *, QString>> listActs;
     QList<QPair<QAction *, QString>> catActs;
-    if (t.isRadio() && m_collections) {
+
+    if (onRow) {
+        t = m_tracks[row];
+        playNext = menu.addAction(QStringLiteral("下一首播放"));
+        playLater = menu.addAction(QStringLiteral("稍后播放"));
         menu.addSeparator();
-        aliasAct = menu.addAction(QStringLiteral("重命名台名…"));
-        QMenu *catSub = menu.addMenu(QStringLiteral("移入分类"));
-        const RadioStations &rs = m_collections->radios();
-        const QString cur = rs.categoryIDOf(t.identityKey());
-        QAction *uncat = catSub->addAction(QStringLiteral("未分类"));
-        uncat->setCheckable(true);
-        uncat->setChecked(cur.isEmpty());
-        catActs.append({uncat, RadioStations::uncategorizedID});
-        for (const RadioCategory &c : rs.categories()) {
-            QAction *a = catSub->addAction(c.name);
-            a->setCheckable(true);
-            a->setChecked(cur == c.id);
-            catActs.append({a, c.id});
+
+        const bool isFav = m_collections && m_collections->isFavorite(t.identityKey());
+        favToggle = menu.addAction(isFav ? QStringLiteral("取消收藏") : QStringLiteral("加入收藏"));
+        // 「加入歌单」子菜单：收藏 + 各自建歌单（没有集合层就不列）
+        if (m_collections) {
+            QMenu *sub = menu.addMenu(QStringLiteral("加入歌单"));
+            pickedFav = sub->addAction(QStringLiteral("我的收藏"));
+            for (const UserPlaylist &pl : m_collections->playlists().items())
+                listActs.append({sub->addAction(pl.name), pl.id});
+        }
+        menu.addSeparator();
+        remove = menu.addAction(QStringLiteral("从列表移除"));
+        properties = menu.addAction(QStringLiteral("属性"));
+        edit = menu.addAction(QStringLiteral("编辑显示信息…"));
+        reveal = menu.addAction(QStringLiteral("在文件管理器中打开目录"));
+        relocate = menu.addAction(QStringLiteral("重新定位文件…"));
+        reveal->setEnabled(!t.isRadio());
+        relocate->setEnabled(!t.isRadio());
+        if (t.isRadio()) {
+            address = menu.addAction(QStringLiteral("修改电台地址…"));
+            retry = menu.addAction(QStringLiteral("重试这个电台"));
+        }
+
+        // 电台行：额外给「重命名台名…」与「移入分类」（R13）。台名/归属都记在地址上。
+        if (t.isRadio() && m_collections) {
+            menu.addSeparator();
+            aliasAct = menu.addAction(QStringLiteral("重命名台名…"));
+            QMenu *catSub = menu.addMenu(QStringLiteral("移入分类"));
+            const RadioStations &rs = m_collections->radios();
+            const QString cur = rs.categoryIDOf(t.identityKey());
+            QAction *uncat = catSub->addAction(QStringLiteral("未分类"));
+            uncat->setCheckable(true);
+            uncat->setChecked(cur.isEmpty());
+            catActs.append({uncat, RadioStations::uncategorizedID});
+            for (const RadioCategory &c : rs.categories()) {
+                QAction *a = catSub->addAction(c.name);
+                a->setCheckable(true);
+                a->setChecked(cur == c.id);
+                catActs.append({a, c.id});
+            }
         }
     }
 
+    // —— 管理动作（原工具条那排）：行上右键与列表空白处都给 ——
+    if (onRow) menu.addSeparator();
+    QAction *addFiles = menu.addAction(QStringLiteral("添加文件…"));
+    QAction *addFolder = menu.addAction(QStringLiteral("添加文件夹…"));
+    QAction *addRadio = menu.addAction(QStringLiteral("添加网络电台…"));
+    QAction *queue = menu.addAction(QStringLiteral("待播队列"));
+
+    QMenu *sortSub = menu.addMenu(QStringLiteral("排序"));
+    QAction *sortTitle = sortSub->addAction(QStringLiteral("按标题"));
+    QAction *sortArtist = sortSub->addAction(QStringLiteral("按艺术家"));
+    QAction *sortAlbum = sortSub->addAction(QStringLiteral("按专辑"));
+    QAction *sortDuration = sortSub->addAction(QStringLiteral("按时长"));
+    sortSub->addSeparator();
+    QAction *sortTitleDesc = sortSub->addAction(QStringLiteral("按标题降序"));
+    QAction *sortArtistDesc = sortSub->addAction(QStringLiteral("按艺术家降序"));
+    QAction *sortAlbumDesc = sortSub->addAction(QStringLiteral("按专辑降序"));
+    QAction *sortDurationDesc = sortSub->addAction(QStringLiteral("按时长降序"));
+    sortSub->addSeparator();
+    QAction *sortReset = sortSub->addAction(QStringLiteral("还原原序"));
+
+    QMenu *modeSub = menu.addMenu(QStringLiteral("播放模式"));
+    const struct ModeRow {
+        const char *name;
+        PlayMode mode;
+    } modeRows[] = {
+        {"顺序播放", PlayMode::Order},
+        {"列表循环", PlayMode::ListLoop},
+        {"单曲循环", PlayMode::SingleLoop},
+        {"随机播放", PlayMode::Random},
+    };
+    QList<QAction *> modeActs;
+    for (const ModeRow &r : modeRows) {
+        QAction *a = modeSub->addAction(QString::fromUtf8(r.name));
+        a->setCheckable(true);
+        a->setChecked(r.mode == m_controller->mode());
+        modeActs.append(a);
+    }
+    QAction *playlists = menu.addAction(QStringLiteral("歌单管理…"));
+
     QAction *chosen = menu.exec(event->globalPos());
     if (!chosen) return;
-    if(chosen==properties){emit propertiesRequested(t);return;}
-    if(chosen==edit){emit editRequested(t);return;}
-    if(chosen==reveal){QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(t.url().toLocalFile()).absolutePath()));return;}
-    if(chosen==relocate){emit relocateRequested(t);return;}
-    if(address&&chosen==address){emit radioAddressRequested(t);return;}
-    if(retry&&chosen==retry){emit radioRetryRequested(t);return;}
-    if (chosen == playNext) emit enqueueNextRequested(rows);
-    else if (chosen == playLater) emit enqueueLaterRequested(rows);
-    else if (chosen == favToggle) emit toggleFavoriteRequested(rows);
-    else if (chosen == remove) emit removeRequested(rows);
-    else if (aliasAct && chosen == aliasAct) emit radioAliasRequested(rows);
+    if (chosen == properties) {
+        emit propertiesRequested(t);
+        return;
+    }
+    if (chosen == edit) {
+        emit editRequested(t);
+        return;
+    }
+    if (chosen == reveal) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(t.url().toLocalFile()).absolutePath()));
+        return;
+    }
+    if (chosen == relocate) {
+        emit relocateRequested(t);
+        return;
+    }
+    if (address && chosen == address) {
+        emit radioAddressRequested(t);
+        return;
+    }
+    if (retry && chosen == retry) {
+        emit radioRetryRequested(t);
+        return;
+    }
+    if (chosen == addFiles) {
+        emit addFilesRequested();
+        return;
+    }
+    if (chosen == addFolder) {
+        emit addFolderRequested();
+        return;
+    }
+    if (chosen == addRadio) {
+        emit addRadioRequested();
+        return;
+    }
+    if (chosen == queue) {
+        emit queueRequested();
+        return;
+    }
+    if (chosen == playlists) {
+        emit playlistMenuRequested(event->globalPos());
+        return;
+    }
+    if (chosen == sortTitle) {
+        emit sortRequested(0);
+        return;
+    }
+    if (chosen == sortArtist) {
+        emit sortRequested(1);
+        return;
+    }
+    if (chosen == sortAlbum) {
+        emit sortRequested(2);
+        return;
+    }
+    if (chosen == sortDuration) {
+        emit sortRequested(3);
+        return;
+    }
+    if (chosen == sortTitleDesc) {
+        emit sortRequested(4);
+        return;
+    }
+    if (chosen == sortArtistDesc) {
+        emit sortRequested(5);
+        return;
+    }
+    if (chosen == sortAlbumDesc) {
+        emit sortRequested(6);
+        return;
+    }
+    if (chosen == sortDurationDesc) {
+        emit sortRequested(7);
+        return;
+    }
+    if (chosen == sortReset) {
+        emit sortRequested(-1);
+        return;
+    }
+    const int modeIndex = modeActs.indexOf(chosen);
+    if (modeIndex >= 0) {
+        m_controller->setMode(modeRows[modeIndex].mode);
+        return;
+    }
+    if (chosen == playNext)
+        emit enqueueNextRequested(rows);
+    else if (chosen == playLater)
+        emit enqueueLaterRequested(rows);
+    else if (chosen == favToggle)
+        emit toggleFavoriteRequested(rows);
+    else if (chosen == remove)
+        emit removeRequested(rows);
+    else if (aliasAct && chosen == aliasAct)
+        emit radioAliasRequested(rows);
     else if (pickedFav && chosen == pickedFav)
         emit addToListRequested(rows, Collections::kFavViewId);
     else
         for (const auto &ca : catActs)
-            if (chosen == ca.first) { emit radioMoveCategoryRequested(rows, ca.second); return; }
-        for (const auto &pa : listActs)
-            if (chosen == pa.first) { emit addToListRequested(rows, pa.second); break; }
+            if (chosen == ca.first) {
+                emit radioMoveCategoryRequested(rows, ca.second);
+                return;
+            }
+    for (const auto &pa : listActs)
+        if (chosen == pa.first) {
+            emit addToListRequested(rows, pa.second);
+            break;
+        }
 }
 
 void PlaylistView::scrollToCurrent() {
@@ -383,7 +566,9 @@ void PlaylistView::scrollToCurrent() {
     const int page = viewport()->height();
     const int rowTop = m_currentRow * kRowH;
     int value = verticalScrollBar()->value();
-    if (rowTop < value) value = rowTop;
-    else if (rowTop + kRowH > value + page) value = rowTop + kRowH - page;
+    if (rowTop < value)
+        value = rowTop;
+    else if (rowTop + kRowH > value + page)
+        value = rowTop + kRowH - page;
     verticalScrollBar()->setValue(value);
 }

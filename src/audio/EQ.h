@@ -10,7 +10,7 @@ public:
     static constexpr int kBands = 10;
     static const std::array<double, kBands> &frequencies();
 
-    /// gainDb 每段 [-12, 12]；越界夹掉（与 Swift 版滑块量程一致）
+    /// gainDb 每段 [-12, 12]；越界夹掉（与滑块量程一致）
     void setGains(const std::array<double, kBands> &gainDb);
     const std::array<double, kBands> &gains() const { return m_gains; }
     void setEnabled(bool on) { m_enabled = on; }
@@ -28,13 +28,16 @@ private:
         double x1 = 0, x2 = 0, y1 = 0, y2 = 0;
         inline float step(float in) {
             const double out = b0 * in + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
-            x2 = x1; x1 = in; y2 = y1; y1 = out;
+            x2 = x1;
+            x1 = in;
+            y2 = y1;
+            y1 = out;
             return float(out);
         }
     };
     void recompute();
 
-    std::array<double, kBands> m_gains {};
+    std::array<double, kBands> m_gains{};
     std::array<Biquad, kBands> m_ch[2];
     double m_rate = 44100;
     bool m_enabled = false;

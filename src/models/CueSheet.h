@@ -1,6 +1,6 @@
 #pragma once
 
-// CUE 分轨表解析（对齐 Swift Models/CueSheet.swift）：整盘压成一份镜像（WAV/FLAC）时，
+// CUE 分轨表解析：整盘压成一份镜像（WAV/FLAC）时，
 // 靠 .cue 里的 FILE/TRACK/INDEX 切出每一首在镜像中的起止秒。解析结果直接产 Track 分轨段
 // （Track::fromCueSegment），交给既有解码/播放通路（loadAndPlay 会带 playStart/playEnd）。
 // 编码回退：UTF-8（剥 BOM）→ Latin-1；GBK/Big5 需 Qt5Compat::QTextCodec，暂作 TODO。
@@ -16,8 +16,8 @@ struct CueTrackInfo {
     QString title;
     QString performer;
     QString album;
-    QUrl fileUrl;          // 音频镜像绝对 URL
-    QUrl sheetUrl;         // 来源 .cue（分轨身份键）
+    QUrl fileUrl;  // 音频镜像绝对 URL
+    QUrl sheetUrl; // 来源 .cue（分轨身份键）
     double start = 0;
     double nextStart = -1; // <0 = 到镜像结尾
 };

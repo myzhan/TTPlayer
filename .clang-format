@@ -1,0 +1,56 @@
+---
+# TTPlayer C++/Objective-C++ 格式化规则（clang-format 18.1.8）
+#
+# 取值以现有代码的主流写法为准，不引入与现有风格冲突的重排：
+#   - 4 空格缩进、大括号同行（Attach）、控制语句后留空格（if (…)、for (…)）
+#   - 指针靠变量（QString *p）、列宽 120、头文件顺序不动（Qt 头有顺序要求）
+#   - 中文注释不重排（ReflowComments: false），避免按字节宽度切坏句子
+#
+# 有意保留的宽松项：
+#   - AllowShortIfStatementsOnASingleLine: WithoutElse —— 自检/探针里有大量单行卫语句
+#   - SortIncludes: Never —— Qt/FFmpeg 头的包含顺序与宏开关有关，不交给格式化器
+#
+# 已整仓重排过一次，历史债清零；CI 跑 `lint.py format --all`，新增行不合规就挂。
+# 单次改动想快速自查可跑 `lint.py format`（只排改动行），两种口径结果一致。
+#
+# 不写 Language: Cpp：写了会让 clang-format 拒绝 .mm（"does not support
+# Objective-C"），留空则整套规则同时作用于 C++ 与 Objective-C++。
+Standard: c++20
+BasedOnStyle: LLVM
+AccessModifierOffset: -4
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: true
+AllowShortBlocksOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: false
+AlwaysBreakTemplateDeclarations: Yes
+BreakBeforeBraces: Attach
+BreakConstructorInitializers: BeforeColon
+BreakStringLiterals: false
+ColumnLimit: 120
+ConstructorInitializerIndentWidth: 4
+ContinuationIndentWidth: 4
+Cpp11BracedListStyle: true
+DerivePointerAlignment: false
+FixNamespaceComments: false
+IncludeBlocks: Preserve
+IndentCaseLabels: false
+IndentWidth: 4
+IndentWrappedFunctionNames: false
+KeepEmptyLinesAtTheStartOfBlocks: false
+NamespaceIndentation: None
+PointerAlignment: Right
+ReflowComments: false
+SortIncludes: Never
+SpaceAfterCStyleCast: false
+SpaceBeforeParens: ControlStatements
+SpacesInParentheses: false
+TabWidth: 4
+UseTab: Never
+...

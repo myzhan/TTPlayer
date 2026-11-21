@@ -6,17 +6,20 @@
 #include <QUuid>
 
 namespace {
-// 名字规矩：去空白（含全角）+ 截上限。与 Swift `String(normalized.prefix(limit))` 同口径。
+// 名字规矩：去空白（含全角）+ 截上限。
 QString clip(const QString &raw, int limit) {
     return NameRules::normalized(raw).left(limit);
 }
-QString newId() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
+QString newId() {
+    return QUuid::createUuid().toString(QUuid::WithoutBraces);
+}
 } // namespace
 
 QStringList RadioStations::ids() const {
     QStringList out;
     out.reserve(m_categories.size());
-    for (const RadioCategory &c : m_categories) out.append(c.id);
+    for (const RadioCategory &c : m_categories)
+        out.append(c.id);
     return out;
 }
 
@@ -28,7 +31,8 @@ int RadioStations::indexOf(const QString &id) const {
 
 QSet<QString> RadioStations::takenNames() const {
     QSet<QString> s;
-    for (const RadioCategory &c : m_categories) s.insert(c.name);
+    for (const RadioCategory &c : m_categories)
+        s.insert(c.name);
     return s;
 }
 
@@ -40,7 +44,7 @@ QString RadioStations::nameOf(const QString &id) const {
 
 // 已经不存在的分类 id 一律按未分类算（空串）：不能让存档里一个被删掉的分类把台藏起来
 QString RadioStations::categoryIDOf(const QString &key) const {
-    const QString id = m_assigned.value(key);
+    QString id = m_assigned.value(key);
     if (id.isEmpty() || id == uncategorizedID || !contains(id)) return QString();
     return id;
 }
@@ -60,16 +64,17 @@ QStringList RadioStations::keysIn(const QString &id) const {
 int RadioStations::unassignedCount() const {
     int n = 0;
     const QList<QString> keys = m_assigned.keys();
-    for (const QString &k : keys) if (categoryIDOf(k).isEmpty()) ++n;
+    for (const QString &k : keys)
+        if (categoryIDOf(k).isEmpty()) ++n;
     return n;
 }
 
 QString RadioStations::displayName(const QUrl &url) const {
     const QString key = url.toString();
-    const QString alias = m_aliases.value(key);
+    QString alias = m_aliases.value(key);
     if (!alias.isEmpty()) return alias;
     // 出厂台不占 aliases 那张表：用户没起过名字时也有个能看的台名
-    const QString preset = RadioPresets::nameFor(url);
+    QString preset = RadioPresets::nameFor(url);
     if (!preset.isEmpty()) return preset;
     return RadioURL::displayName(url);
 }
@@ -97,8 +102,10 @@ QString RadioStations::fallbackText(const QUrl &url) const {
 void RadioStations::setAlias(const QString &key, const QString &raw) {
     if (key.isEmpty()) return;
     const QString name = clip(raw, aliasLimit);
-    if (name.isEmpty()) m_aliases.remove(key);   // 空名 = 取消自定义
-    else m_aliases.insert(key, name);
+    if (name.isEmpty())
+        m_aliases.remove(key); // 空名 = 取消自定义
+    else
+        m_aliases.insert(key, name);
 }
 
 bool RadioStations::createCategory(const QString &raw, QString *outId, QString *outNote) {
@@ -109,8 +116,8 @@ bool RadioStations::createCategory(const QString &raw, QString *outId, QString *
     RadioCategory made{newId(), name};
     m_categories.append(made);
     if (outId) *outId = made.id;
-    if (outNote) *outNote = changed ? QStringLiteral("已经有叫「%1」的分类，这个改名为「%2」").arg(base, name)
-                                     : QString();
+    if (outNote)
+        *outNote = changed ? QStringLiteral("已经有叫「%1」的分类，这个改名为「%2」").arg(base, name) : QString();
     return true;
 }
 
@@ -134,7 +141,10 @@ bool RadioStations::deleteCategory(const QString &id, int *moved) {
     int dropped = 0;
     const QList<QString> keys = m_assigned.keys();
     for (const QString &k : keys) {
-        if (m_assigned.value(k) == id) { m_assigned.remove(k); ++dropped; }
+        if (m_assigned.value(k) == id) {
+            m_assigned.remove(k);
+            ++dropped;
+        }
     }
     m_categories.removeAt(i);
     if (moved) *moved = dropped;
@@ -147,7 +157,10 @@ int RadioStations::moveRadios(const QStringList &keys, const QString &id, QStrin
     if (id.isEmpty() || id == uncategorizedID) {
         int hit = 0;
         for (const QString &k : keys) {
-            if (m_assigned.contains(k)) { m_assigned.remove(k); ++hit; }
+            if (m_assigned.contains(k)) {
+                m_assigned.remove(k);
+                ++hit;
+            }
         }
         return hit;
     }
@@ -155,7 +168,8 @@ int RadioStations::moveRadios(const QStringList &keys, const QString &id, QStrin
         if (problem) *problem = QStringLiteral("这个分类已经不在了");
         return 0;
     }
-    for (const QString &k : keys) m_assigned.insert(k, id);
+    for (const QString &k : keys)
+        m_assigned.insert(k, id);
     return keys.size();
 }
 
@@ -165,9 +179,15 @@ int RadioStations::replaceKeys(const QHash<QString, QString> &map) {
         const QString &oldKey = it.key();
         const QString &newKey = it.value();
         const QString name = m_aliases.take(oldKey);
-        if (!name.isEmpty()) { if (!m_aliases.contains(newKey)) m_aliases.insert(newKey, name); ++changed; }
+        if (!name.isEmpty()) {
+            if (!m_aliases.contains(newKey)) m_aliases.insert(newKey, name);
+            ++changed;
+        }
         const QString cid = m_assigned.take(oldKey);
-        if (!cid.isEmpty()) { if (!m_assigned.contains(newKey)) m_assigned.insert(newKey, cid); ++changed; }
+        if (!cid.isEmpty()) {
+            if (!m_assigned.contains(newKey)) m_assigned.insert(newKey, cid);
+            ++changed;
+        }
     }
     return changed;
 }
@@ -178,8 +198,7 @@ void RadioStations::restore(const QHash<QString, QString> &aliases, const QList<
     QList<RadioCategory> rebuilt;
     for (const RadioCategory &cat : cats) {
         const QString name = clip(cat.name, nameLimit);
-        if (name.isEmpty() || cat.id.isEmpty() || cat.id == uncategorizedID || seenIDs.contains(cat.id))
-            continue;
+        if (name.isEmpty() || cat.id.isEmpty() || cat.id == uncategorizedID || seenIDs.contains(cat.id)) continue;
         seenIDs.insert(cat.id);
         bool changed = false;
         const QString finalName = NameRules::distinct(name, seenNames, &changed);
@@ -188,12 +207,13 @@ void RadioStations::restore(const QHash<QString, QString> &aliases, const QList<
     }
     m_categories = rebuilt;
     QSet<QString> live;
-    for (const RadioCategory &c : rebuilt) live.insert(c.id);
+    for (const RadioCategory &c : rebuilt)
+        live.insert(c.id);
 
     m_aliases.clear();
     for (auto it = aliases.constBegin(); it != aliases.constEnd(); ++it) {
         const QString name = clip(it.value(), aliasLimit);
-        if (name.isEmpty() || it.key().isEmpty()) continue;   // 地址/名字不对的一律不收
+        if (name.isEmpty() || it.key().isEmpty()) continue; // 地址/名字不对的一律不收
         m_aliases.insert(it.key(), name);
     }
     m_assigned.clear();

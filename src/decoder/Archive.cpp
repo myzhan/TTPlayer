@@ -2,7 +2,7 @@
 #include "decoder/FFmpeg.h"
 
 extern "C" {
-#include "shim.h"   // src/clibarchive/include —— libarchive 稳定子集声明
+#include "shim.h" // src/clibarchive/include —— libarchive 稳定子集声明
 }
 
 #include <QFileInfo>
@@ -14,17 +14,17 @@ extern "C" {
 #include <libavutil/error.h>
 }
 
-#include <cstdio>   // SEEK_SET/CUR/END
+#include <cstdio> // SEEK_SET/CUR/END
 #include <algorithm>
 #include <vector>
 
 namespace {
 
-int openArchive(struct archive *reader,const QString &path) {
+int openArchive(struct archive *reader, const QString &path) {
 #ifdef _WIN32
-    return archive_read_open_filename_w(reader,reinterpret_cast<const wchar_t *>(path.utf16()),16384);
+    return archive_read_open_filename_w(reader, reinterpret_cast<const wchar_t *>(path.utf16()), 16384);
 #else
-    return archive_read_open_filename(reader,path.toUtf8().constData(),16384);
+    return archive_read_open_filename(reader, path.toUtf8().constData(), 16384);
 #endif
 }
 
@@ -33,10 +33,9 @@ constexpr int kSeekSize = 0x10000;
 
 const QSet<QString> &archiveExts() {
     static const QSet<QString> s = {
-        QStringLiteral("zip"), QStringLiteral("7z"), QStringLiteral("rar"),
-        QStringLiteral("tar"), QStringLiteral("gz"), QStringLiteral("tgz"),
-        QStringLiteral("bz2"), QStringLiteral("tbz"), QStringLiteral("xz"),
-        QStringLiteral("txz"), QStringLiteral("zst"),
+        QStringLiteral("zip"), QStringLiteral("7z"),  QStringLiteral("rar"), QStringLiteral("tar"),
+        QStringLiteral("gz"),  QStringLiteral("tgz"), QStringLiteral("bz2"), QStringLiteral("tbz"),
+        QStringLiteral("xz"),  QStringLiteral("txz"), QStringLiteral("zst"),
     };
     return s;
 }
@@ -71,12 +70,12 @@ bool parseEntryUrl(const QUrl &url, QString &archivePath, QString &entryName) {
 
 QStringList listAudioEntries(const QString &archivePath) {
     QStringList out;
-    const QSet<QString> exts = ff::playableExtensions();
+    const QSet<QString> &exts = ff::playableExtensions();
     struct archive *a = archive_read_new();
     if (!a) return out;
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
-    if (openArchive(a,archivePath) != CLARCHIVE_OK) {
+    if (openArchive(a, archivePath) != CLARCHIVE_OK) {
         archive_read_free(a);
         return out;
     }
@@ -87,8 +86,7 @@ QStringList listAudioEntries(const QString &archivePath) {
         const bool enc = archive_entry_is_encrypted(entry) != 0;
         if (pn && sz >= 0) {
             const QString name = QString::fromUtf8(pn);
-            if (!enc && exts.contains(suffixOf(name)))
-                out.append(name);
+            if (!enc && exts.contains(suffixOf(name))) out.append(name);
         }
         // 不解数据，直接跳到下一条目
         archive_read_data_skip(a);
@@ -124,7 +122,7 @@ bool ArchiveEntrySource::openAt(int64_t skipBytes) {
     if (!a) return false;
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
-    if (openArchive(a,m_archivePath) != CLARCHIVE_OK) {
+    if (openArchive(a, m_archivePath) != CLARCHIVE_OK) {
         archive_read_free(a);
         return false;
     }
@@ -147,7 +145,7 @@ bool ArchiveEntrySource::openAt(int64_t skipBytes) {
     m_a = a;
     // 丢弃到目标偏移（seek 靠这笔 O(offset) 重放，条目通常不大）
     if (skipBytes > 0) {
-        std::vector<char> scratch(64 * 1024);
+        std::vector<char> scratch(std::size_t{64} * 1024);
         int64_t left = skipBytes;
         while (left > 0) {
             const int chunk = int(std::min<int64_t>(left, int64_t(scratch.size())));
@@ -164,17 +162,19 @@ int64_t ArchiveEntrySource::read(uint8_t *buf, int buf_size) {
     if (!m_a && !openAt(0)) return AVERROR(EIO);
     struct archive *a = static_cast<struct archive *>(m_a);
     const la_ssize_t r = archive_read_data(a, buf, size_t(buf_size));
-    if (r == 0) return 0;                 // 条目结束 → EOF
-    if (r < 0) return AVERROR(EIO);       // 底层错误
+    if (r == 0) return 0;           // 条目结束 → EOF
+    if (r < 0) return AVERROR(EIO); // 底层错误
     m_pos += r;
     return r;
 }
 
 int64_t ArchiveEntrySource::seek(int64_t offset, int whence) {
-    if (whence == kSeekSize) return m_entrySize;   // 尚未定位过则 -1，FFmpeg 退顺序读
+    if (whence == kSeekSize) return m_entrySize; // 尚未定位过则 -1，FFmpeg 退顺序读
     int64_t target = offset;
-    if (whence == SEEK_CUR) target = m_pos + offset;
-    else if (whence == SEEK_END && m_entrySize >= 0) target = m_entrySize + offset;
+    if (whence == SEEK_CUR)
+        target = m_pos + offset;
+    else if (whence == SEEK_END && m_entrySize >= 0)
+        target = m_entrySize + offset;
     if (target < 0) return -1;
     if (!openAt(target)) return -1;
     return m_pos;

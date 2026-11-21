@@ -1,13 +1,34 @@
 #!/usr/bin/env bash
-# FFmpeg“音频最小化”configure 组件清单（三平台共用，唯一真相）。
-# build_ffmpeg.sh / build_ffmpeg_linux.sh / build_ffmpeg_windows.sh 都 source 这一份，
-# 保证 mac/linux/win 编出来的解码覆盖面完全一致，不会因为某个平台漏了某档而行为漂移。
+# FFmpeg“音频最小化”configure 组件清单与公共构建函数（唯一真相）。
+# 四个平台脚本都 source 这一份：
+#   build_ffmpeg.sh（macOS）、build_ffmpeg_linux.sh、build_ffmpeg_windows.sh（MinGW）、
+#   build_ffmpeg_msvc.sh（MSVC）
+# 保证各平台编出来的解码覆盖面完全一致，不会因为某个平台漏了某档而行为漂移。
 #
 # 只列“本项目解码用到的”解复用器 / 解码器 / 协议；configure 会自动补齐依赖（parser/bsf 等）。
 # 电台与归档都不走 FFmpeg 内置网络/解包：前者由 QtNetwork 喂自定义 AVIOContext，
 # 后者由 libarchive 喂条目，所以这里不 enable http/tls/zip 等协议。
 #
 # 兼容 zsh 与 bash：数组定义 + "${COMPONENTS[@]}" 展开在两者语义一致。
+
+# 冻结的 FFmpeg 版本：源码子模块必须停在这个 tag，各平台构建脚本都会校验。
+# 升级时一起改：git -C 3rd/ffmpeg checkout n9.0 → 改下面的 FFMPEG_RELEASE → 重编 → 同步 AGENTS.md。
+FFMPEG_RELEASE="9.0"
+FFMPEG_TAG="n$FFMPEG_RELEASE"
+
+# 校验 3rd/ffmpeg 的 RELEASE 与冻结版本一致；不一致直接失败，
+# 防止 CI / 打包在子模块被换到别的分支时悄悄编出另一个版本。
+require_frozen_ffmpeg() {
+    local src="$1"
+    local release
+    release="$(cat "$src/RELEASE" 2>/dev/null || true)"
+    if [[ "$release" != "$FFMPEG_RELEASE" ]]; then
+        echo "错误：3rd/ffmpeg 版本为 '${release:-未知}'，本项目冻结在 FFmpeg $FFMPEG_RELEASE（$FFMPEG_TAG）。" >&2
+        echo "恢复：git -C $src checkout $FFMPEG_TAG && git submodule update --init --depth 1 3rd/ffmpeg" >&2
+        return 1
+    fi
+}
+
 COMPONENTS=(
     # 协议：本地文件 + 管道
     --enable-protocol=file
@@ -79,3 +100,34 @@ COMPONENTS=(
     --enable-decoder=gif
     --enable-parser=mjpeg
 )
+
+# ---- 公共构建函数（各平台脚本共用） ----
+
+# PREFIX 可复用条件：源码 commit 与配置指纹都匹配，且四个核心库齐全。
+# pre/suf 对应各平台的库名：libavcodec.a（mac/linux/MinGW）、avcodec.lib（MSVC）。
+ffmpeg_is_built() {
+    local prefix="$1" key="$2" commit="$3" pre="${4-lib}" suf="${5-a}" lib
+    [[ -f "$prefix/.built-config" && -f "$prefix/.built-commit" ]] || return 1
+    [[ "$(cat "$prefix/.built-config")" == "$key" ]] || return 1
+    [[ "$(cat "$prefix/.built-commit")" == "$commit" ]] || return 1
+    for lib in avformat avcodec avutil swresample; do
+        [[ -f "$prefix/lib/$pre$lib.$suf" ]] || return 1
+    done
+}
+
+# 先删旧标记再编：失败或中断后不能把半套产物当成可复用的完整构建。
+ffmpeg_begin_build() {
+    mkdir -p "$1/lib" "$1/include"
+    rm -f "$1/.built-commit" "$1/.built-config"
+}
+
+# 只有整套编译 + install 成功才写标记。
+ffmpeg_finish_build() {
+    printf '%s\n' "$3" > "$1/.built-commit"
+    printf '%s\n' "$2" > "$1/.built-config"
+}
+
+# 在 out-of-tree 构建目录里编译，并 install 到 configure 时给的 prefix。
+ffmpeg_make_install() {
+    ( cd "$1" && make -j"$2" && make install )
+}

@@ -7,24 +7,26 @@
 # 幂等：源码、脚本、架构及部署目标都一致且库齐全才跳过；用 --force 强制重来。
 # 交叉编译：设 TTPLAYER_ARCHS="arm64 x86_64" 时对每个架构各编一遍再 lipo 合并（发版用）。
 set -e
-SCRIPT_HASH=$(shasum -a 256 "$0" | awk '{print $1}')
-COMP_HASH=$(shasum -a 256 "$(dirname "$0")/ffmpeg_components.sh" | awk '{print $1}')
-cd "$(dirname "$0")/.."
 
-SRC=3rd/ffmpeg
-PREFIX=$(pwd)/3rd/ffmpeg-build
-STAMP="$PREFIX/.built-commit"
-CONFIG_STAMP="$PREFIX/.built-config"
-# 与 Package.swift 的 .macOS(.v12) 一致，不能继承构建机器的系统版本。
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+cd "$SCRIPT_DIR/.."
+ROOT=$(pwd)
+source "$SCRIPT_DIR/ffmpeg_components.sh"
+
+SRC="$ROOT/3rd/ffmpeg"
+PREFIX="$ROOT/3rd/ffmpeg-build"
+# 与部署目标 macOS 12.0 一致，不能继承构建机器的系统版本。
 DEPLOYMENT_TARGET=12.0
 export MACOSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET"
 
 if [[ ! -f "$SRC/configure" ]]; then
-    echo "错误：$SRC 不存在或未初始化子模块（git submodule update --init --depth 1 3rd/ffmpeg）" >&2
+    echo "错误：3rd/ffmpeg 不存在或未初始化子模块（git submodule update --init --depth 1 3rd/ffmpeg）" >&2
     exit 1
 fi
 
+require_frozen_ffmpeg "$SRC"
 COMMIT=$(git -C "$SRC" rev-parse HEAD)
+
 # 目标架构列表：默认本机；发版可传多架构
 ARCHS=(native)
 if [[ -n "$TTPLAYER_ARCHS" ]]; then
@@ -32,15 +34,13 @@ if [[ -n "$TTPLAYER_ARCHS" ]]; then
 fi
 
 # 旧版只记 commit，macOS/架构/编译参数变化后会误用旧库。
+SCRIPT_HASH=$(shasum -a 256 "$SCRIPT_DIR/build_ffmpeg.sh" | awk '{print $1}')
+COMP_HASH=$(shasum -a 256 "$SCRIPT_DIR/ffmpeg_components.sh" | awk '{print $1}')
 CONFIG_KEY="$COMMIT|$SCRIPT_HASH|$COMP_HASH|${(j:,:)ARCHS}|$(uname -m)|macos=$DEPLOYMENT_TARGET"
-NEED_BUILD=1
-if [[ "$1" != "--force" && -f "$CONFIG_STAMP" && -f "$STAMP" ]]; then
-    if [[ "$(cat "$CONFIG_STAMP")" == "$CONFIG_KEY" && "$(cat "$STAMP")" == "$COMMIT" ]]; then
-        NEED_BUILD=0
-        for lib in avformat avcodec avutil swresample; do
-            [[ -f "$PREFIX/lib/lib$lib.a" ]] || NEED_BUILD=1
-        done
-    fi
+
+if [[ "${1:-}" != "--force" ]] && ffmpeg_is_built "$PREFIX" "$CONFIG_KEY" "$COMMIT"; then
+    echo "FFmpeg 静态库已就绪（commit ${COMMIT:0:8}），跳过编译；需重来用 scripts/build_ffmpeg.sh --force"
+    exit 0
 fi
 
 # ffmpeg 的 arch 名与 clang/universal 名对齐
@@ -52,32 +52,29 @@ ffmpeg_arch() {
     esac
 }
 
-# 组件清单集中在 scripts/ffmpeg_components.sh（三平台共用，唯一真相），
-# configure 会自动补齐依赖（parser/bsf 等）。
-SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-source "$SCRIPT_DIR/ffmpeg_components.sh"
-
 build_one() {
-    local arch_arg=()
+    local arch="$1"
     local compiler_flags="-mmacosx-version-min=$DEPLOYMENT_TARGET"
-    local bdir="$PREFIX/.obj-$1"
-    if [[ "$1" != "native" ]]; then
+    local bdir="$PREFIX/.obj-$arch"
+    local jobs
+    local arch_arg=()
+    if [[ "$arch" != "native" ]]; then
         # 交叉编译：单靠 --arch 不会让 clang 换 target；--disable-asm 避免同一份
         # inline asm 头（如 x86/mathops.h 里的 "c" 约束）在异架构 target 下编译失败。
         # -arch 同时递到 cflags 与 ldflags，否则 libtool/ar 会拼回 host arch（实测
         # 仅 CC 内嵌 -arch 不够，产出的 .a 还是 host 的，lipo 会“same architectures”失败）。
         arch_arg=(
-            --arch="$(ffmpeg_arch "$1")"
+            --arch="$(ffmpeg_arch "$arch")"
             --enable-cross-compile --target-os=darwin
             --disable-asm
         )
-        compiler_flags+=" -arch $1"
+        compiler_flags+=" -arch $arch"
     fi
 
     rm -rf "$bdir"
     mkdir -p "$bdir"
     # 源码内 configure 会污染工作树，用 out-of-tree 构建：从独立目录调 ../configure
-    ( cd "$bdir" && "$SRC_DIR_ABS/configure" \
+    ( cd "$bdir" && "$SRC/configure" \
         "${arch_arg[@]}" \
         --extra-cflags="$compiler_flags" \
         --extra-ldflags="$compiler_flags" \
@@ -90,47 +87,35 @@ build_one() {
         --disable-avdevice --disable-swscale \
         "${COMPONENTS[@]}" )
 
-    # out-of-tree 下 make 在构建目录里跑，install 到 PREFIX
-    local jobs=$(sysctl -n hw.ncpu)
-    ( cd "$bdir" && make -j"$jobs" && make install-headers install-lib install-priv-headers 2>/dev/null || make install )
+    jobs=$(sysctl -n hw.ncpu)
+    ffmpeg_make_install "$bdir" "$jobs"
 }
 
-SRC_DIR_ABS=$(cd "$SRC" && pwd)
-
-if [[ $NEED_BUILD -eq 0 ]]; then
-    echo "FFmpeg 静态库已就绪（commit ${COMMIT:0:8}），跳过编译；需重来用 scripts/build_ffmpeg.sh --force"
-    exit 0
-fi
-
-mkdir -p "$PREFIX/lib" "$PREFIX/include"
-# 失败或中断后不得把半套产物当成可复用的完整构建。
-rm -f "$STAMP" "$CONFIG_STAMP"
+ffmpeg_begin_build "$PREFIX"
 
 if [[ ${#ARCHS[@]} -eq 1 && "${ARCHS[1]}" == "native" ]]; then
     build_one native
 else
-    # 多架构：各编一遍，再把每个 .a 用 lipo 合并
+    # 多架构：各编一遍收到 stage/<arch>/，再对同名 .a 逐份 lipo 合并
     STAGE="$PREFIX/.stage"
-    rm -rf "$STAGE"; mkdir -p "$STAGE"
-    for a in "${ARCHS[@]}"; do
-        echo "=== 编译 FFmpeg ($a) ==="
-        build_one "$a"
-        cp -a "$PREFIX/lib/"*.a "$STAGE/$a.a" 2>/dev/null || true
-        for f in "$PREFIX"/lib/*.a; do
-            base=$(basename "$f")
-            mkdir -p "$STAGE/$a"
-            cp -a "$f" "$STAGE/$a/$base"
-        done
+    rm -rf "$STAGE"
+    mkdir -p "$STAGE"
+    for arch in "${ARCHS[@]}"; do
+        echo "=== 编译 FFmpeg ($arch) ==="
+        build_one "$arch"
+        mkdir -p "$STAGE/$arch"
+        cp -a "$PREFIX/lib/"*.a "$STAGE/$arch/"
     done
-    # 合并每个库的多架构版本
-    for base in $(ls "$STAGE/${ARCHS[1]}"); do
+    for first in "$STAGE/${ARCHS[1]}"/*.a; do
+        base=$(basename "$first")
         inputs=()
-        for a in "${ARCHS[@]}"; do inputs+=("$STAGE/$a/$base"); done
+        for arch in "${ARCHS[@]}"; do
+            inputs+=("$STAGE/$arch/$base")
+        done
         lipo -create "${inputs[@]}" -output "$PREFIX/lib/$base"
     done
     rm -rf "$STAGE"
 fi
 
-echo "$COMMIT" > "$STAMP"
-echo "$CONFIG_KEY" > "$CONFIG_STAMP"
+ffmpeg_finish_build "$PREFIX" "$CONFIG_KEY" "$COMMIT"
 echo "FFmpeg 静态库编译完成：$PREFIX"

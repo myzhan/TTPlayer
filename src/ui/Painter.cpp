@@ -14,17 +14,15 @@ static QColor scaledAlpha(QColor c, float alpha) {
 
 // 两色线性混合（含 alpha 通道），用于插渐变中间色，不依赖 QColor::lerp 的版本差异。
 static QColor blend(const QColor &a, const QColor &b, qreal t) {
-    return QColor(qRound(a.red()   + (b.red()   - a.red())   * t),
-                  qRound(a.green() + (b.green() - a.green()) * t),
-                  qRound(a.blue()  + (b.blue()  - a.blue())  * t),
-                  qRound(a.alpha() + (b.alpha() - a.alpha()) * t));
+    return QColor(qRound(a.red() + (b.red() - a.red()) * t), qRound(a.green() + (b.green() - a.green()) * t),
+                  qRound(a.blue() + (b.blue() - a.blue()) * t), qRound(a.alpha() + (b.alpha() - a.alpha()) * t));
 }
 
 // 玻璃暗部基调（底部内阴影 / well 凹陷投影共用）——深色皮肤下取近黑中性调。
 static const QColor kShade(0x05, 0x06, 0x07);
 
-void drawBody(QPainter *p, const QRectF &rect, const QColor &top, const QColor &bottom,
-              float alpha, qreal radius, const QColor &edge, bool gloss) {
+void drawBody(QPainter *p, const QRectF &rect, const QColor &top, const QColor &bottom, float alpha, qreal radius,
+              const QColor &edge, bool gloss) {
     if (rect.width() < 1 || rect.height() < 1) return;
     p->setRenderHint(QPainter::Antialiasing, true);
     QPainterPath path;
@@ -74,8 +72,7 @@ void drawBody(QPainter *p, const QRectF &rect, const QColor &top, const QColor &
     }
 }
 
-void drawWell(QPainter *p, const QRectF &rect, const QColor &top, const QColor &bottom,
-              float alpha, qreal radius) {
+void drawWell(QPainter *p, const QRectF &rect, const QColor &top, const QColor &bottom, float alpha, qreal radius) {
     // 统一毛玻璃：与外壳同一层玻璃底，但通过「顶部内阴影 + 底部内高光」把内容区读作
     // 轻微凹陷的槽（参考 Winamp 皮肤那种内凹质感），外加 1px 发丝边。
     if (rect.width() < 1 || rect.height() < 1) return;
@@ -103,8 +100,8 @@ void drawWell(QPainter *p, const QRectF &rect, const QColor &top, const QColor &
     const qreal upBand = qMax<qreal>(1.5, h * 0.06);
     QLinearGradient up(QPointF(rect.left(), rect.bottom()), QPointF(rect.left(), rect.bottom() - upBand));
     up.setColorAt(0.0, scaledAlpha(Theme::wellBevelLight, a * 0.30f));
-    up.setColorAt(1.0, QColor(Theme::wellBevelLight.red(), Theme::wellBevelLight.green(),
-                              Theme::wellBevelLight.blue(), 0));
+    up.setColorAt(1.0,
+                  QColor(Theme::wellBevelLight.red(), Theme::wellBevelLight.green(), Theme::wellBevelLight.blue(), 0));
     p->fillRect(QRectF(QPointF(rect.left(), rect.bottom() - upBand), QSizeF(rect.width(), upBand)), up);
 
     p->restore();
@@ -115,8 +112,7 @@ void drawWell(QPainter *p, const QRectF &rect, const QColor &top, const QColor &
     p->drawPath(path);
 }
 
-void drawHoverFace(QPainter *p, const QRectF &rect, bool hot, bool pressed,
-                   qreal radius, bool hairlineRest) {
+void drawHoverFace(QPainter *p, const QRectF &rect, bool hot, bool pressed, qreal radius, bool hairlineRest) {
     if (rect.width() < 1 || rect.height() < 1) return;
     p->setRenderHint(QPainter::Antialiasing, true);
     QPainterPath path;

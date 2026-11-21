@@ -1,6 +1,6 @@
 #pragma once
 
-// FFmpeg 运行时薄包装：解码层底座（对齐 Swift 版 Audio/FFmpeg.swift）。
+// FFmpeg 运行时薄包装：解码层底座。
 // 日志转接、错误码、编码展示名、demuxer 扩展名白名单。
 // 归档条目（#archive-entry）与电台 URL 的自定义 AVIO 通路后续接进来。
 
@@ -33,7 +33,7 @@ QSet<QString> demuxerExtensions();
 
 /// 完整可播扩展名 = demuxerExtensions() ∪ undeclaredExtensions ∪ floorExtensions。
 /// 有些 demuxer（wav/w64/au/snd/dsf）没在 AVInputFormat.extensions 里声明后缀，
-/// 枚举拿不到，目录扫描会漏掉它们，这里手动补齐（对齐 Swift 版 AudioFormats）。
+/// 枚举拿不到，目录扫描会漏掉它们，这里手动补齐。
 const QSet<QString> &playableExtensions();
 
 /// 是否 DSD 解码器（输出采样率要再 /8 的那一族）

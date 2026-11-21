@@ -2,7 +2,7 @@
 
 // 即时搜索与筛选的条件（F05）：只是「哪些行看得见」的一份描述——不写进列表、不进播放
 // 队列、不进存档。筛选态一旦落到数据层，清除搜索之后就再也还原不回用户原来那张完整列表。
-// 对齐 Swift Models/TrackFilter.swift：关键字对 标题/艺术家/专辑/文件名 任一命中（大小写不敏感），
+// 关键字对 标题/艺术家/专辑/文件名 任一命中（大小写不敏感），
 // 格式档空集=不限。
 
 #include "models/Track.h"
@@ -13,12 +13,11 @@
 #include <QStringList>
 
 struct TrackFilter {
-    QString keyword;              // 原始关键字（未 trim）
-    QSet<QString> formats;        // 勾选的格式档（取自 Track::filterFormat）；空 = 不限
+    QString keyword;       // 原始关键字（未 trim）
+    QSet<QString> formats; // 勾选的格式档（取自 Track::filterFormat）；空 = 不限
 
     TrackFilter() = default;
-    TrackFilter(const QString &kw, const QSet<QString> &fmts = {})
-        : keyword(kw), formats(fmts) {}
+    TrackFilter(const QString &kw, const QSet<QString> &fmts = {}) : keyword(kw), formats(fmts) {}
 
     /// 去掉首尾空白后的关键字：只敲空格不算要搜空格
     QString keywordText() const;

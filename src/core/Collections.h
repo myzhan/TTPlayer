@@ -2,7 +2,7 @@
 
 // 集合层（F04/F05）：把「注册过的曲目 + 收藏 + 自建歌单」装配成左栏那一列可切换的页，
 // 并驱动 GlobalSearch。控制器只管「当前在看的那一页」，页的取舍、键→Track 还原、跨页搜索
-// 都集中在这里——对齐 Swift 里 PlayerController 组页 + GlobalSearch 判定的分工。
+// 都集中在这里——组页 + GlobalSearch 判定的分工。
 //
 // 约定 viewId：@all=媒体库/当前，@fav=收藏，其余=某张自建歌单的 id。
 
@@ -21,13 +21,13 @@
 
 class Collections {
 public:
-    static inline const QString kAllViewId = QStringLiteral("@all");   // [默认] 工作列表
-    static inline const QString kFavViewId = QStringLiteral("@fav");   // 我的收藏
+    static inline const QString kAllViewId = QStringLiteral("@all"); // [默认] 工作列表
+    static inline const QString kFavViewId = QStringLiteral("@fav"); // 我的收藏
     // 派生固定页（内容由投影或档案算出，歌单 UUID 永不以 @ 开头 → 不会撞车）
-    static inline const QString kLibraryViewId = QStringLiteral("@library");      // 媒体库（扫描子集）
-    static inline const QString kRadioViewId = QStringLiteral("@radio");          // 网络电台（@all 里 isRadio 投影）
+    static inline const QString kLibraryViewId = QStringLiteral("@library"); // 媒体库（扫描子集）
+    static inline const QString kRadioViewId = QStringLiteral("@radio"); // 网络电台（@all 里 isRadio 投影）
     static inline const QString kRecentRadioViewId = QStringLiteral("@recentRadio"); // 最近听的台
-    static inline const QString kRecentViewId = QStringLiteral("@recent");        // 最近播放
+    static inline const QString kRecentViewId = QStringLiteral("@recent");           // 最近播放
     // 电台分类页（R11/F13）：都是 @all 里电台地址按 RadioStations 归属的投影，与 @radio 同源。
     // viewId = "radioCat:" + 分类 id；未分类 id = RadioStations::uncategorizedID（默认入口、删不掉）。
     static inline const QString kRadioCatPrefix = QStringLiteral("radioCat:");
@@ -35,8 +35,8 @@ public:
     static QString radioCatViewId(const QString &catId) { return kRadioCatPrefix + catId; }
     static QString radioCatIdOf(const QString &viewId) { return viewId.mid(kRadioCatPrefix.size()); }
 
-    static constexpr int kRecentLimit = 50;        // 最近播放留多少首
-    static constexpr int kRecentRadioLimit = 20;   // 最近听的台留多少个
+    static constexpr int kRecentLimit = 50;      // 最近播放留多少首
+    static constexpr int kRecentRadioLimit = 20; // 最近听的台留多少个
 
     // MARK: 注册表（媒体库/当前页）
     /// 登记曲目（按 identityKey 建索引，重复键覆盖为最新对象），并作为「@all」页内容
@@ -46,7 +46,7 @@ public:
     void registerTracks(const QList<Track> &tracks, bool addToDefault = true);
     void replaceLibrary(const QList<Track> &tracks);
     bool replaceKey(const QString &oldKey, const Track &replacement);
-    void editTrack(const QString &key,const QString &title,const QString &artist,const QString &album);
+    void editTrack(const QString &key, const QString &title, const QString &artist, const QString &album);
     /// 从指定视图移走一行（按稳定身份）：@all 删注册表、@fav 取消收藏、
     /// 自建歌单删键。只影响这一页，不动其它页/队列/磁盘。返回是否真删了
     void removeSearchHits(const QSet<QString> &keys);
@@ -109,7 +109,7 @@ public:
     QList<Track> tracksOf(const QString &viewId) const;
 
     // MARK: 左栏那一列（固定页 + 可变歌单页）
-    QList<QPair<QString, QString>> viewList() const;   // (viewId, 显示名)
+    QList<QPair<QString, QString>> viewList() const; // (viewId, 显示名)
     /// 这一页空着时表格中央那句提示；[默认] 保持原版什么都不画
     static QString emptyHintFor(const QString &viewId);
 
@@ -127,7 +127,7 @@ public:
 private:
     void applyEdit(Track &track) const;
     QJsonObject m_edits;
-    QList<SearchPage> buildPages() const;   // 收藏 + 各歌单 + 全部（索引与搜索共用）
+    QList<SearchPage> buildPages() const; // 收藏 + 各歌单 + 全部（索引与搜索共用）
 
     QList<Track> m_all;
     QStringList m_defaultKeys;
@@ -135,10 +135,10 @@ private:
     QHash<QString, Track> m_byKey;
     UserPlaylists m_lists;
     QStringList m_fav;
-    QStringList m_recent;          // 最近播过的键，最近的在最前
-    QStringList m_recentRadio;     // 最近听过的台地址，最近的在最前
-    QSet<QString> m_libraryKeys;   // 扫描贡献的键（媒体库页内容）
-    RadioStations m_radio;         // 电台台名 / 分类 / 归属（R13）
+    QStringList m_recent;        // 最近播过的键，最近的在最前
+    QStringList m_recentRadio;   // 最近听过的台地址，最近的在最前
+    QSet<QString> m_libraryKeys; // 扫描贡献的键（媒体库页内容）
+    RadioStations m_radio;       // 电台台名 / 分类 / 归属（R13）
     QString m_view = kAllViewId;
     mutable GlobalSearch m_search;
 };

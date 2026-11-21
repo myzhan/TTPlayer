@@ -30,7 +30,7 @@ public:
     enum Panel { Main = 0, Playlist = 1, Equalizer = 2, Lyric = 3 };
     enum Side { Bottom = 0, Left = 1, Right = 2 };
     static constexpr int kGap = 6;
-    static constexpr int kSnapDist = 44;   // 磁吸阈值（px）：候选槽左上角 ± 此范围内才吸附
+    static constexpr int kSnapDist = 44; // 磁吸阈值（px）：候选槽左上角 ± 此范围内才吸附
 
     explicit SkinDock(QObject *parent = nullptr);
 
@@ -42,7 +42,7 @@ public:
 
     /// 测试接缝：某面板当前是否吸附 / 吸附在哪个方位（供 DOCK_PROBE 验磁吸，不改对外行为）
     bool isPanelDocked(Panel p) const;
-    int panelSide(Panel p) const;   // 返回 Side；未登记返回 -1
+    int panelSide(Panel p) const; // 返回 Side；未登记返回 -1
 
     /// 组锚点几何 "left,top,width"（top 是主窗顶边全局 y），用于持久化
     QString geometryString() const;
@@ -66,7 +66,11 @@ protected:
     bool eventFilter(QObject *obj, QEvent *ev) override;
 
 private:
-    struct Saved { QRect frame; bool docked; int side; };
+    struct Saved {
+        QRect frame;
+        bool docked;
+        int side;
+    };
 
     void memberMovedMain(QWidget *w);
     void memberMovedPanel(QWidget *w);
@@ -84,11 +88,11 @@ private:
     QHash<Panel, QWidget *> m_win;
     QHash<QWidget *, Panel> m_panel;
     QHash<QWidget *, bool> m_vis;
-    QHash<QWidget *, QPoint> m_lastTopLeft;   // 上次记录的框左上角，用来求拖动位移
-    QHash<QWidget *, bool> m_docked;          // 每面板吸附 / 浮动
-    QHash<QWidget *, Side> m_side;            // 每面板吸附方位（Bottom/Left/Right）
-    QHash<QWidget *, QTimer *> m_settle;      // 拖动停止判定（单发定时器）
-    QHash<Panel, Saved> m_saved;              // 待套用的面板存档（registerPanel 消费）
+    QHash<QWidget *, QPoint> m_lastTopLeft; // 上次记录的框左上角，用来求拖动位移
+    QHash<QWidget *, bool> m_docked;        // 每面板吸附 / 浮动
+    QHash<QWidget *, Side> m_side;          // 每面板吸附方位（Bottom/Left/Right）
+    QHash<QWidget *, QTimer *> m_settle;    // 拖动停止判定（单发定时器）
+    QHash<Panel, Saved> m_saved;            // 待套用的面板存档（registerPanel 消费）
     int m_width = 480;
     int m_originX = 0;
     int m_originTopY = 0;

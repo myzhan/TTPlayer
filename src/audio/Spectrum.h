@@ -1,6 +1,6 @@
 #pragma once
 
-// 频谱分析：2048 点 radix-2 FFT + 64 段对数频带（对齐 Swift 版 SpectrumAnalyzer 的输出口径）。
+// 频谱分析：2048 点 radix-2 FFT + 64 段对数频带（输出口径固定）。
 // 回调线程 feed() 只拷贝环形缓冲（微秒级），UI 线程 analyze() 才付 FFT 的钱。
 
 #include <cstdint>

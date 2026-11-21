@@ -36,7 +36,7 @@ Mode modeFrom(const QByteArray &s) {
     if (s == "denied") return Mode::Denied;
     if (s == "retry") return Mode::Retry;
     if (s == "icy") return Mode::Icy;
-    return Mode::Stall;   // 默认
+    return Mode::Stall; // 默认
 }
 
 // —— 本机假电台：一个 QThread 上跑 QTcpServer 事件循环，按模式控制发字节奏 ——
@@ -59,26 +59,37 @@ private:
         ++m_connections;
         QTcpSocket *sock = m_server->nextPendingConnection();
         m_socks.push_back(sock);
-        if(m_mode==Mode::Denied||m_mode==Mode::Retry) {
-            const int status=m_mode==Mode::Denied?403:503;
-            sock->write("HTTP/1.1 "+QByteArray::number(status)+" Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-            sock->disconnectFromHost();return;
+        if (m_mode == Mode::Denied || m_mode == Mode::Retry) {
+            const int status = m_mode == Mode::Denied ? 403 : 503;
+            sock->write("HTTP/1.1 " + QByteArray::number(status) +
+                        " Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            sock->disconnectFromHost();
+            return;
         }
-        if (m_mode == Mode::NoResp) return;   // 连上后什么都不发
-        const QByteArray head =
-            "HTTP/1.1 200 OK\r\nContent-Type: audio/flac\r\nConnection: close\r\n\r\n";
-        if(m_mode==Mode::Icy) {
-            sock->write("HTTP/1.1 200 OK\r\nContent-Type: audio/flac\r\nicy-metaint: 1024\r\nConnection: close\r\n\r\n");
+        if (m_mode == Mode::NoResp) return; // 连上后什么都不发
+        const QByteArray head = "HTTP/1.1 200 OK\r\nContent-Type: audio/flac\r\nConnection: close\r\n\r\n";
+        if (m_mode == Mode::Icy) {
+            sock->write(
+                "HTTP/1.1 200 OK\r\nContent-Type: audio/flac\r\nicy-metaint: 1024\r\nConnection: close\r\n\r\n");
             const QByteArray metadata("StreamTitle='Review Artist - Live';");
-            QByteArray padded=metadata;padded.append(QByteArray(((metadata.size()+15)/16)*16-metadata.size(),'\0'));
+            QByteArray padded = metadata;
+            padded.append(QByteArray(((metadata.size() + 15) / 16) * 16 - metadata.size(), '\0'));
             QByteArray interleaved;
-            for(qsizetype offset=0;offset<m_body.size();offset+=1024) {
-                const QByteArray audio=m_body.mid(offset,1024);interleaved+=audio;
-                if(audio.size()==1024){interleaved+=char(padded.size()/16);interleaved+=padded;}
+            for (qsizetype offset = 0; offset < m_body.size(); offset += 1024) {
+                const QByteArray audio = m_body.mid(offset, 1024);
+                interleaved += audio;
+                if (audio.size() == 1024) {
+                    interleaved += char(padded.size() / 16);
+                    interleaved += padded;
+                }
             }
             // Deliberately split metadata boundaries across readyRead deliveries.
-            const int midpoint=1050;sock->write(interleaved.left(midpoint));
-            QTimer::singleShot(20,this,[sock,interleaved]{sock->write(interleaved.mid(midpoint));sock->flush();});
+            const int midpoint = 1050;
+            sock->write(interleaved.left(midpoint));
+            QTimer::singleShot(20, this, [sock, interleaved] {
+                sock->write(interleaved.mid(midpoint));
+                sock->flush();
+            });
             return;
         }
         if (m_mode == Mode::Slow) {
@@ -94,8 +105,7 @@ private:
         const int n = qMin(m_startBytes, int(m_body.size()));
         sock->write(m_body.constData(), n);
         sock->flush();
-        if (m_mode == Mode::Disconnect)
-            QTimer::singleShot(400, this, [sock] { sock->abort(); });
+        if (m_mode == Mode::Disconnect) QTimer::singleShot(400, this, [sock] { sock->abort(); });
     }
     void pumpSlow(QTcpSocket *sock, int off) {
         if (off >= m_body.size()) return;
@@ -106,7 +116,7 @@ private:
     }
 
     QByteArray m_body;
-    int m_connections=0;
+    int m_connections = 0;
     Mode m_mode;
     int m_startBytes;
     QTcpServer *m_server = nullptr;
@@ -130,11 +140,14 @@ void pump(int ms) {
 // 超时不 join（fn 可能永久阻塞在网络里），由调用方决定 _exit——泄漏线程留到进程退出。
 // 等待期间在主线程 processEvents，让「fn 已发起、结果靠 QueuedConnection 回主线程」
 // 的异步开流（noresp/slow/stall/disconnect）能被推进，而不是把主线程钉死在 sleep。
-struct Bounded { bool ok; qint64 ms; };
+struct Bounded {
+    bool ok;
+    qint64 ms;
+};
 Bounded runBounded(const std::function<void()> &fn, int budgetMs) {
     const auto start = clock::now();
     fn(); // Product actions run on their owning Qt thread; CTest supplies a process watchdog.
-    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now()-start).count();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - start).count();
     return {elapsed <= budgetMs, elapsed};
 }
 
@@ -149,7 +162,9 @@ int runRadioLiveProbe(AudioEngine *engine, PlayerController &controller, QTextSt
 
     const Mode mode = modeFrom(qgetenv("TTPLAYER_QT_RADIOLIVE_MODE"));
     const QByteArray path = qgetenv("TTPLAYER_QT_RADIOLIVE_BODY");
-    QFile f(path.isEmpty() ? qEnvironmentVariable("TTPLAYER_TESTDIR",QStringLiteral("testlib"))+QStringLiteral("/cover.flac") : QString::fromLocal8Bit(path));
+    QFile f(path.isEmpty()
+                ? qEnvironmentVariable("TTPLAYER_TESTDIR", QStringLiteral("testlib")) + QStringLiteral("/cover.flac")
+                : QString::fromLocal8Bit(path));
     if (!f.open(QIODevice::ReadOnly)) {
         out << "RADIOLIVE body_missing FAIL (" << f.fileName() << ")\n";
         return 1;
@@ -166,8 +181,7 @@ int runRadioLiveProbe(AudioEngine *engine, PlayerController &controller, QTextSt
     // 在 radio 线程上开始监听，再回主线程取端口
     QMetaObject::invokeMethod(radio, [radio] { radio->doListen(); }, Qt::BlockingQueuedConnection);
     quint16 port = 0;
-    QMetaObject::invokeMethod(radio, [radio, &port] { port = radio->port(); },
-                              Qt::BlockingQueuedConnection);
+    QMetaObject::invokeMethod(radio, [radio, &port] { port = radio->port(); }, Qt::BlockingQueuedConnection);
     check("server_up", port != 0);
 
     const Track track = Track::fromRadio(QUrl(QStringLiteral("http://127.0.0.1:%1/stream").arg(port)));
@@ -175,48 +189,71 @@ int runRadioLiveProbe(AudioEngine *engine, PlayerController &controller, QTextSt
     // —— 1) 开流：走真实产品入口（setTracks + playRowAt→loadAndPlay）；
     //    UI 侧调用必须限时返回（after：异步 → 秒回；before 的 noresp/slow：挂死）——
     const int openBudget = 2500;
-    Bounded o = runBounded([&] { controller.setTracks({track}); controller.playRowAt(0); }, openBudget);
+    Bounded o = runBounded(
+        [&] {
+            controller.setTracks({track});
+            controller.playRowAt(0);
+        },
+        openBudget);
     out << "RADIOLIVE open_ms " << o.ms << " ok=" << (o.ok ? 1 : 0) << '\n';
     if (!o.ok) {
         out << "RADIOLIVE open_bounded FAIL (UI 开流被网络阻塞 >" << openBudget << "ms)\n";
         out.flush();
-        _exit(3);   // 阻塞线程泄漏，直接退进程，别污染后续
+        _exit(3); // 阻塞线程泄漏，直接退进程，别污染后续
     }
     check("open_bounded", true);
 
-    if(mode==Mode::Denied||mode==Mode::Retry) {
-        int connections=0;
-        if(mode==Mode::Denied) {
+    if (mode == Mode::Denied || mode == Mode::Retry) {
+        int connections = 0;
+        if (mode == Mode::Denied) {
             pump(1200);
-            QMetaObject::invokeMethod(radio,[&]{connections=radio->connections();},Qt::BlockingQueuedConnection);
-            check("fatal_HTTP_does_not_retry",connections==1&&!controller.isPlaying()&&controller.radioStatusText().contains("403"));
+            QMetaObject::invokeMethod(radio, [&] { connections = radio->connections(); }, Qt::BlockingQueuedConnection);
+            check("fatal_HTTP_does_not_retry",
+                  connections == 1 && !controller.isPlaying() && controller.radioStatusText().contains("403"));
         } else {
             pump(5000);
-            QMetaObject::invokeMethod(radio,[&]{connections=radio->connections();},Qt::BlockingQueuedConnection);
-            check("retry_limit_six_connections",connections==6&&controller.radioStatusText().contains(QStringLiteral("手动重试")));
-            const int previous=connections;controller.retryRadio();pump(100);
-            QMetaObject::invokeMethod(radio,[&]{connections=radio->connections();},Qt::BlockingQueuedConnection);
-            check("manual_retry_new_generation",connections>previous);
-            controller.stop();pump(1200);
-            const int stopped=connections;
-            QMetaObject::invokeMethod(radio,[&]{connections=radio->connections();},Qt::BlockingQueuedConnection);
-            check("stop_cancels_backoff",connections==stopped&&!controller.isPlaying());
+            QMetaObject::invokeMethod(radio, [&] { connections = radio->connections(); }, Qt::BlockingQueuedConnection);
+            check("retry_limit_six_connections",
+                  connections == 6 && controller.radioStatusText().contains(QStringLiteral("手动重试")));
+            const int previous = connections;
+            controller.retryRadio();
+            pump(100);
+            QMetaObject::invokeMethod(radio, [&] { connections = radio->connections(); }, Qt::BlockingQueuedConnection);
+            check("manual_retry_new_generation", connections > previous);
+            controller.stop();
+            pump(1200);
+            const int stopped = connections;
+            QMetaObject::invokeMethod(radio, [&] { connections = radio->connections(); }, Qt::BlockingQueuedConnection);
+            check("stop_cancels_backoff", connections == stopped && !controller.isPlaying());
         }
     }
-    if(mode==Mode::Icy) {
-        for(int i=0;i<200&&controller.radioNowPlaying().isEmpty();++i)pump(10);
-        check("ICY_cross_packet_title",controller.radioNowPlaying()==QStringLiteral("Review Artist - Live"));
-        check("retry_delays",PlayerController::retryDelay(0)==2&&PlayerController::retryDelay(1)==4&&PlayerController::retryDelay(2)==8&&PlayerController::retryDelay(3)==8);
-        for(int i=0;i<200&&!controller.isPlaying();++i)pump(10);
-        for(int i=0;i<150&&engine->bufferedSeconds()<5;++i)pump(10);
+    if (mode == Mode::Icy) {
+        for (int i = 0; i < 200 && controller.radioNowPlaying().isEmpty(); ++i)
+            pump(10);
+        check("ICY_cross_packet_title", controller.radioNowPlaying() == QStringLiteral("Review Artist - Live"));
+        check("retry_delays", PlayerController::retryDelay(0) == 2 && PlayerController::retryDelay(1) == 4 &&
+                                  PlayerController::retryDelay(2) == 8 && PlayerController::retryDelay(3) == 8);
+        for (int i = 0; i < 200 && !controller.isPlaying(); ++i)
+            pump(10);
+        for (int i = 0; i < 150 && engine->bufferedSeconds() < 5; ++i)
+            pump(10);
         out << "RADIOLIVE decoded_reserve_seconds " << engine->bufferedSeconds() << '\n';
-        check("live_burst_keeps_five_seconds_of_decoded_audio",engine->bufferedSeconds()>=5);
-        controller.togglePlay();check("radio_pause_disconnects_keeps_session",!controller.isPlaying()&&controller.radioQualityText().contains(QStringLiteral("本次收听")));
-        controller.togglePlay();for(int i=0;i<200&&!controller.isPlaying();++i)pump(10);
-        check("radio_resume_reconnects_same_session",controller.isPlaying()&&controller.radioQualityText().contains(QStringLiteral("重连 1 次")));
-        controller.retryRadio();pump(100);
-        controller.stop();const QString stopped=controller.radioStatusText();pump(500);
-        check("stop_invalidates_late_playing",!controller.isPlaying()&&stopped==QStringLiteral("未连接")&&controller.radioStatusText()==stopped);
+        check("live_burst_keeps_five_seconds_of_decoded_audio", engine->bufferedSeconds() >= 5);
+        controller.togglePlay();
+        check("radio_pause_disconnects_keeps_session",
+              !controller.isPlaying() && controller.radioQualityText().contains(QStringLiteral("本次收听")));
+        controller.togglePlay();
+        for (int i = 0; i < 200 && !controller.isPlaying(); ++i)
+            pump(10);
+        check("radio_resume_reconnects_same_session",
+              controller.isPlaying() && controller.radioQualityText().contains(QStringLiteral("重连 1 次")));
+        controller.retryRadio();
+        pump(100);
+        controller.stop();
+        const QString stopped = controller.radioStatusText();
+        pump(500);
+        check("stop_invalidates_late_playing", !controller.isPlaying() && stopped == QStringLiteral("未连接") &&
+                                                   controller.radioStatusText() == stopped);
     }
 
     // —— 2) stall/disconnect：起播 → 缓冲耗尽（stall 时回调卡在等字节、持引擎锁）→ stop 必须秒回 ——
@@ -257,7 +294,12 @@ int runRadioLiveProbe(AudioEngine *engine, PlayerController &controller, QTextSt
         qint64 worstOpen = 0, worstStop = 0;
         bool openUnbounded = false, stopUnbounded = false;
         for (int i = 0; i < stress; ++i) {
-            Bounded o = runBounded([&] { controller.setTracks({track}); controller.playRowAt(0); }, 2500);
+            Bounded o = runBounded(
+                [&] {
+                    controller.setTracks({track});
+                    controller.playRowAt(0);
+                },
+                2500);
             worstOpen = std::max(worstOpen, o.ms);
             if (!o.ok) openUnbounded = true;
             // 让后台开流有机会推进（起播/卡在 read），再立即 stop/切下一轮
@@ -266,23 +308,28 @@ int runRadioLiveProbe(AudioEngine *engine, PlayerController &controller, QTextSt
             worstStop = std::max(worstStop, s.ms);
             if (!s.ok) stopUnbounded = true;
         }
-        out << "RADIOLIVE stress iterations=" << stress
-            << " worst_open_ms=" << worstOpen << " worst_stop_ms=" << worstStop << '\n';
+        out << "RADIOLIVE stress iterations=" << stress << " worst_open_ms=" << worstOpen
+            << " worst_stop_ms=" << worstStop << '\n';
         check("stress_open_bounded", !openUnbounded);
         check("stress_stop_bounded", !stopUnbounded);
     }
 
     controller.stop();
-    if(mode==Mode::NoResp||mode==Mode::Slow) {
-        bool reclaimed=true;
-        for(int round=0;round<30;++round) {
-            auto isolated=AudioEngine::create();auto owner=std::make_unique<PlayerController>(isolated);
-            owner->setTracks({track});owner->playRowAt(0);pump(10);
-            const auto begin=clock::now();owner.reset();isolated.reset();
-            reclaimed&=std::chrono::duration_cast<std::chrono::milliseconds>(clock::now()-begin).count()<1500;
+    if (mode == Mode::NoResp || mode == Mode::Slow) {
+        bool reclaimed = true;
+        for (int round = 0; round < 30; ++round) {
+            auto isolated = AudioEngine::create();
+            auto owner = std::make_unique<PlayerController>(isolated);
+            owner->setTracks({track});
+            owner->playRowAt(0);
+            pump(10);
+            const auto begin = clock::now();
+            owner.reset();
+            isolated.reset();
+            reclaimed &= std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - begin).count() < 1500;
             pump(5); // Deliver any queued late callbacks after the owner has gone.
         }
-        check("destroy_controller_during_open_30",reclaimed);
+        check("destroy_controller_during_open_30", reclaimed);
     }
     thr.quit();
     thr.wait(2000);

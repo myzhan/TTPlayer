@@ -7,7 +7,6 @@
 // - 改了地址就是换了身份，得由 replaceKeys 显式把设置搬过去，不能靠「名字看着像」偷偷认领。
 //
 // 台名与流里 ICY StreamTitle 的「正在播放」是两回事：这里存的才是用户起的名字。
-// 对齐 Swift Models/RadioStations.swift。
 
 #include <QHash>
 #include <QList>
@@ -24,8 +23,8 @@ struct RadioCategory {
 
 class RadioStations {
 public:
-    static constexpr int nameLimit = 40;     // 分类名长度上限（左栏那一列只有 110pt 宽）
-    static constexpr int aliasLimit = 60;    // 自定义台名上限（够写「FM97.4 古典音乐」）
+    static constexpr int nameLimit = 40;  // 分类名长度上限（左栏那一列只有 110pt 宽）
+    static constexpr int aliasLimit = 60; // 自定义台名上限（够写「FM97.4 古典音乐」）
     /// 未分类的稳定 id：不是用户建出来的分类，删不掉，左栏永远有这一行（默认入口）
     static inline const QString uncategorizedID = QStringLiteral("__uncategorized__");
 
@@ -88,6 +87,6 @@ private:
     QSet<QString> takenNames() const;
 
     QList<RadioCategory> m_categories;
-    QHash<QString, QString> m_aliases;    // 地址 → 自定义台名（没起过名的台不占位）
-    QHash<QString, QString> m_assigned;   // 地址 → 分类 id（未分类不占位）
+    QHash<QString, QString> m_aliases;  // 地址 → 自定义台名（没起过名的台不占位）
+    QHash<QString, QString> m_assigned; // 地址 → 分类 id（未分类不占位）
 };

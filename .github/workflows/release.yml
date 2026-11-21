@@ -1,0 +1,242 @@
+# 发布流水线：推送 v* tag 时构建 Linux / Windows / macOS 安装包，并创建 GitHub Release。
+# - 版本号取自 tag（去掉前缀 v）；Linux job 会校验它与 CMakeLists 的 CPACK_PACKAGE_VERSION 一致。
+# - 手动 workflow_dispatch 只构建并上传 artifacts，不创建 Release，用于发版前试跑。
+# - FFmpeg 冻结在 9.0：三个平台都先打印 3rd/ffmpeg/RELEASE 与 commit，再由构建脚本校验。
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    # 产物：TTPlayer-<ver>-linux-x86_64.tar.gz（bin/ttplayer 与 share/ 桌面文件；Qt 6/SDL2/libarchive 依赖系统提供）
+    name: Linux x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qt6-base-dev qt6-5compat-dev libsdl2-dev libarchive-dev zlib1g-dev nasm yasm
+      - name: FFmpeg (frozen 9.0)
+        run: |
+          echo "frozen FFmpeg source: $(cat 3rd/ffmpeg/RELEASE) @ $(git -C 3rd/ffmpeg rev-parse --short HEAD)"
+          bash scripts/build_ffmpeg_linux.sh
+      - name: Resolve package version
+        id: version
+        run: |
+          version="dev"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then version="${GITHUB_REF_NAME#v}"; fi
+          cmake_version=$(sed -n 's/^set(CPACK_PACKAGE_VERSION \(.*\))$/\1/p' CMakeLists.txt)
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$version" != "$cmake_version" ]]; then
+            echo "tag $GITHUB_REF_NAME 与 CMakeLists 版本 $cmake_version 不一致" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "package version: $version (CMakeLists: $cmake_version)"
+      - name: Build Release
+        run: |
+          cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/release -j 4
+      - name: Install to build/dist
+        run: cmake --install build/release --prefix build/dist
+      - name: Smoke test
+        run: |
+          QT_QPA_PLATFORM=offscreen TTPLAYER_QT_STATE="$RUNNER_TEMP/state.json" \
+            build/dist/bin/ttplayer --version
+      - name: Pack tar.gz
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: tar -czf "TTPlayer-$VERSION-linux-x86_64.tar.gz" -C build/dist .
+      - name: Upload Linux package
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: TTPlayer-*-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  windows:
+    # 产物：TTPlayer-<ver>-windows-x64.zip（bin/ 内已含 Qt 插件与 vcpkg DLL，解压到可写目录即可运行）
+    name: Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          install: make nasm yasm
+          path-type: inherit
+      - name: Windows dependencies
+        shell: pwsh
+        run: |
+          python -m pip install aqtinstall
+          python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -m qt5compat -O "$env:RUNNER_TEMP/Qt"
+          vcpkg install sdl2:x64-windows libarchive:x64-windows zlib:x64-windows
+          echo "TTPLAYER_VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows" >> $env:GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$env:RUNNER_TEMP/Qt/6.8.3/msvc2022_64;$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows" >> $env:GITHUB_ENV
+          echo "$env:RUNNER_TEMP/Qt/6.8.3/msvc2022_64/bin" >> $env:GITHUB_PATH
+          echo "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin" >> $env:GITHUB_PATH
+      - name: FFmpeg (frozen 9.0, MSVC ABI)
+        shell: msys2 {0}
+        run: |
+          echo "frozen FFmpeg source: $(cat 3rd/ffmpeg/RELEASE) @ $(git -C 3rd/ffmpeg rev-parse --short HEAD)"
+          bash scripts/build_ffmpeg_msvc.sh
+      - name: Resolve package version
+        id: version
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME -replace '^v','' } else { 'dev' }
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "package version: $version"
+      - name: Build Release
+        shell: pwsh
+        run: |
+          cmake -S . -B build/release -G "Visual Studio 17 2022" -A x64
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build/release --config Release -j 4
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install and deploy
+        shell: pwsh
+        run: |
+          cmake --install build/release --config Release --prefix build/dist
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # install 已复制 vcpkg DLL 并调用 Qt 部署；这里幂等补齐插件与 VC 运行时。
+          windeployqt --release --no-translations build/dist/bin/ttplayer.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $env:TTPLAYER_QT_STATE = "$env:RUNNER_TEMP/state.json"
+          & build/dist/bin/ttplayer.exe --version
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Pack zip
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: Compress-Archive -Path build/dist/* -DestinationPath "TTPlayer-$env:VERSION-windows-x64.zip"
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: TTPlayer-*-windows-x64.zip
+          if-no-files-found: error
+
+  macos:
+    # 产物：TTPlayer-<ver>-macos-arm64.dmg（package.py 生成并 adhoc 签名的 ttplayer.app）
+    name: macOS arm64
+    runs-on: macos-14
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: macOS dependencies
+        run: |
+          brew install nasm yasm
+          python -m pip install aqtinstall
+          python -m aqt install-qt mac desktop 6.8.3 clang_64 -m qt5compat -O "$RUNNER_TEMP/Qt"
+          echo "CMAKE_PREFIX_PATH=$RUNNER_TEMP/Qt/6.8.3/macos;$RUNNER_TEMP/SDL" >> "$GITHUB_ENV"
+          curl --fail --location https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz -o "$RUNNER_TEMP/sdl.tar.gz"
+          tar -xf "$RUNNER_TEMP/sdl.tar.gz" -C "$RUNNER_TEMP"
+          cmake -S "$RUNNER_TEMP/SDL2-2.32.10" -B "$RUNNER_TEMP/sdl-build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/SDL"
+          cmake --build "$RUNNER_TEMP/sdl-build" -j 4
+          cmake --install "$RUNNER_TEMP/sdl-build"
+          echo "SDL2_DIR=$RUNNER_TEMP/SDL/lib/cmake/SDL2" >> "$GITHUB_ENV"
+      - name: FFmpeg (frozen 9.0)
+        run: |
+          echo "frozen FFmpeg source: $(cat 3rd/ffmpeg/RELEASE) @ $(git -C 3rd/ffmpeg rev-parse --short HEAD)"
+          zsh scripts/build_ffmpeg.sh
+      - name: Resolve package version
+        id: version
+        run: |
+          version="dev"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then version="${GITHUB_REF_NAME#v}"; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "package version: $version"
+      - name: Build app bundle
+        run: python3 scripts/package.py
+      - name: Verify bundle
+        run: |
+          codesign --verify --deep --strict build/dist/ttplayer.app
+          QT_QPA_PLATFORM=offscreen TTPLAYER_QT_STATE="$RUNNER_TEMP/state.json" \
+            build/dist/ttplayer.app/Contents/MacOS/ttplayer --version
+      - name: Pack dmg
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          hdiutil create -volname "TTPlayer" -srcfolder build/dist/ttplayer.app -ov -format UDZO \
+            "TTPlayer-$VERSION-macos-arm64.dmg"
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: TTPlayer-*-macos-arm64.dmg
+          if-no-files-found: error
+
+  publish:
+    # 只在推 v* tag 时运行；三个平台都成功才会创建 Release。workflow_dispatch 不发布。
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          body: |
+            ## 安装
+
+            - **Windows**：解压到可写目录（不要放 Program Files），运行 `bin/ttplayer.exe`。用户数据保存在 exe 同目录。
+            - **Linux**：解压后运行 `bin/ttplayer`。需要系统提供 Qt 6、SDL2、libarchive 与 zlib。
+            - **macOS**：打开 dmg，把 ttplayer.app 拖进 Applications。包为 adhoc 签名、未公证，首次启动请右键「打开」。
+
+            附件：`TTPlayer-<版本>-linux-x86_64.tar.gz`、`TTPlayer-<版本>-windows-x64.zip`、`TTPlayer-<版本>-macos-arm64.dmg`。
+
+            本版本使用 FFmpeg 9.0 静态链接。
+          files: |
+            artifacts/*

@@ -1,6 +1,6 @@
 #pragma once
 
-// 待播队列面板（F03，对应 Swift QueuePanelController）：上面一行写「正在播放」，
+// 待播队列面板（F03）：上面一行写「正在播放」，
 // 下面是待播条目表——拖动调整次序、多选「移除」、「清空待播」、双击某条直接播它。
 // 面板只读 PlayQueue.pending()、写只经 PlayerController 的队列 API，绝不自己挪游标。
 
@@ -30,10 +30,10 @@ class QueueWindow : public SkinWindow {
 public:
     explicit QueueWindow(PlayerController *controller, QWidget *parent = nullptr);
 
-    void reload();   // 从控制器队列重建「正在播放」行 + 待播表
+    void reload(); // 从控制器队列重建「正在播放」行 + 待播表
 
 private:
-    void commitOrder();   // 把表里的次序写回队列（拖动重排后）
+    void commitOrder(); // 把表里的次序写回队列（拖动重排后）
 
     PlayerController *m_controller;
     QLabel *m_current = nullptr;
@@ -41,5 +41,5 @@ private:
     QueueList *m_list = nullptr;
     TTButton *m_remove = nullptr;
     TTButton *m_clear = nullptr;
-    bool m_reloading = false;   // 程序化重建期间不响应 reordered，防自激
+    bool m_reloading = false; // 程序化重建期间不响应 reordered，防自激
 };

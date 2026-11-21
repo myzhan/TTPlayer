@@ -48,7 +48,7 @@ TrayController::TrayController(MainWindow *window, PlayerController *controller,
 
     connect(toggleVis, &QAction::triggered, this, [this] {
         if (!m_window) return;
-        m_window->toggleGroupVisibility();   // R19：作用于整组并恢复原可见性，不只主窗
+        m_window->toggleGroupVisibility(); // R19：作用于整组并恢复原可见性，不只主窗
     });
     connect(playPause, &QAction::triggered, m_controller, &PlayerController::togglePlay);
     connect(prev, &QAction::triggered, m_controller, &PlayerController::prev);
@@ -64,7 +64,7 @@ TrayController::TrayController(MainWindow *window, PlayerController *controller,
     connect(m_tray, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason r) {
         if (r != QSystemTrayIcon::Trigger && r != QSystemTrayIcon::DoubleClick) return;
         if (!m_window) return;
-        m_window->toggleGroupVisibility();   // R19：整组隐藏 / 恢复
+        m_window->toggleGroupVisibility(); // R19：整组隐藏 / 恢复
     });
     m_tray->show();
 }

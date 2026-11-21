@@ -21,10 +21,8 @@ bool TrackFilter::matches(const Track &track) const {
     const QString kw = keywordText();
     if (kw.isEmpty()) return true;
     // 次序有讲究：标题/艺术家最短最易命中，文件名要现取路径末段，放最后
-    return track.title().contains(kw, Qt::CaseInsensitive)
-        || track.artist().contains(kw, Qt::CaseInsensitive)
-        || track.album().contains(kw, Qt::CaseInsensitive)
-        || track.fileName().contains(kw, Qt::CaseInsensitive);
+    return track.title().contains(kw, Qt::CaseInsensitive) || track.artist().contains(kw, Qt::CaseInsensitive) ||
+           track.album().contains(kw, Qt::CaseInsensitive) || track.fileName().contains(kw, Qt::CaseInsensitive);
 }
 
 QList<int> TrackFilter::visibleRows(const QList<Track> &tracks) const {
@@ -41,7 +39,10 @@ QStringList TrackFilter::formatOptions(const QList<Track> &tracks) {
     QStringList out;
     for (const Track &t : tracks) {
         const QString f = t.filterFormat();
-        if (!seen.contains(f)) { seen.insert(f); out.append(f); }
+        if (!seen.contains(f)) {
+            seen.insert(f);
+            out.append(f);
+        }
     }
     out.sort(Qt::CaseInsensitive);
     return out;

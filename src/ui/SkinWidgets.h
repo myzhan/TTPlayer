@@ -26,8 +26,10 @@ class SkinSection : public QWidget {
 public:
     explicit SkinSection(const QString &title, QWidget *parent = nullptr);
     QWidget *content() const { return m_content; }
+
 protected:
     void paintEvent(QPaintEvent *) override;
+
 private:
     QString m_title;
     QWidget *m_content = nullptr;
@@ -40,8 +42,10 @@ class SkinCheckBox : public QAbstractButton {
 public:
     explicit SkinCheckBox(const QString &text, QWidget *parent = nullptr);
     QSize sizeHint() const override;
+
 protected:
     void paintEvent(QPaintEvent *) override;
+
 private:
     QString m_text;
 };
@@ -57,11 +61,13 @@ public:
     const QStringList &labels() const { return m_labels; }
 signals:
     void currentChanged(int index);
+
 protected:
     void paintEvent(QPaintEvent *) override;
     void mousePressEvent(QMouseEvent *) override;
     void mouseMoveEvent(QMouseEvent *) override;
     void leaveEvent(QEvent *) override;
+
 private:
     QRectF tabRect(int i) const;
     QStackedWidget *m_stack = nullptr;
@@ -86,11 +92,13 @@ public:
 signals:
     void activated(int index);
     void currentIndexChanged(int index);
+
 protected:
     void paintEvent(QPaintEvent *) override;
     void mousePressEvent(QMouseEvent *) override;
     void enterEvent(QEnterEvent *) override;
     void leaveEvent(QEvent *) override;
+
 private:
     void openPopup();
     QStringList m_texts;
@@ -107,23 +115,28 @@ public:
     void setRange(int lo, int hi);
     void setValue(int v);
     int value() const { return m_value; }
-    void setSuffix(const QString &s) { m_suffix = s; update(); }
+    void setSuffix(const QString &s) {
+        m_suffix = s;
+        update();
+    }
     QSize sizeHint() const override { return {110, 26}; }
 signals:
     void valueChanged(int v);
+
 protected:
     void paintEvent(QPaintEvent *) override;
     void mousePressEvent(QMouseEvent *) override;
     void mouseMoveEvent(QMouseEvent *) override;
     void enterEvent(QEnterEvent *) override;
     void leaveEvent(QEvent *) override;
+
 private:
     QRectF upRect() const;
     QRectF downRect() const;
     void step(int dir);
     int m_lo = 0, m_hi = 100, m_value = 0;
     QString m_suffix;
-    int m_hotBtn = 0;   // 0 无 / +1 上 / -1 下
+    int m_hotBtn = 0; // 0 无 / +1 上 / -1 下
 };
 
 // —— 横向滑槽（替 QSlider）——
@@ -138,6 +151,7 @@ public:
 signals:
     void valueChanged(int v);
     void sliderReleased();
+
 protected:
     void paintEvent(QPaintEvent *) override;
     void mousePressEvent(QMouseEvent *) override;
@@ -145,6 +159,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent *) override;
     void enterEvent(QEnterEvent *) override;
     void leaveEvent(QEvent *) override;
+
 private:
     void setFromX(qreal x);
     QRectF grooveRect() const;
@@ -168,14 +183,21 @@ public:
     QVariant rowData(int i) const { return m_datas.value(i); }
     int currentRow() const { return m_current; }
     void setCurrentRow(int row);
-    int rowAt(const QPointF &pos) const;   // 视口坐标→行（含滚动偏移），越界 -1
-    void setRowHeight(int h) { m_rowH = h; update(); }
-    void setOpaqueBg(bool on) { m_opaqueBg = on; update(); }   // 弹出层用：铺不透明面板
+    int rowAt(const QPointF &pos) const; // 视口坐标→行（含滚动偏移），越界 -1
+    void setRowHeight(int h) {
+        m_rowH = h;
+        update();
+    }
+    void setOpaqueBg(bool on) {
+        m_opaqueBg = on;
+        update();
+    } // 弹出层用：铺不透明面板
     QSize sizeHint() const override { return {160, 200}; }
 signals:
     void currentRowChanged(int row);
     void itemClicked(int row);
     void itemDoubleClicked(int row);
+
 protected:
     void paintEvent(QPaintEvent *) override;
     void mousePressEvent(QMouseEvent *) override;
@@ -183,6 +205,7 @@ protected:
     void mouseMoveEvent(QMouseEvent *) override;
     void wheelEvent(QWheelEvent *) override;
     void leaveEvent(QEvent *) override;
+
 private:
     int contentHeight() const { return m_items.size() * m_rowH; }
     int maxScroll() const { return qMax(0, contentHeight() - height()); }
@@ -213,8 +236,10 @@ public:
 signals:
     void textChanged(const QString &t);
     void returnPressed();
+
 protected:
     void paintEvent(QPaintEvent *) override;
+
 private:
     QLineEdit *m_edit = nullptr;
 };

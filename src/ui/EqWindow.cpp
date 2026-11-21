@@ -32,10 +32,9 @@ protected:
             const qreal y = top + travel * ratio;
             // 统一毛玻璃：浅玻璃上网格线走发丝墨线（取代旧深槽亮边）。
             p.fillRect(QRectF(1, y - 0.5, width() - 3, db == 0 ? 1.5 : 1),
-                       QColor(Theme::hairline.red(), Theme::hairline.green(),
-                              Theme::hairline.blue(), int((db == 0 ? 0.75 : 0.35) * 255)));
-            const QString label = db > 0 ? QStringLiteral("+%1").arg(int(db))
-                                         : QStringLiteral("%1").arg(int(db));
+                       QColor(Theme::hairline.red(), Theme::hairline.green(), Theme::hairline.blue(),
+                              int((db == 0 ? 0.75 : 0.35) * 255)));
+            const QString label = db > 0 ? QStringLiteral("+%1").arg(int(db)) : QStringLiteral("%1").arg(int(db));
             p.setPen(Theme::inkOnGlassSoft);
             p.drawText(QRectF(0, y - 6, width() - 2, 12), Qt::AlignRight | Qt::AlignVCenter, label);
         }
@@ -50,7 +49,7 @@ QString freqLabel(double hz) {
 
 EqWindow::EqWindow(AudioEnginePtr engine, QWidget *parent)
     : SkinWindow(QStringLiteral("均衡器"), true, parent), m_engine(std::move(engine)) {
-    resize(460, 178 + 30);   // 高度补上自绘标题条（~30）；与主窗/列表同紧凑默认宽
+    resize(460, 178 + 30); // 高度补上自绘标题条（~30）；与主窗/列表同紧凑默认宽
     setMinimumSize(360, 178);
 
     auto *root = new QVBoxLayout(body());
@@ -119,7 +118,10 @@ EqWindow::EqWindow(AudioEnginePtr engine, QWidget *parent)
         col->addWidget(gain);
         col->addWidget(name);
         faderRow->addLayout(col);
-        connect(f, &FaderView::gainChanged, this, [this] { applyGains(); refreshReadout(); });
+        connect(f, &FaderView::gainChanged, this, [this] {
+            applyGains();
+            refreshReadout();
+        });
     }
     row->addLayout(faderRow, 1);
 
@@ -130,8 +132,10 @@ EqWindow::EqWindow(AudioEnginePtr engine, QWidget *parent)
         syncFromEngine();
     });
     connect(m_reset, &TTButton::clicked, this, [this] {
-        for (auto *f : m_faders) f->setGain(0);
-        m_preamp->setValue(0);m_engine->setEQPreamp(0);
+        for (auto *f : m_faders)
+            f->setGain(0);
+        m_preamp->setValue(0);
+        m_engine->setEQPreamp(0);
         applyGains();
         refreshReadout();
     });
@@ -144,13 +148,13 @@ EqWindow::EqWindow(AudioEnginePtr engine, QWidget *parent)
 void EqWindow::paintBody(QPainter *p, const QRectF &rect) {
     // 统一毛玻璃：与主窗/列表窗同一层浅玻璃（不再铺深蓝 well），单一 alpha。
     const float wA = GlassStyle::enabled() ? GlassStyle::wellAlpha() : 1.0f;
-    Painter::drawWell(p, rect.adjusted(0.5, 0.5, -0.5, -0.5),
-                      Theme::windowTop, Theme::windowBottom, wA, 5);
+    Painter::drawWell(p, rect.adjusted(0.5, 0.5, -0.5, -0.5), Theme::windowTop, Theme::windowBottom, wA, 5);
 }
 
 void EqWindow::syncFromEngine() {
     const auto g = m_engine->eqGains();
-    for (int i = 0; i < 10; ++i) m_faders[i]->setGain(g[i]);
+    for (int i = 0; i < 10; ++i)
+        m_faders[i]->setGain(g[i]);
     m_enable->setLit(m_engine->eqEnabled());
     m_volume->setValue(m_engine->volume());
     m_preamp->setValue(m_engine->eqPreamp());
@@ -158,19 +162,22 @@ void EqWindow::syncFromEngine() {
 }
 
 void EqWindow::applyGains() {
-    std::array<double, Equalizer::kBands> arr {};
-    for (int i = 0; i < 10; ++i) arr[i] = m_faders[i]->gain();
+    std::array<double, Equalizer::kBands> arr{};
+    for (int i = 0; i < 10; ++i)
+        arr[i] = m_faders[i]->gain();
     m_engine->setEQGains(arr);
 }
 
 void EqWindow::refreshReadout() {
     for (int i = 0; i < 10; ++i) {
         const double g = m_faders[i]->gain();
-        m_gainLabels[i]->setText(g >= 0 ? QStringLiteral("+%1").arg(int(g))
-                                        : QStringLiteral("%1").arg(int(g)));
+        m_gainLabels[i]->setText(g >= 0 ? QStringLiteral("+%1").arg(int(g)) : QStringLiteral("%1").arg(int(g)));
     }
     // 命中预设则高亮名字
-    struct P { const char *name; std::array<double, 10> g; };
+    struct P {
+        const char *name;
+        std::array<double, 10> g;
+    };
     static const P presets[] = {
         {"默认", {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
         {"摇滚", {5, 4, 3, -1, -2, -1, 2, 4.5, 5, 4.5}},
@@ -185,15 +192,24 @@ void EqWindow::refreshReadout() {
     for (const auto &pr : presets) {
         bool hit = true;
         for (int i = 0; i < 10; ++i)
-            if (std::abs(pr.g[i] - m_faders[i]->gain()) > 0.05) { hit = false; break; }
-        if (hit) { m_currentPreset = QString::fromUtf8(pr.name); break; }
+            if (std::abs(pr.g[i] - m_faders[i]->gain()) > 0.05) {
+                hit = false;
+                break;
+            }
+        if (hit) {
+            m_currentPreset = QString::fromUtf8(pr.name);
+            break;
+        }
     }
     m_preset->setToolTip(QStringLiteral("预设（%1）").arg(m_currentPreset));
 }
 
 void EqWindow::showPresetMenu() {
     QMenu menu(this);
-    struct Item { QString name; std::array<double, 10> g; };
+    struct Item {
+        QString name;
+        std::array<double, 10> g;
+    };
     const QList<Item> items = {
         {QStringLiteral("默认"), {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
         {QStringLiteral("摇滚"), {5, 4, 3, -1, -2, -1, 2, 4.5, 5, 4.5}},
@@ -210,7 +226,8 @@ void EqWindow::showPresetMenu() {
         act->setChecked(it.name == m_currentPreset);
         const auto gains = it.g;
         connect(act, &QAction::triggered, this, [this, gains] {
-            for (int i = 0; i < 10; ++i) m_faders[i]->setGain(gains[i]);
+            for (int i = 0; i < 10; ++i)
+                m_faders[i]->setGain(gains[i]);
             applyGains();
             refreshReadout();
         });

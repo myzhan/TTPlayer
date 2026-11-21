@@ -8,15 +8,14 @@
 #include <QGuiApplication>
 #include <cmath>
 
-SpectrumView::SpectrumView(AudioEnginePtr engine, QWidget *parent)
-    : QWidget(parent), m_engine(std::move(engine)) {
+SpectrumView::SpectrumView(AudioEnginePtr engine, QWidget *parent) : QWidget(parent), m_engine(std::move(engine)) {
     setAttribute(Qt::WA_OpaquePaintEvent, false);
     // 24 fps：常数提到构造，回调里不再拼任何字符串/重算不变量（AGENTS.md 热路径）
     m_timer.setInterval(1000 / 24);
     connect(&m_timer, &QTimer::timeout, this, [this] {
-        const auto handle=window()->windowHandle();
-        const bool visible=isVisible() && !window()->isMinimized() && handle && handle->isExposed()
-                           && QGuiApplication::applicationState()!=Qt::ApplicationSuspended;
+        const auto handle = window()->windowHandle();
+        const bool visible = isVisible() && !window()->isMinimized() && handle && handle->isExposed() &&
+                             QGuiApplication::applicationState() != Qt::ApplicationSuspended;
         m_engine->setSpectrumEnabled(visible);
         if (visible) {
             const QRect dirty = advanceFrame();
@@ -27,8 +26,15 @@ SpectrumView::SpectrumView(AudioEnginePtr engine, QWidget *parent)
     connect(&GlassNotifier::instance(), &GlassNotifier::changed, this, [this] { update(); });
 }
 
-void SpectrumView::hideEvent(QHideEvent *e) { m_timer.stop(); m_engine->setSpectrumEnabled(false); QWidget::hideEvent(e); }
-void SpectrumView::showEvent(QShowEvent *e) { m_timer.start(); QWidget::showEvent(e); }
+void SpectrumView::hideEvent(QHideEvent *e) {
+    m_timer.stop();
+    m_engine->setSpectrumEnabled(false);
+    QWidget::hideEvent(e);
+}
+void SpectrumView::showEvent(QShowEvent *e) {
+    m_timer.start();
+    QWidget::showEvent(e);
+}
 
 QRect SpectrumView::advanceFrame() {
     std::array<float, SpectrumAnalyzer::kBands> next{};
@@ -44,21 +50,24 @@ QRect SpectrumView::advanceFrame() {
         const qreal high = std::max(from, to);
         // On integer-scale screens aliased edges cannot cross a pixel centre
         // in this interval. Leave a margin for the rasterizer's fixed point rounding.
-        auto sameRow = [dpr](qreal lo, qreal hi) {
-            return std::floor(lo * dpr + 0.46) == std::floor(hi * dpr + 0.54);
-        };
-        if (dpr == std::floor(dpr) && sameRow(low, high) &&
-            sameRow(low + thickness, high + thickness)) return;
-        dirty |= QRectF(band * (barWidth + 1), low - 1, barWidth + 2,
-                        high - low + thickness + 2).toAlignedRect();
+        auto sameRow = [dpr](qreal lo, qreal hi) { return std::floor(lo * dpr + 0.46) == std::floor(hi * dpr + 0.54); };
+        if (dpr == std::floor(dpr) && sameRow(low, high) && sameRow(low + thickness, high + thickness)) return;
+        dirty |= QRectF(band * (barWidth + 1), low - 1, barWidth + 2, high - low + thickness + 2).toAlignedRect();
     };
     for (size_t i = 0; i < next.size(); ++i) {
-        const float peak = std::max(next[i], m_peaks[i] - 0.018f);
-        mark(int(i), height() - height() * m_bands[i], height() - height() * next[i], 0);
+        // 一阶低通：上升稍快、回落慢，抹掉 FFT 逐窗抖动（24 fps 不动，看着更稳而不是更卡）。
+        // 贴近目标就吸附，静下来后 mark 两边相等，不再破坏性重绘。
+        const float target = next[i];
+        const float previous = m_bands[i];
+        const float value = std::abs(target - previous) < 0.002f
+                                ? target
+                                : previous + (target - previous) * (target > previous ? 0.42f : 0.16f);
+        const float peak = std::max(value, m_peaks[i] - 0.018f);
+        mark(int(i), height() - height() * previous, height() - height() * value, 0);
         mark(int(i), height() - height() * m_peaks[i], height() - height() * peak, 1.5);
+        m_bands[i] = value;
         m_peaks[i] = peak;
     }
-    m_bands = next;
     return dirty;
 }
 
@@ -67,7 +76,6 @@ void SpectrumView::paintEvent(QPaintEvent *) {
     p.setRenderHint(QPainter::Antialiasing, false);
     const QRectF r = rect();
     if (r.width() < 2 || r.height() < 2) return;
-
 
     constexpr int n = SpectrumAnalyzer::kBands;
     const qreal gap = 1.0;

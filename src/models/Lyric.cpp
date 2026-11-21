@@ -28,29 +28,28 @@ int Lyric::lineIndexAt(double t) const {
     int lo = 0, hi = int(m_lines.size()) - 1;
     while (lo < hi) {
         const int mid = (lo + hi + 1) / 2;
-        if (m_lines[mid].time <= t) lo = mid;
-        else hi = mid - 1;
+        if (m_lines[mid].time <= t)
+            lo = mid;
+        else
+            hi = mid - 1;
     }
     return lo;
 }
 
 Lyric Lyric::parse(const QString &text) {
-    static const QRegularExpression tagPattern(
-        QStringLiteral("\\[(\\d{1,2}):(\\d{2})(?:[.:](\\d{1,3}))?\\]"));
-    static const QRegularExpression offsetPattern(
-        QStringLiteral("\\[offset:\\s*([+-]?\\d+)\\s*\\]"));
+    static const QRegularExpression tagPattern(QStringLiteral("\\[(\\d{1,2}):(\\d{2})(?:[.:](\\d{1,3}))?\\]"));
+    static const QRegularExpression offsetPattern(QStringLiteral("\\[offset:\\s*([+-]?\\d+)\\s*\\]"));
 
     double offsetSec = 0;
     auto om = offsetPattern.globalMatch(text);
-    while (om.hasNext()) {          // 多行 offset 取最后一行
+    while (om.hasNext()) { // 多行 offset 取最后一行
         const auto m = om.next();
         offsetSec = m.captured(1).toDouble() / 1000.0;
     }
 
     Lyric result;
     result.m_fileOffset = offsetSec;
-    const QStringList rawLines = text.split(QRegularExpression(QStringLiteral("[\\r\\n]")),
-                                            Qt::SkipEmptyParts);
+    const QStringList rawLines = text.split(QRegularExpression(QStringLiteral("[\\r\\n]")), Qt::SkipEmptyParts);
     for (const QString &raw : rawLines) {
         const QString line = raw.trimmed();
         if (line.isEmpty() || !line.startsWith(QLatin1Char('['))) continue;
@@ -58,7 +57,8 @@ Lyric Lyric::parse(const QString &text) {
 
         QList<QRegularExpressionMatch> matches;
         auto tm = tagPattern.globalMatch(line);
-        while (tm.hasNext()) matches << tm.next();
+        while (tm.hasNext())
+            matches << tm.next();
         if (matches.isEmpty()) continue;
 
         QString content = line;
@@ -84,10 +84,11 @@ Lyric Lyric::parse(const QString &text) {
 QString Lyric::normalized(const QString &name) {
     static const QRegularExpression trackPrefix(QStringLiteral("^\\d{1,3}\\s*[-._ ]\\s*"));
     QString s = name.toLower();
-    s.remove(trackPrefix);          // 只锚定开头，去首段音轨号
+    s.remove(trackPrefix); // 只锚定开头，去首段音轨号
     QString out;
     out.reserve(s.size());
-    for (const QChar c : s) if (c.isLetterOrNumber()) out.append(c);   // 汉字算 letter
+    for (const QChar c : s)
+        if (c.isLetterOrNumber()) out.append(c); // 汉字算 letter
     return out;
 }
 
@@ -95,7 +96,7 @@ const QHash<QString, QString> &Lyric::lrcIndexIn(const QString &dir) {
     const qint64 stamp = QFileInfo(dir).lastModified().toMSecsSinceEpoch();
     auto cached = g_dirIndex.find(dir);
     if (cached != g_dirIndex.end() && g_dirStamps.value(dir) == stamp)
-        return cached.value();   // 引用进哈希，同线程下在下一次变更前稳定
+        return cached.value(); // 引用进哈希，同线程下在下一次变更前稳定
     QHash<QString, QString> map;
     QDir d(dir);
     const QStringList names = d.entryList(QDir::Files, QDir::Name);
@@ -106,10 +107,16 @@ const QHash<QString, QString> &Lyric::lrcIndexIn(const QString &dir) {
         const QString full = d.absoluteFilePath(name);
         auto old = map.constFind(base);
         // 归一化撞名标记为空，拒绝把歧义伪装成唯一命中。
-        if (old != map.constEnd()) { map[base] = QString(); continue; }
+        if (old != map.constEnd()) {
+            map[base] = QString();
+            continue;
+        }
         map.insert(base, full);
     }
-    if (g_dirIndex.size() >= kDirCacheLimit) { g_dirIndex.clear(); g_dirStamps.clear(); }
+    if (g_dirIndex.size() >= kDirCacheLimit) {
+        g_dirIndex.clear();
+        g_dirStamps.clear();
+    }
     g_dirIndex.insert(dir, map);
     g_dirStamps.insert(dir, stamp);
     return g_dirIndex.find(dir).value();
@@ -119,32 +126,32 @@ QStringList Lyric::candidateFiles(const QString &audioPath) {
     const QFileInfo fi(audioPath);
     const QString dir = fi.absolutePath();
     const QString same = dir + QLatin1Char('/') + fi.completeBaseName() + QStringLiteral(".lrc");
-    if (QFile::exists(same)) return { same };
+    if (QFile::exists(same)) return {same};
     // 同目录归一化唯一命中（「01 - 歌名」↔「歌名」）；拿不准就算没歌词
     const auto &index = lrcIndexIn(dir);
     if (index.isEmpty()) return {};
     const QString want = normalized(fi.completeBaseName());
     if (want.isEmpty()) return {};
     auto exact = index.constFind(want);
-    if (exact != index.constEnd()) return exact.value().isEmpty() ? QStringList{} : QStringList{ exact.value() };
+    if (exact != index.constEnd()) return exact.value().isEmpty() ? QStringList{} : QStringList{exact.value()};
     QStringList hits;
     for (auto k = index.constBegin(); k != index.constEnd(); ++k)
         if (k.key().contains(want) || want.contains(k.key())) {
             if (k.value().isEmpty()) return {};
             hits << k.value();
         }
-    return hits.size() == 1 ? hits : QStringList{};   // 只认唯一命中
+    return hits.size() == 1 ? hits : QStringList{}; // 只认唯一命中
 }
 
 bool Lyric::isAlbumWide(const QString &lrcPath, const Track &track) {
     const QString base = normalized(QFileInfo(lrcPath).completeBaseName());
     if (base.isEmpty()) return false;
-    const QUrl url = track.url();
-    if (url.isLocalFile()
-        && base == normalized(QFileInfo(url.toLocalFile()).completeBaseName())) return true;
+    const QUrl &url = track.url();
+    if (url.isLocalFile() && base == normalized(QFileInfo(url.toLocalFile()).completeBaseName())) return true;
     const QUrl sheet = track.cueSheetUrl();
-    if (track.isCueSegment() && sheet.isLocalFile()
-        && base == normalized(QFileInfo(sheet.toLocalFile()).completeBaseName())) return true;
+    if (track.isCueSegment() && sheet.isLocalFile() &&
+        base == normalized(QFileInfo(sheet.toLocalFile()).completeBaseName()))
+        return true;
     return false;
 }
 
@@ -152,7 +159,7 @@ Lyric Lyric::parseFile(const QString &path) {
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) return {};
     QByteArray data = f.readAll();
-    if (data.startsWith("\xEF\xBB\xBF")) data.remove(0, 3);   // 剥 UTF-8 BOM
+    if (data.startsWith("\xEF\xBB\xBF")) data.remove(0, 3); // 剥 UTF-8 BOM
     // 1) 严格 UTF-8：fromUtf8 是 lossy，用替换字符判断是否真是 UTF-8
     const QString u = QString::fromUtf8(data);
     if (!u.contains(QChar(0xFFFD))) {
@@ -172,7 +179,7 @@ Lyric Lyric::parseFile(const QString &path) {
 
 Lyric Lyric::loadForTrack(const Track &track) {
     if (track.isNull()) return {};
-    const QUrl url = track.url();
+    const QUrl &url = track.url();
     if (!url.isLocalFile()) return {};
     const QString image = url.toLocalFile();
     for (const QString &lrcPath : candidateFiles(image)) {
@@ -180,8 +187,7 @@ Lyric Lyric::loadForTrack(const Track &track) {
         if (ly.isEmpty()) continue;
         // CUE 轨拿到整盘那份：时间轴是镜像绝对秒，补本段起点才对上引擎的「段内第几秒」；
         // 按轨名命中那份本身从 0 计时，不加
-        if (track.isCueSegment() && isAlbumWide(lrcPath, track))
-            ly.setMirrorShift(track.playStart());
+        if (track.isCueSegment() && isAlbumWide(lrcPath, track)) ly.setMirrorShift(track.playStart());
         return ly;
     }
     return {};

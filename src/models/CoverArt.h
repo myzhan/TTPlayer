@@ -1,6 +1,6 @@
 #pragma once
 
-// 曲目封面唯一出入口（对齐 Swift Models/CoverArt.swift 的三条底线，跨平台版）：
+// 曲目封面唯一出入口（三条底线，跨平台版）：
 // 内嵌 attached_pic 走 FFmpeg 拿原始图字节，外部图走同目录常用名 / 同名文件，
 // 一律用 QImage 解码并按档位降采样（Qt 无 ImageIO 缩略图通道，解出后 scale）。
 // 缓存按「内嵌=字节摘要 / 外部=路径+大小+mtime」做键，同专辑多曲共用一份。

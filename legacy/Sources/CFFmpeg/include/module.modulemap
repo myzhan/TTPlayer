@@ -1,4 +1,0 @@
-module CFFmpeg {
-    header "ffmpeg_shim.h"
-    export *
-}

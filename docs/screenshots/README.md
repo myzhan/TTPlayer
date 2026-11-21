@@ -24,7 +24,7 @@ ffmpeg -v error -f lavfi -i 'sine=frequency=440:duration=12' \
 env QT_QPA_PLATFORM=offscreen QT_SCALE_FACTOR=2 SDL_AUDIODRIVER=dummy \
   TTPLAYER_SELFTEST=1 TTPLAYER_SILENT_OUTPUT=1 \
   TTPLAYER_QT_STATE="$shot_dir/state.json" TTPLAYER_QT_SHOT="$shot_dir/main.png" \
-  python3 scripts/selftest_guard.py dist/ttplayer.app/Contents/MacOS/ttplayer "$shot_dir/夜航.flac"
+  python3 scripts/selftest_guard.py build/dist/ttplayer.app/Contents/MacOS/ttplayer "$shot_dir/夜航.flac"
 ```
 
 文档配图使用 ImageMagick 将透明窗口合成到统一背景。对刚才的主面板可运行：
@@ -37,4 +37,4 @@ magick "$shot_dir/main.png" -background '#242424' -alpha remove -alpha off -stri
 
 电台和搜索需要先操作播放列表。为它们单独建临时存档，在隔离实例中添加示例台并切换到「网络电台」，或导入示例曲目、打开放大镜、输入查询并等到命中数出现，再截取列表窗口。截图时检查页面高亮、行内容和搜索词，逐张查看原始 PNG 后再替换同名文件。真实用户的 `state.json` 与 `resume.json` 由守卫核对，正在播放的实例可能自行更新进度，遇到变化须查明来源并重新分批校验。
 
-获确认时的三张 Qt 深色基线图保留原文件，供后续外观比对。[主面板基线](qt-dark-main.png) · [播放列表基线](qt-dark-playlist.png) · [均衡器基线](qt-dark-equalizer.png) · [配色记录](../review-evidence/approved-dark-style.json)
+获确认时的三张 Qt 深色基线图保留原文件，供后续外观比对。[主面板基线](qt-dark-main.png) · [播放列表基线](qt-dark-playlist.png) · [均衡器基线](qt-dark-equalizer.png)

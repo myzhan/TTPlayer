@@ -1,6 +1,6 @@
 #pragma once
 
-// 均衡器窗（对应 Swift EQPanelController）：左栏音量旋钮 + 开关/重置/预设 + dB 刻度
+// 均衡器窗：左栏音量旋钮 + 开关/重置/预设 + dB 刻度
 // + 10 段竖推子 + 增益/频率读数。直接驱动 AudioEngine 的 Equalizer（RBJ biquad）。
 // 左栏保留独立 EQ 前置增益和音量；音量通过主窗统一静音/存档入口。
 
@@ -39,7 +39,7 @@ private:
     TTButton *m_enable = nullptr;
     TTButton *m_reset = nullptr;
     TTButton *m_preset = nullptr;
-    std::array<FaderView *, 10> m_faders {};
-    std::array<QLabel *, 10> m_gainLabels {};
+    std::array<FaderView *, 10> m_faders{};
+    std::array<QLabel *, 10> m_gainLabels{};
     QString m_currentPreset = QStringLiteral("默认");
 };

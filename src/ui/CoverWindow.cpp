@@ -7,12 +7,17 @@
 #include <QPainterPath>
 
 namespace {
-QColor scaledAlpha(QColor c, float a) { c.setAlphaF(c.alphaF() * a); return c; }
+QColor scaledAlpha(QColor c, float a) {
+    c.setAlphaF(c.alphaF() * a);
+    return c;
+}
 } // namespace
 
 CoverWindow::CoverWindow(PlayerController *controller, QWidget *parent)
     : SkinWindow(QStringLiteral("专辑封面"), true, parent), m_controller(controller) {
-    resize(252, 340 + 30);   // 高度补上自绘标题条（~30）
+    // 辅助窗不跟随半透明：压在播放列表/歌词上时，下层内容不透过封面窗。
+    setGlassTransparencyFollows(false);
+    resize(252, 340 + 30); // 高度补上自绘标题条（~30）
     setMinimumSize(200, 260);
 
     connect(m_controller, &PlayerController::trackChanged, this, &CoverWindow::reload);
@@ -26,8 +31,7 @@ void CoverWindow::reload() {
         m_caption = QStringLiteral("还没有播放中的曲目");
         m_source.clear();
     } else {
-        m_caption = t.artist().isEmpty() ? t.title()
-                                         : QStringLiteral("%1 - %2").arg(t.artist(), t.title());
+        m_caption = t.artist().isEmpty() ? t.title() : QStringLiteral("%1 - %2").arg(t.artist(), t.title());
         const QSize px = CoverArt::pixelSizeForTrack(t);
         if (m_image.isNull())
             m_source = QStringLiteral("无（在同目录放一张 cover.jpg，或与音频同名的 .png）");
@@ -43,10 +47,10 @@ void CoverWindow::paintBody(QPainter *p, const QRectF &r) {
     p->save();
     p->setRenderHint(QPainter::Antialiasing, true);
     p->translate(r.topLeft());
-    const float wA = GlassStyle::enabled() ? GlassStyle::wellAlpha() : 1.0f;
+    const float wA = shellAlpha();
     const int W = int(r.width()), H = int(r.height());
-    Painter::drawWell(p, QRectF(0, 0, W, H).adjusted(0.5, 0.5, -0.5, -0.5),
-                      Theme::windowTop, Theme::windowBottom, wA, 6);
+    Painter::drawWell(p, QRectF(0, 0, W, H).adjusted(0.5, 0.5, -0.5, -0.5), Theme::windowTop, Theme::windowBottom, wA,
+                      6);
 
     const int side = qMin(W - 24, H - 90);
     const QRect artRect((W - side) / 2, 12, side, side);
@@ -67,8 +71,7 @@ void CoverWindow::paintBody(QPainter *p, const QRectF &r) {
         p->setFont(Fonts::small);
         p->drawText(artRect, Qt::AlignCenter, QStringLiteral("无封面"));
     } else {
-        const QImage scaled = m_image.scaled(artRect.size(), Qt::KeepAspectRatio,
-                                             Qt::SmoothTransformation);
+        const QImage scaled = m_image.scaled(artRect.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
         QRectF imgRect(0, 0, scaled.width(), scaled.height());
         imgRect.moveCenter(artRect.center());
         QPainterPath clip;
@@ -83,10 +86,9 @@ void CoverWindow::paintBody(QPainter *p, const QRectF &r) {
     p->setPen(Theme::inkOnGlass);
     const QRectF capRect(8, artRect.bottom() + 8, W - 16, 20);
     p->drawText(capRect, Qt::AlignCenter,
-               p->fontMetrics().elidedText(m_caption, Qt::ElideMiddle, int(capRect.width())));
+                p->fontMetrics().elidedText(m_caption, Qt::ElideMiddle, int(capRect.width())));
     p->setFont(Fonts::tiny);
     p->setPen(Theme::inkOnGlassSoft);
-    p->drawText(QRectF(8, artRect.bottom() + 28, W - 16, 16),
-               Qt::AlignCenter, m_source);
+    p->drawText(QRectF(8, artRect.bottom() + 28, W - 16, 16), Qt::AlignCenter, m_source);
     p->restore();
 }

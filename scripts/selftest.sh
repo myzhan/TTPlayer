@@ -1,3 +1,3 @@
 #!/bin/sh
-# Windows can invoke selftest.py directly.
+# Windows 可直接调用 selftest.py；这是 Unix 入口。
 exec python3 "$(dirname "$0")/selftest.py" "$@"

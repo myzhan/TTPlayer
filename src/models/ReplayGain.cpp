@@ -53,19 +53,18 @@ ReplayGainTags ReplayGainTags::fromTags(const QHash<QString, QString> &tags) {
     return t;
 }
 
-ReplayGainDecision ReplayGainDecision::decide(const std::optional<ReplayGainTags> &tagsOpt,
-                                              ReplayGainMode mode, double preamp,
-                                              bool peakLimit, bool isRadio) {
+ReplayGainDecision ReplayGainDecision::decide(const std::optional<ReplayGainTags> &tagsOpt, ReplayGainMode mode,
+                                              double preamp, bool peakLimit, bool isRadio) {
     ReplayGainDecision d;
     if (isRadio) {
-        d.source = Source::Radio;   // 电台既不加标签增益，也不加 preamp
+        d.source = Source::Radio; // 电台既不加标签增益，也不加 preamp
         return d;
     }
     if (mode == ReplayGainMode::Off) {
         d.source = Source::Off;
         return d;
     }
-    const ReplayGainTags t = tagsOpt.value_or(ReplayGainTags {});
+    const ReplayGainTags t = tagsOpt.value_or(ReplayGainTags{});
     std::optional<double> gain;
     std::optional<double> pk;
     if (mode == ReplayGainMode::Track) {
@@ -103,12 +102,18 @@ ReplayGainDecision ReplayGainDecision::decide(const std::optional<ReplayGainTags
 
 QString ReplayGainDecision::sourceText() const {
     switch (source) {
-    case Source::Off: return QStringLiteral("已关闭");
-    case Source::Track: return QStringLiteral("按曲目");
-    case Source::Album: return QStringLiteral("按专辑");
-    case Source::AlbumToTrack: return QStringLiteral("按专辑（专辑标签缺失，退回曲目）");
-    case Source::NoTag: return QStringLiteral("曲子里没有 ReplayGain 标签（不动音量）");
-    case Source::Radio: return QStringLiteral("电台不做响度均衡（也不加前置增益）");
+    case Source::Off:
+        return QStringLiteral("已关闭");
+    case Source::Track:
+        return QStringLiteral("按曲目");
+    case Source::Album:
+        return QStringLiteral("按专辑");
+    case Source::AlbumToTrack:
+        return QStringLiteral("按专辑（专辑标签缺失，退回曲目）");
+    case Source::NoTag:
+        return QStringLiteral("曲子里没有 ReplayGain 标签（不动音量）");
+    case Source::Radio:
+        return QStringLiteral("电台不做响度均衡（也不加前置增益）");
     }
     return {};
 }

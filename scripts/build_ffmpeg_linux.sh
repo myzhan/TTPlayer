@@ -5,46 +5,38 @@
 # 依赖（GitHub ubuntu runner）：build-essential nasm yasm zlib1g-dev pkg-config
 # 幂等：源码 commit、本脚本、组件清单三者一致且库齐全才跳过；--force 强制重来。
 set -e
-SCRIPT_HASH=$(sha256sum "$0" | awk '{print $1}')
-COMP_HASH=$(sha256sum "$(dirname "$0")/ffmpeg_components.sh" | awk '{print $1}')
-cd "$(dirname "$0")/.."
 
-SRC=3rd/ffmpeg
-PREFIX=$(pwd)/3rd/ffmpeg-build
-STAMP="$PREFIX/.built-commit"
-CONFIG_STAMP="$PREFIX/.built-config"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+cd "$SCRIPT_DIR/.."
+ROOT=$(pwd)
+source "$SCRIPT_DIR/ffmpeg_components.sh"
+
+SRC="$ROOT/3rd/ffmpeg"
+PREFIX="$ROOT/3rd/ffmpeg-build"
 
 if [[ ! -f "$SRC/configure" ]]; then
-    echo "错误：$SRC 不存在或未初始化子模块（git submodule update --init --depth 1 3rd/ffmpeg）" >&2
+    echo "错误：3rd/ffmpeg 不存在或未初始化子模块（git submodule update --init --depth 1 3rd/ffmpeg）" >&2
     exit 1
 fi
 
+require_frozen_ffmpeg "$SRC"
 COMMIT=$(git -C "$SRC" rev-parse HEAD)
-source "$(pwd)/scripts/ffmpeg_components.sh"
+SCRIPT_HASH=$(sha256sum "$SCRIPT_DIR/build_ffmpeg_linux.sh" | awk '{print $1}')
+COMP_HASH=$(sha256sum "$SCRIPT_DIR/ffmpeg_components.sh" | awk '{print $1}')
 CONFIG_KEY="$COMMIT|$SCRIPT_HASH|$COMP_HASH|$(uname -m)|linux"
-NEED_BUILD=1
-if [[ "${1:-}" != "--force" && -f "$CONFIG_STAMP" && -f "$STAMP" ]]; then
-    if [[ "$(cat "$CONFIG_STAMP")" == "$CONFIG_KEY" && "$(cat "$STAMP")" == "$COMMIT" ]]; then
-        NEED_BUILD=0
-        for lib in avformat avcodec avutil swresample; do
-            [[ -f "$PREFIX/lib/lib$lib.a" ]] || NEED_BUILD=1
-        done
-    fi
-fi
 
-if [[ $NEED_BUILD -eq 0 ]]; then
+if [[ "${1:-}" != "--force" ]] && ffmpeg_is_built "$PREFIX" "$CONFIG_KEY" "$COMMIT"; then
     echo "FFmpeg 静态库已就绪（commit ${COMMIT:0:8}），跳过编译；需重来用 --force"
     exit 0
 fi
 
-mkdir -p "$PREFIX/lib" "$PREFIX/include"
-rm -f "$STAMP" "$CONFIG_STAMP"
+ffmpeg_begin_build "$PREFIX"
 
-SRC_DIR_ABS=$(cd "$SRC" && pwd)
 BDIR="$PREFIX/.obj-linux"
-rm -rf "$BDIR"; mkdir -p "$BDIR"
+rm -rf "$BDIR"
+mkdir -p "$BDIR"
 # out-of-tree：从独立目录调 configure，不污染 submodule 工作树
-( cd "$BDIR" && "$SRC_DIR_ABS/configure" \
+( cd "$BDIR" && "$SRC/configure" \
     --prefix="$PREFIX" \
     --enable-static --disable-shared --enable-pic \
     --disable-doc --disable-programs --disable-debug \
@@ -54,9 +46,7 @@ rm -rf "$BDIR"; mkdir -p "$BDIR"
     --disable-avdevice --disable-swscale \
     "${COMPONENTS[@]}" )
 
-JOBS=$(nproc)
-( cd "$BDIR" && make -j"$JOBS" && (make install-headers install-lib install-priv-headers 2>/dev/null || make install) )
+ffmpeg_make_install "$BDIR" "$(nproc)"
 
-echo "$COMMIT" > "$STAMP"
-echo "$CONFIG_KEY" > "$CONFIG_STAMP"
+ffmpeg_finish_build "$PREFIX" "$CONFIG_KEY" "$COMMIT"
 echo "FFmpeg 静态库编译完成：$PREFIX"

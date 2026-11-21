@@ -1,4 +1,6 @@
-name: Qt validation
+# 提交后验证：Linux / macOS 的 Debug + Release 矩阵，以及 Windows 的 Debug + Release。
+# 只构建、跑全量自检并留存 artifacts，不发布产物；发布见 release.yml。
+name: CI
 on:
   pull_request:
   push:
@@ -8,6 +10,7 @@ permissions:
   contents: read
 jobs:
   unix:
+    name: Unix (${{ matrix.os }}, ${{ matrix.config }})
     strategy:
       fail-fast: false
       matrix:
@@ -37,14 +40,22 @@ jobs:
           cmake -S "$RUNNER_TEMP/SDL2-2.32.10" -B "$RUNNER_TEMP/sdl-build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/SDL"
           cmake --build "$RUNNER_TEMP/sdl-build" -j 4
           cmake --install "$RUNNER_TEMP/sdl-build"
-      - name: FFmpeg
+      - name: FFmpeg (frozen 9.0)
         shell: bash
         run: |
+          echo "frozen FFmpeg source: $(cat 3rd/ffmpeg/RELEASE) @ $(git -C 3rd/ffmpeg rev-parse --short HEAD)"
+          ffmpeg -version | head -1
           if [[ "$RUNNER_OS" == macOS ]]; then zsh scripts/build_ffmpeg.sh; else bash scripts/build_ffmpeg_linux.sh; fi
-      - name: Build
+      - name: Build (${{ matrix.config }})
         run: |
           cmake -S . -B build-ci -DCMAKE_BUILD_TYPE=${{ matrix.config }}
           cmake --build build-ci -j 4
+      - name: Lint (whole src tree)
+        if: runner.os == 'Linux' && matrix.config == 'Debug'
+        run: |
+          python -m pip install --quiet clang-format==18.1.8 clang-tidy==18.1.8
+          # 整仓口径：src/ 下任何一行不合规都挂，不靠“只查改动行”给历史债留口子。
+          python scripts/lint.py all --all --build-dir build-ci
       - name: Full selftest
         env:
           TTPLAYER_BIN: build-ci/ttplayer
@@ -52,17 +63,19 @@ jobs:
         run: python scripts/selftest.py all
       - name: CTest
         run: ctest --test-dir build-ci --output-on-failure
-      - name: Prepare distributable
+      - name: Prepare distributable (Release)
         if: matrix.config == 'Release'
         run: python scripts/package.py
-      - uses: actions/upload-artifact@v4
+      - name: Upload Unix artifacts
+        uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: qt-${{ matrix.os }}-${{ matrix.config }}-validation
+          name: ci-${{ matrix.os }}-${{ matrix.config }}-validation
           path: |
             build-ci/selftest
-            dist
+            build/dist
   windows:
+    name: Windows x64
     runs-on: windows-2022
     timeout-minutes: 60
     steps:
@@ -78,7 +91,7 @@ jobs:
           msystem: MSYS
           install: make nasm yasm
           path-type: inherit
-      - name: Dependencies
+      - name: Windows dependencies
         shell: pwsh
         run: |
           python -m pip install aqtinstall
@@ -89,12 +102,17 @@ jobs:
           echo "$env:RUNNER_TEMP/Qt/6.8.3/msvc2022_64/bin" >> $env:GITHUB_PATH
           echo "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin" >> $env:GITHUB_PATH
           choco install ffmpeg -y --no-progress
-      - name: FFmpeg MSVC ABI
+      - name: FFmpeg (frozen 9.0, MSVC ABI)
         shell: msys2 {0}
-        run: bash scripts/build_ffmpeg_msvc.sh
-      - name: Build and validate both configurations
+        run: |
+          echo "frozen FFmpeg source: $(cat 3rd/ffmpeg/RELEASE) @ $(git -C 3rd/ffmpeg rev-parse --short HEAD)"
+          ffmpeg -version | head -1
+          bash scripts/build_ffmpeg_msvc.sh
+      - name: Build, selftest and package (Debug + Release)
         shell: pwsh
         run: |
+          # 同一个 build-ci 目录分别构建 Debug / Release，各自跑全量自检与 CTest；
+          # 最后只把 Release 安装成 build/dist 供 artifact 留存。
           cmake -S . -B build-ci -G "Visual Studio 17 2022" -A x64
           foreach ($config in @("Debug", "Release")) {
             cmake --build build-ci --config $config -j 4
@@ -108,10 +126,11 @@ jobs:
           }
           python scripts/package.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - uses: actions/upload-artifact@v4
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: qt-windows-validation
+          name: ci-windows-validation
           path: |
             build-ci/selftest-*
-            dist
+            build/dist

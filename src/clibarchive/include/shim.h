@@ -35,11 +35,15 @@ enum {
     CLARCHIVE_FATAL = -30
 };
 
-// opaque 句柄（Swift ClangImporter 不接受 incomplete struct，
+// opaque 句柄（C++ 编译器不接受 incomplete struct，
 // 给个内部成员使它成为 complete struct；实际实现不会分配也不读取这里，
 // 所有指针都从 libarchive 拿。ABI 层面只有一个 void*）
-struct archive { char _opaque; };
-struct archive_entry { char _opaque; };
+struct archive {
+    char _opaque;
+};
+struct archive_entry {
+    char _opaque;
+};
 
 // 生命周期
 struct archive *archive_read_new(void);

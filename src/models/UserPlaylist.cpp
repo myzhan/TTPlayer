@@ -7,14 +7,18 @@ QStringList UserPlaylist::dedup(const QStringList &keys) {
     QSet<QString> seen;
     out.reserve(keys.size());
     for (const QString &k : keys)
-        if (!seen.contains(k)) { seen.insert(k); out.append(k); }
+        if (!seen.contains(k)) {
+            seen.insert(k);
+            out.append(k);
+        }
     return out;
 }
 
 QStringList UserPlaylists::ids() const {
     QStringList out;
     out.reserve(m_items.size());
-    for (const UserPlaylist &p : m_items) out.append(p.id);
+    for (const UserPlaylist &p : m_items)
+        out.append(p.id);
     return out;
 }
 
@@ -44,14 +48,14 @@ bool UserPlaylists::create(const QString &rawName, QString *id, QString *note) {
     const QString base = NameRules::normalized(rawName).left(kNameLimit);
     if (base.isEmpty()) return false;
     QSet<QString> taken;
-    for (const UserPlaylist &p : m_items) taken.insert(p.name);
+    for (const UserPlaylist &p : m_items)
+        taken.insert(p.name);
     bool changed = false;
     const QString name = NameRules::distinct(base, taken, &changed);
     const QString newId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     m_items.append(UserPlaylist(newId, name));
     if (id) *id = newId;
-    if (note && changed)
-        *note = QStringLiteral("已经有叫「%1」的歌单，这张改名为「%2」").arg(base, name);
+    if (note && changed) *note = QStringLiteral("已经有叫「%1」的歌单，这张改名为「%2」").arg(base, name);
     return true;
 }
 
@@ -64,7 +68,7 @@ QString UserPlaylists::rename(const QString &id, const QString &rawName) {
     for (int j = 0; j < m_items.size(); ++j)
         if (j != i) taken.insert(m_items[j].name);
     m_items[i].name = NameRules::distinct(base, taken);
-    return QString();   // 空 = 改好了
+    return QString(); // 空 = 改好了
 }
 
 bool UserPlaylists::remove(const QString &id) {
@@ -80,7 +84,10 @@ int UserPlaylists::addKeys(const QStringList &newKeys, const QString &id) {
     const int before = m_items[i].keys.size();
     QSet<QString> seen(m_items[i].keys.constBegin(), m_items[i].keys.constEnd());
     for (const QString &k : newKeys)
-        if (!seen.contains(k)) { seen.insert(k); m_items[i].keys.append(k); }
+        if (!seen.contains(k)) {
+            seen.insert(k);
+            m_items[i].keys.append(k);
+        }
     return m_items[i].keys.size() - before;
 }
 
@@ -125,7 +132,10 @@ int UserPlaylists::replaceKeys(const QHash<QString, QString> &map) {
         bool changed = false;
         for (QString &k : p.keys) {
             auto it = map.find(k);
-            if (it != map.end() && it.value() != k) { k = it.value(); changed = true; }
+            if (it != map.end() && it.value() != k) {
+                k = it.value();
+                changed = true;
+            }
         }
         if (!changed) continue;
         p.keys = UserPlaylist::dedup(p.keys);

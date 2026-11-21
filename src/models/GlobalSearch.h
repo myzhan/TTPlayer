@@ -3,7 +3,7 @@
 // 全局搜索的索引与判定（F05：搜索框搜的是整个播放器，不再只是当前那一页）。
 // 只吃「排好页序的曲目列表」，不认识存档/歌单档案/媒体库（那些在控制器），
 // 所以「同一身份出现在好几页时留哪条、命中按什么次序排」能单独被测。
-// 对齐 Swift Models/GlobalSearch.swift 三条规矩：
+// 搜索的三条规矩：
 // 1. 不复制曲目：索引存的是各页本来就有的 Track 引用；
 // 2. 只在内容真变了时重建（invalidate 后下次 build）；
 // 3. 命中次序 = 页序 + 页内序，同一身份只留第一次出现的那条，但把几页都记下来。
@@ -60,6 +60,6 @@ public:
     QStringList pagesOf(const QString &key) const;
 
 private:
-    QList<SearchHit> m_rows;   // 已按页序去重的索引
+    QList<SearchHit> m_rows; // 已按页序去重的索引
     bool m_built = false;
 };

@@ -15,8 +15,7 @@ TTButton *makeBtn(Skin::Glyph g, QWidget *parent) {
 }
 }
 
-TransportBar::TransportBar(PlayerController *controller, QWidget *parent)
-    : QWidget(parent), m_controller(controller) {
+TransportBar::TransportBar(PlayerController *controller, QWidget *parent) : QWidget(parent), m_controller(controller) {
     auto *lay = new QHBoxLayout(this);
     lay->setContentsMargins(3, 2, 3, 2);
     lay->setSpacing(3);
@@ -26,8 +25,8 @@ TransportBar::TransportBar(PlayerController *controller, QWidget *parent)
     auto *stop = makeBtn(Skin::Glyph::Stop, this);
     auto *next = makeBtn(Skin::Glyph::Next, this);
     m_mode = makeBtn(Skin::Glyph::ListLoop, this);
-    m_mode->setPreferredSize({34, 20});   // 模式图标细节多，比传输键略宽
-    m_mode->setGlyphScale(0.82);          // 默认 0.62 太小，循环/单曲难辨
+    m_mode->setPreferredSize({34, 20}); // 模式图标细节多，比传输键略宽
+    m_mode->setGlyphScale(0.82);        // 默认 0.62 太小，循环/单曲难辨
 
     lay->addWidget(stop);
     lay->addWidget(prev);
@@ -44,21 +43,28 @@ TransportBar::TransportBar(PlayerController *controller, QWidget *parent)
         static const PlayMode order[] = {PlayMode::Order, PlayMode::ListLoop, PlayMode::SingleLoop, PlayMode::Random};
         const PlayMode cur = controller->mode();
         int i = 0;
-        for (int k = 0; k < 4; ++k) if (order[k] == cur) i = k;
+        for (int k = 0; k < 4; ++k)
+            if (order[k] == cur) i = k;
         controller->setMode(order[(i + 1) % 4]);
     });
 
-    auto syncPlay = [this] {
-        m_play->setGlyph(m_controller->isPlaying() ? Skin::Glyph::Pause : Skin::Glyph::Play);
-    };
+    auto syncPlay = [this] { m_play->setGlyph(m_controller->isPlaying() ? Skin::Glyph::Pause : Skin::Glyph::Play); };
     auto syncMode = [this] {
         using G = Skin::Glyph;
         G g = G::ListLoop;
         switch (m_controller->mode()) {
-        case PlayMode::Order:      g = G::Sequential; break;   // 顺序：向右箭头（播完到底）
-        case PlayMode::ListLoop:   g = G::ListLoop;  break;
-        case PlayMode::SingleLoop: g = G::RepeatOne; break;
-        case PlayMode::Random:     g = G::Shuffle;   break;
+        case PlayMode::Order:
+            g = G::Sequential;
+            break; // 顺序：向右箭头（播完到底）
+        case PlayMode::ListLoop:
+            g = G::ListLoop;
+            break;
+        case PlayMode::SingleLoop:
+            g = G::RepeatOne;
+            break;
+        case PlayMode::Random:
+            g = G::Shuffle;
+            break;
         }
         m_mode->setGlyph(g);
         m_mode->setLit(m_controller->mode() != PlayMode::Order);
@@ -71,6 +77,6 @@ TransportBar::TransportBar(PlayerController *controller, QWidget *parent)
 
 void TransportBar::paintEvent(QPaintEvent *) {
     QPainter p(this);
-    Painter::drawBody(&p, QRectF(rect()), Theme::windowTop, Theme::windowBottom,
-                      GlassStyle::glassAlpha(), 0, Theme::skinEdge, false);
+    Painter::drawBody(&p, QRectF(rect()), Theme::windowTop, Theme::windowBottom, GlassStyle::glassAlpha(), 0,
+                      Theme::skinEdge, false);
 }

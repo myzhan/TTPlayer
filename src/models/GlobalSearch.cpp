@@ -8,9 +8,10 @@ void GlobalSearch::invalidate() {
 }
 
 void GlobalSearch::build(const QList<SearchPage> &pages) {
-    QHash<QString, int> seen;   // identityKey → m_rows 下标
+    QHash<QString, int> seen; // identityKey → m_rows 下标
     int total = 0;
-    for (const SearchPage &p : pages) total += p.tracks.size();
+    for (const SearchPage &p : pages)
+        total += p.tracks.size();
     QList<SearchHit> out;
     out.reserve(total);
     seen.reserve(total);
@@ -36,7 +37,7 @@ void GlobalSearch::build(const QList<SearchPage> &pages) {
 
 SearchResult GlobalSearch::matches(const TrackFilter &filter, int limit) const {
     // 文本条件单独跑一份判定器：格式档要按「不限格式的全部命中」统计
-    const TrackFilter text(filter.keyword, QSet<QString> {});
+    const TrackFilter text(filter.keyword, QSet<QString>{});
     SearchResult r;
     if (filter.isEmpty()) return r;
     const QSet<QString> onFormats = filter.formats;

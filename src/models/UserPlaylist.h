@@ -1,6 +1,6 @@
 #pragma once
 
-// 一张自建歌单（F04）+ 其仓库。对齐 Swift Models/UserPlaylist.swift。
+// 一张自建歌单（F04）+ 其仓库。
 // id 是歌单的稳定身份：改名、增删条目、拖动排序都不动它，所以左栏那一行、存档记住的
 // 当前组、右键「加入歌单」指的都是同一张歌单。条目只存 Track.identityKey，对象按需还原。
 
@@ -14,11 +14,10 @@
 struct UserPlaylist {
     QString id;
     QString name;
-    QStringList keys;   // 组内去重，按用户排的次序
+    QStringList keys; // 组内去重，按用户排的次序
 
     UserPlaylist() = default;
-    UserPlaylist(const QString &i, const QString &n, const QStringList &k = {})
-        : id(i), name(n), keys(dedup(k)) {}
+    UserPlaylist(const QString &i, const QString &n, const QStringList &k = {}) : id(i), name(n), keys(dedup(k)) {}
 
     /// 组内去重：同一首歌在一张歌单里只占一行（不同歌单之间互不影响）
     static QStringList dedup(const QStringList &keys);

@@ -1,12 +1,11 @@
 # TTPlayer Qt6 —— 跨平台重构（C++20 + Qt Widgets + FFmpeg 静态库 + SDL2 输出）
 #
-# Swift 参考版保留在 legacy/，保持可独立构建与回归；本工程代码在 src/，CMakeLists.txt 在仓库根。
-# 解码层沿用 3rd/ffmpeg-build，libarchive 稳定子集声明已搬进 src/clibarchive/include。
-# 的静态库（同一份产物、同一套链接顺序：avformat → avcodec → swresample → avutil）。
-# 输出层换掉 AVAudioEngine：设备 IO 用 SDL2（mac=CoreAudio/win=WASAPI/linux=ALSA），
-# EQ/fade/频谱在回调里自绘。
+# 工程代码在 src/，CMakeLists.txt 在仓库根。
+# 解码层沿用 3rd/ffmpeg-build 的静态库（同一份产物、同一套链接顺序：avformat → avcodec → swresample → avutil）。
+# libarchive 稳定子集声明已搬进 src/clibarchive/include。
+# 输出层：设备 IO 用 SDL2（mac=CoreAudio/win=WASAPI/linux=ALSA），EQ/fade/频谱在回调里自绘。
 #
-# 构建产物：Debug 用 build/、Release 用 build-release/（均在 .gitignore）。
+# 构建产物统一在 build/（Debug 用 build/、Release 用 build/release/、打包用 build/package/ 与 build/dist/）。
 #   cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build
 cmake_minimum_required(VERSION 3.21)
 
@@ -29,11 +28,34 @@ endif()
 
 project(TTPlayer LANGUAGES C CXX)
 
+# 给 IDE / clang-tidy 留编译数据库（只写进构建目录，不进仓）。
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# 可选：构建时顺带跑 clang-tidy。默认关——它比编译慢一个量级，
+# 日常用 scripts/lint.py 只查改动文件，CI 也只查本次改动。
+option(TTPLAYER_CLANG_TIDY "构建时执行 clang-tidy（需自行安装）" OFF)
+if(TTPLAYER_CLANG_TIDY)
+  find_program(TTPLAYER_CLANG_TIDY_EXE NAMES clang-tidy)
+  if(TTPLAYER_CLANG_TIDY_EXE)
+    set(CMAKE_CXX_CLANG_TIDY "${TTPLAYER_CLANG_TIDY_EXE}")
+  else()
+    message(WARNING "TTPLAYER_CLANG_TIDY=ON 但没找到 clang-tidy，已跳过")
+  endif()
+endif()
+
+# 全工程统一 C++20：标准只在这两组变量里定义，其他地方不再手写 -std，
+# 要升级语言水平只改这里。EXTENSIONS OFF = 用 -std=c++20，不开 gnu 扩展。
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# .mm（ObjC++）的标准是独立变量，必须同档设置；漏了就只有它一个文件掉到低标准。
+set(CMAKE_OBJCXX_STANDARD 20)
+set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+set(CMAKE_OBJCXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Core Network Core5Compat Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Core Network Core5Compat Concurrent Sql)
 
 # GB18030/GBK 使用必需的 Core5Compat QTextCodec。
 
@@ -132,11 +154,11 @@ if(SDL2_INCLUDE_DIR)
 endif()
 target_link_directories(ttplayer PRIVATE ${FFMPEG_ROOT}/lib)
 
-# 静态 FFmpeg 依赖系统库：链接顺序按依赖（与 Package.swift 一致），系统库按平台分道
+# 静态 FFmpeg 依赖系统库：链接顺序按依赖，系统库按平台分道
 target_link_libraries(ttplayer PRIVATE
-  Qt6::Widgets Qt6::Gui Qt6::Core Qt6::Network Qt6::Core5Compat Qt6::Concurrent
+  Qt6::Widgets Qt6::Gui Qt6::Core Qt6::Network Qt6::Core5Compat Qt6::Concurrent Qt6::Sql
   ${ARCHIVE_LIBRARY}
-  # 静态链接顺序按依赖（与 Package.swift 一致）
+  # 静态链接顺序按依赖
   ${FFMPEG_avformat} ${FFMPEG_avcodec} ${FFMPEG_swresample} ${FFMPEG_avutil}
 )
 if(SDL2_LIBRARY)
@@ -155,6 +177,13 @@ endif()
 
 if(APPLE)
   enable_language(OBJCXX)
+  # CMake 3.27 的 AppleClang-OBJCXX 模块只有旧表（C++20 写 -std=c++2a），
+  # 而同版本 AppleClang-CXX 在 clang ≥ 13 已改 -std=c++20；
+  # 两种拼写对 clang 等价，这里对齐字面，避免同一工程里出现两种 -std。
+  if(CMAKE_OBJCXX_COMPILER_VERSION VERSION_GREATER_EQUAL 13.0)
+    set(CMAKE_OBJCXX20_STANDARD_COMPILE_OPTION "-std=c++20")
+    set(CMAKE_OBJCXX20_EXTENSION_COMPILE_OPTION "-std=gnu++20")
+  endif()
   target_sources(ttplayer PRIVATE src/platform/MediaSession_mac.mm)
   set_source_files_properties(src/platform/MediaSession_mac.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
   target_link_libraries(ttplayer PRIVATE z m pthread
@@ -192,8 +221,8 @@ if(APPLE AND TTPLAYER_BUNDLE)
   set_target_properties(ttplayer PROPERTIES MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/Info.plist"
     MACOSX_BUNDLE_GUI_IDENTIFIER "org.ttplayer.TTPlayer"
-    MACOSX_BUNDLE_BUNDLE_NAME "TTPlayer"
-    MACOSX_BUNDLE_SHORT_VERSION_STRING "1.1.4")
+    MACOSX_BUNDLE_BUNDLE_NAME "千千静听"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "1.1.5")
 endif()
 if(WIN32)
   set_target_properties(ttplayer PROPERTIES WIN32_EXECUTABLE TRUE)
@@ -222,15 +251,21 @@ if(NOT APPLE OR TTPLAYER_BUNDLE)
   endif()
   qt_generate_deploy_app_script(TARGET ttplayer OUTPUT_SCRIPT ttplayer_deploy NO_UNSUPPORTED_PLATFORM_ERROR)
   install(SCRIPT ${ttplayer_deploy})
+  if(APPLE)
+    # macdeployqt 把 sqldrivers 整个目录搬进来，其中 mimer 插件链到本机不存在的
+    # /usr/local/lib/libmimerapi.dylib，加载必失败；只留 state.db 需要的 sqlite 插件。
+    install(CODE "file(REMOVE \"\${CMAKE_INSTALL_PREFIX}/ttplayer.app/Contents/PlugIns/sqldrivers/libqsqlmimer.dylib\")")
+  endif()
 endif()
 set(CPACK_PACKAGE_NAME TTPlayer)
-set(CPACK_PACKAGE_VERSION 1.1.4)
+set(CPACK_PACKAGE_VERSION 1.1.5)
 include(CPack)
 
 # ---- CTest 注册（R27）----
 # 每个探针一个测试：无头 offscreen + SDL dummy + 独立隔离存档（TTPLAYER_QT_STATE 落在
-# 构建目录，绝不碰用户 ~/.../TTPlayer/state.json）。WORKING_DIRECTORY 指仓库根，探针按
-# QDir::currentPath()+"/testlib/" 取素材。退出码 0/1 直接映射 ctest PASS/FAIL。
+# 构建目录，库文件 <探针>.db 随同目录隔离，绝不碰用户 ~/.../TTPlayer/state.db）。
+# WORKING_DIRECTORY 指仓库根，探针按 QDir::currentPath()+"/testlib/" 取素材。
+# 退出码 0/1 直接映射 ctest PASS/FAIL。
 # 与 scripts/selftest.sh 同源：脚本给分档/计时/state 守卫，ctest 给 IDE / CI 矩阵入口。
 enable_testing()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)

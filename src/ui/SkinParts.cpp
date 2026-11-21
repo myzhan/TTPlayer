@@ -14,9 +14,14 @@
 namespace {
 
 // 0~1 alpha 缩放
-QColor scaledAlpha(QColor c, float a) { c.setAlphaF(c.alphaF() * a); return c; }
+QColor scaledAlpha(QColor c, float a) {
+    c.setAlphaF(c.alphaF() * a);
+    return c;
+}
 
-QColor hexc(uint v) { return QColor((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF); }
+QColor hexc(uint v) {
+    return QColor((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
+}
 
 } // namespace
 
@@ -63,8 +68,10 @@ void drawGlyph(QPainter *p, Glyph g, const QRectF &rect, const QColor &color, qr
         }
         tri.closeSubpath();
         p->drawPath(tri);
-        if (next) p->drawRect(QRectF(box.right() - barW, box.top(), barW, s));
-        else p->drawRect(QRectF(box.left(), box.top(), barW, s));
+        if (next)
+            p->drawRect(QRectF(box.right() - barW, box.top(), barW, s));
+        else
+            p->drawRect(QRectF(box.left(), box.top(), barW, s));
         break;
     }
     case Glyph::Sequential: {
@@ -127,12 +134,20 @@ void drawGlyph(QPainter *p, Glyph g, const QRectF &rect, const QColor &color, qr
         p->drawLine(QPointF(l, b), QPointF(rt, t));
         auto head = [&](qreal x, qreal y, qreal ux, qreal uy) {
             const qreal a = s * 0.20, w = s * 0.10;
-            const qreal px = -uy, py = ux;   // 垂直单位
+            const qreal px = -uy, py = ux; // 垂直单位
             p->drawLine(QPointF(x, y), QPointF(x - ux * a + px * w, y - uy * a + py * w));
             p->drawLine(QPointF(x, y), QPointF(x - ux * a - px * w, y - uy * a - py * w));
         };
-        { const qreal dx = rt - l, dy = b - t; const qreal m = qSqrt(dx * dx + dy * dy); head(rt, b, dx / m, dy / m); }
-        { const qreal dx = rt - l, dy = t - b; const qreal m = qSqrt(dx * dx + dy * dy); head(rt, t, dx / m, dy / m); }
+        {
+            const qreal dx = rt - l, dy = b - t;
+            const qreal m = qSqrt(dx * dx + dy * dy);
+            head(rt, b, dx / m, dy / m);
+        }
+        {
+            const qreal dx = rt - l, dy = t - b;
+            const qreal m = qSqrt(dx * dx + dy * dy);
+            head(rt, t, dx / m, dy / m);
+        }
         break;
     }
     case Glyph::Eject:
@@ -170,8 +185,7 @@ void drawGlyph(QPainter *p, Glyph g, const QRectF &rect, const QColor &color, qr
         pen.setCapStyle(Qt::RoundCap);
         p->setPen(pen);
         p->setBrush(Qt::NoBrush);
-        p->drawLine(QPointF(box.center().x(), cap.bottom() + s * 0.12),
-                    QPointF(box.center().x(), box.bottom()));
+        p->drawLine(QPointF(box.center().x(), cap.bottom() + s * 0.12), QPointF(box.center().x(), box.bottom()));
         p->setPen(Qt::NoPen);
         p->setBrush(color);
         break;
@@ -243,10 +257,9 @@ void drawGlyph(QPainter *p, Glyph g, const QRectF &rect, const QColor &color, qr
         pen.setCapStyle(Qt::RoundCap);
         pen.setJoinStyle(Qt::RoundJoin);
         p->setPen(pen);
-        p->drawPolyline(QPolygonF()
-            << QPointF(box.left() + s * 0.1, box.center().y())
-            << QPointF(box.center().x() - s * 0.05, box.bottom() - s * 0.15)
-            << QPointF(box.right() - s * 0.05, box.top() + s * 0.15));
+        p->drawPolyline(QPolygonF() << QPointF(box.left() + s * 0.1, box.center().y())
+                                    << QPointF(box.center().x() - s * 0.05, box.bottom() - s * 0.15)
+                                    << QPointF(box.right() - s * 0.05, box.top() + s * 0.15));
         break;
     }
     case Glyph::Volume:
@@ -285,9 +298,8 @@ void drawGlyph(QPainter *p, Glyph g, const QRectF &rect, const QColor &color, qr
         pen.setCapStyle(Qt::RoundCap);
         p->setPen(pen);
         QRectF c = box.adjusted(s * 0.14, s * 0.14, -s * 0.14, -s * 0.14);
-        p->drawArc(c, 60 * 16, 300 * 16);            // 顶部开口的环
-        p->drawLine(QPointF(c.center().x(), c.top() - s * 0.04),
-                    QPointF(c.center().x(), c.center().y()));
+        p->drawArc(c, 60 * 16, 300 * 16); // 顶部开口的环
+        p->drawLine(QPointF(c.center().x(), c.top() - s * 0.04), QPointF(c.center().x(), c.center().y()));
         break;
     }
     case Glyph::Reset: {
@@ -296,7 +308,7 @@ void drawGlyph(QPainter *p, Glyph g, const QRectF &rect, const QColor &color, qr
         pen.setCapStyle(Qt::RoundCap);
         p->setPen(pen);
         QRectF c = box.adjusted(s * 0.16, s * 0.16, -s * 0.16, -s * 0.16);
-        p->drawArc(c, 40 * 16, 280 * 16);            // 回旋箭头
+        p->drawArc(c, 40 * 16, 280 * 16); // 回旋箭头
         p->setPen(Qt::NoPen);
         p->setBrush(color);
         QPainterPath ah;
@@ -317,15 +329,22 @@ void drawGlyph(QPainter *p, Glyph g, const QRectF &rect, const QColor &color, qr
 } // namespace Skin
 
 // ————————————————————————————————————————————————
-// WellView（对应 Swift WellView.draw）
+// WellView
 // ————————————————————————————————————————————————
 WellView::WellView(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_StyledBackground, false);
     connect(&GlassNotifier::instance(), &GlassNotifier::changed, this, [this] { update(); });
 }
 
-void WellView::setDark(bool dark) { m_dark = dark; update(); }
-void WellView::setShowGrid(bool on, int columns) { m_showGrid = on; m_gridColumns = columns; update(); }
+void WellView::setDark(bool dark) {
+    m_dark = dark;
+    update();
+}
+void WellView::setShowGrid(bool on, int columns) {
+    m_showGrid = on;
+    m_gridColumns = columns;
+    update();
+}
 
 void WellView::paintEvent(QPaintEvent *) {
     if (width() < 4 || height() < 4) return;
@@ -359,7 +378,7 @@ void WellView::paintEvent(QPaintEvent *) {
 }
 
 // ————————————————————————————————————————————————
-// TTButton（对应 Swift TTButton.draw）
+// TTButton
 // ————————————————————————————————————————————————
 TTButton::TTButton(QWidget *parent) : QAbstractButton(parent) {
     setAttribute(Qt::WA_Hover, true);
@@ -395,7 +414,9 @@ void TTButton::paintEvent(QPaintEvent *) {
             p.setBrush(m_lit ? Theme::textAccent : Theme::buttonHot);
             p.setPen(QPen(scaledAlpha(Theme::buttonEdge, 0.8f), 1));
             p.drawEllipse(circ);
-            QFont f = Fonts::tiny; f.setPixelSize(int(d * 0.60)); f.setBold(true);
+            QFont f = Fonts::tiny;
+            f.setPixelSize(int(d * 0.60));
+            f.setBold(true);
             p.setFont(f);
             p.setPen(m_lit ? hexc(0x1A1206) : Theme::titleText);
             p.drawText(circ, Qt::AlignCenter, m_badge);
@@ -419,8 +440,7 @@ void TTButton::paintEvent(QPaintEvent *) {
     case Face::FlatOnLight: {
         if (!(hot || pressed || m_lit)) break;
         const bool onLight = (m_face == Face::FlatOnLight);
-        const QColor bg = pressed ? Theme::buttonPressed
-                                  : (onLight ? Theme::flatHotOnLightBG : Theme::flatHotBG);
+        const QColor bg = pressed ? Theme::buttonPressed : (onLight ? Theme::flatHotOnLightBG : Theme::flatHotBG);
         p.fillPath(path, bg);
         p.setBrush(Qt::NoBrush);
         p.setPen(QPen(onLight ? Theme::buttonEdge : Theme::flatEdgeHot, 1));
@@ -438,9 +458,12 @@ void TTButton::paintEvent(QPaintEvent *) {
     // 前景色（内容）
     QColor fg;
     if (m_face == Face::Glass || m_face == Face::None) {
-        if (m_lit) fg = Theme::textAccent;              // 激活：橙黄 accent
-        else if (hot) fg = Theme::textHighlight;        // hover：亮白
-        else fg = Theme::inkOnGlass;                    // 静止：深底亮字
+        if (m_lit)
+            fg = Theme::textAccent; // 激活：橙黄 accent
+        else if (hot)
+            fg = Theme::textHighlight; // hover：亮白
+        else
+            fg = Theme::inkOnGlass; // 静止：深底亮字
     } else if (m_face == Face::Flat) {
         fg = m_lit ? Theme::textAccent : (hot ? Theme::flatTextHot : Theme::flatText);
     } else { // FlatOnLight
@@ -450,7 +473,7 @@ void TTButton::paintEvent(QPaintEvent *) {
 }
 
 // ————————————————————————————————————————————————
-// TimeSlider（对应 Swift TimeSlider.draw）
+// TimeSlider
 // ————————————————————————————————————————————————
 TimeSlider::TimeSlider(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_Hover, true);
@@ -470,18 +493,31 @@ void TimeSlider::setProgress(double v) {
     m_progress = next;
     update();
 }
-void TimeSlider::enterEvent(QEnterEvent *) { m_hot = true; update(); }
-void TimeSlider::leaveEvent(QEvent *) { m_hot = false; update(); }
+void TimeSlider::enterEvent(QEnterEvent *) {
+    m_hot = true;
+    update();
+}
+void TimeSlider::leaveEvent(QEvent *) {
+    m_hot = false;
+    update();
+}
 void TimeSlider::mousePressEvent(QMouseEvent *e) {
-    m_dragging = true; m_dragValue = ratioAt(e->position().x()); update();
+    m_dragging = true;
+    m_dragValue = ratioAt(e->position().x());
+    update();
 }
 void TimeSlider::mouseMoveEvent(QMouseEvent *e) {
-    if (m_dragging) { m_dragValue = ratioAt(e->position().x()); update(); }
+    if (m_dragging) {
+        m_dragValue = ratioAt(e->position().x());
+        update();
+    }
 }
 void TimeSlider::mouseReleaseEvent(QMouseEvent *e) {
     if (!m_dragging) return;
-    m_dragging = false; m_progress = ratioAt(e->position().x());
-    emit seekRatio(m_progress); update();
+    m_dragging = false;
+    m_progress = ratioAt(e->position().x());
+    emit seekRatio(m_progress);
+    update();
 }
 
 void TimeSlider::paintEvent(QPaintEvent *) {
@@ -528,7 +564,7 @@ void TimeSlider::paintEvent(QPaintEvent *) {
 }
 
 // ————————————————————————————————————————————————
-// VolumeSlider（对应 Swift VolumeWellView.draw）
+// VolumeSlider
 // ————————————————————————————————————————————————
 VolumeSlider::VolumeSlider(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_Hover, true);
@@ -540,10 +576,22 @@ QRectF VolumeSlider::grooveRect() const {
     return QRectF(2, (height() - 5) / 2.0, qMax(1.0, double(width()) - 40.0), 5);
 }
 
-void VolumeSlider::setValue(double v) { m_value = qBound(0.0, v, 1.0); update(); }
-void VolumeSlider::setMuted(bool m) { m_muted = m; update(); }
-void VolumeSlider::enterEvent(QEnterEvent *) { m_hot = true; update(); }
-void VolumeSlider::leaveEvent(QEvent *) { m_hot = false; update(); }
+void VolumeSlider::setValue(double v) {
+    m_value = qBound(0.0, v, 1.0);
+    update();
+}
+void VolumeSlider::setMuted(bool m) {
+    m_muted = m;
+    update();
+}
+void VolumeSlider::enterEvent(QEnterEvent *) {
+    m_hot = true;
+    update();
+}
+void VolumeSlider::leaveEvent(QEvent *) {
+    m_hot = false;
+    update();
+}
 void VolumeSlider::mousePressEvent(QMouseEvent *e) {
     const QRectF gr = grooveRect();
     if (gr.width() <= 0) return;
@@ -599,16 +647,14 @@ void VolumeSlider::paintEvent(QPaintEvent *) {
     }
 
     // 右侧读数
-    const QString pct = m_muted ? QStringLiteral("静音")
-                                : QStringLiteral("%1%").arg(int(m_value * 100));
+    const QString pct = m_muted ? QStringLiteral("静音") : QStringLiteral("%1%").arg(int(m_value * 100));
     p.setFont(Fonts::tiny);
     p.setPen((m_muted || m_value == 0) ? Theme::meterRed : Theme::inkOnGlassSoft);
-    p.drawText(QRectF(gr.right() + 6, 0, width() - gr.right() - 8, height()),
-               Qt::AlignVCenter | Qt::AlignRight, pct);
+    p.drawText(QRectF(gr.right() + 6, 0, width() - gr.right() - 8, height()), Qt::AlignVCenter | Qt::AlignRight, pct);
 }
 
 // ————————————————————————————————————————————————
-// FaderView（对应 Swift FaderView）
+// FaderView
 // ————————————————————————————————————————————————
 FaderView::FaderView(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_Hover, true);
@@ -616,7 +662,10 @@ FaderView::FaderView(QWidget *parent) : QWidget(parent) {
     connect(&GlassNotifier::instance(), &GlassNotifier::changed, this, [this] { update(); });
 }
 
-void FaderView::setGain(double g) { m_gain = qBound(m_min, g, m_max); update(); }
+void FaderView::setGain(double g) {
+    m_gain = qBound(m_min, g, m_max);
+    update();
+}
 
 void FaderView::setFromY(qreal y) {
     const qreal top = 6, bottom = height() - 6;
@@ -627,10 +676,21 @@ void FaderView::setFromY(qreal y) {
     update();
 }
 
-void FaderView::enterEvent(QEnterEvent *) { m_hot = true; update(); }
-void FaderView::leaveEvent(QEvent *) { m_hot = false; update(); }
-void FaderView::mousePressEvent(QMouseEvent *e) { m_dragging = true; setFromY(e->position().y()); }
-void FaderView::mouseMoveEvent(QMouseEvent *e) { if (m_dragging) setFromY(e->position().y()); }
+void FaderView::enterEvent(QEnterEvent *) {
+    m_hot = true;
+    update();
+}
+void FaderView::leaveEvent(QEvent *) {
+    m_hot = false;
+    update();
+}
+void FaderView::mousePressEvent(QMouseEvent *e) {
+    m_dragging = true;
+    setFromY(e->position().y());
+}
+void FaderView::mouseMoveEvent(QMouseEvent *e) {
+    if (m_dragging) setFromY(e->position().y());
+}
 
 void FaderView::paintEvent(QPaintEvent *) {
     if (width() < 4 || height() < 12) return;
@@ -680,7 +740,7 @@ void FaderView::paintEvent(QPaintEvent *) {
 }
 
 // ————————————————————————————————————————————————
-// KnobView（对应 Swift KnobView）
+// KnobView
 // ————————————————————————————————————————————————
 KnobView::KnobView(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_Hover, true);
@@ -688,12 +748,17 @@ KnobView::KnobView(QWidget *parent) : QWidget(parent) {
     connect(&GlassNotifier::instance(), &GlassNotifier::changed, this, [this] { update(); });
 }
 
-void KnobView::setValue(double v) { m_value = qBound(m_min, v, m_max); update(); }
+void KnobView::setValue(double v) {
+    m_value = qBound(m_min, v, m_max);
+    update();
+}
 
-void KnobView::mousePressEvent(QMouseEvent *e) { m_lastPos = e->pos(); }
+void KnobView::mousePressEvent(QMouseEvent *e) {
+    m_lastPos = e->pos();
+}
 void KnobView::mouseMoveEvent(QMouseEvent *e) {
     if (!(e->buttons().testFlag(Qt::LeftButton))) return;
-    const int dy = m_lastPos.y() - e->pos().y();   // 上拖增大
+    const int dy = m_lastPos.y() - e->pos().y(); // 上拖增大
     m_lastPos = e->pos();
     if (dy == 0) return;
     m_value = qBound(m_min, m_value + dy * (m_max - m_min) / 150.0, m_max);

@@ -5,7 +5,7 @@
 void SpectrumAnalyzer::setSampleRate(double rate) {
     if (rate <= 0 || rate == m_rate) return;
     m_rate = rate;
-    m_bandLo.clear();   // 频带边界随采样率重算（ensureTables 里懒做）
+    m_bandLo.clear(); // 频带边界随采样率重算（ensureTables 里懒做）
 }
 
 void SpectrumAnalyzer::feed(const float *l, const float *r, int frames) {
@@ -27,7 +27,8 @@ void SpectrumAnalyzer::ensureTables() {
         // Hann 窗：压频谱泄漏，柱高更接近听感
         m_window[i] = float(0.5 - 0.5 * std::cos(2.0 * 3.14159265358979323846 * i / (kFFTSize - 1)));
         uint32_t rev = 0;
-        for (int b = 0; b < 11; ++b) rev |= (uint32_t(i >> b) & 1) << (10 - b);
+        for (int b = 0; b < 11; ++b)
+            rev |= (uint32_t(i >> b) & 1) << (10 - b);
         m_bitRev[i] = rev;
     }
     // 64 段对数频带：30 Hz ~ min(16k, nyquist)
@@ -59,7 +60,10 @@ bool SpectrumAnalyzer::bands(float *out) {
     // 原位 radix-2 FFT
     for (uint32_t i = 0; i < kFFTSize; ++i) {
         const uint32_t j = m_bitRev[i];
-        if (j > i) { std::swap(m_re[i], m_re[j]); std::swap(m_im[i], m_im[j]); }
+        if (j > i) {
+            std::swap(m_re[i], m_re[j]);
+            std::swap(m_im[i], m_im[j]);
+        }
     }
     for (int len = 2; len <= kFFTSize; len <<= 1) {
         const double ang = -2.0 * 3.14159265358979323846 / len;
@@ -70,8 +74,10 @@ bool SpectrumAnalyzer::bands(float *out) {
                 const float ur = m_re[i + j], ui = m_im[i + j];
                 const float vr = m_re[i + j + len / 2] * curR - m_im[i + j + len / 2] * curI;
                 const float vi = m_re[i + j + len / 2] * curI + m_im[i + j + len / 2] * curR;
-                m_re[i + j] = ur + vr; m_im[i + j] = ui + vi;
-                m_re[i + j + len / 2] = ur - vr; m_im[i + j + len / 2] = ui - vi;
+                m_re[i + j] = ur + vr;
+                m_im[i + j] = ui + vi;
+                m_re[i + j + len / 2] = ur - vr;
+                m_im[i + j + len / 2] = ui - vi;
                 const float nR = curR * wr - curI * wi;
                 curI = curR * wi + curI * wr;
                 curR = nR;

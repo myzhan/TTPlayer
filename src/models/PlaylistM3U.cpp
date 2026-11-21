@@ -17,22 +17,20 @@
 namespace PlaylistM3U {
 
 const QString marker = QStringLiteral("#EXT-X-TTPLAYER:1");
-const QString compatibilityNote =
-    QStringLiteral("# TTPlayer 扩展：带 #track= 的行是分轨表里精确的一轨，"
-                   "带 #archive-entry= 的行是归档里的一个条目；其它播放器读不懂这两类行");
+const QString compatibilityNote = QStringLiteral("# TTPlayer 扩展：带 #track= 的行是分轨表里精确的一轨，"
+                                                 "带 #archive-entry= 的行是归档里的一个条目；其它播放器读不懂这两类行");
 
 QString lineFor(const Track &track) {
     return track.identityKey();
 }
 
-bool exportKeys(const QStringList &keys, const QHash<QString, QString> &names,
-                const QHash<QString, double> &durations, const QString &path) {
+bool exportKeys(const QStringList &keys, const QHash<QString, QString> &names, const QHash<QString, double> &durations,
+                const QString &path) {
     QString text = QStringLiteral("#EXTM3U\n") + marker + QChar('\n') + compatibilityNote + QChar('\n');
     for (const QString &key : keys) {
         const QString name = names.value(key);
         const double dur = durations.value(key, 0.0);
-        text += QStringLiteral("#EXTINF:%1,%2\n")
-                    .arg(dur > 0 ? qRound(dur) : -1).arg(name);
+        text += QStringLiteral("#EXTINF:%1,%2\n").arg(dur > 0 ? qRound(dur) : -1).arg(name);
         text += key;
         text += QChar('\n');
     }
@@ -48,8 +46,7 @@ bool exportTracks(const QList<Track> &tracks, const QString &path) {
     QHash<QString, double> durations;
     for (const Track &t : tracks) {
         const QString key = t.identityKey();
-        names.insert(key, t.artist().isEmpty() ? t.title()
-                                               : t.artist() + QStringLiteral(" - ") + t.title());
+        names.insert(key, t.artist().isEmpty() ? t.title() : t.artist() + QStringLiteral(" - ") + t.title());
         durations.insert(key, t.duration());
         keys.append(key);
     }
@@ -70,10 +67,8 @@ QString readText(const QString &path) {
 QString resolveFilePart(const QString &head, const QString &baseDir) {
     static const QRegularExpression drive(QStringLiteral("^[A-Za-z]:[/\\\\]"));
     if (drive.match(head).hasMatch() || head.startsWith(QLatin1String("\\\\"))) return head;
-    if (head.startsWith(QLatin1String("file://")))
-        return QUrl(head).toLocalFile();
-    if (head.startsWith(QLatin1Char('/')))
-        return head;
+    if (head.startsWith(QLatin1String("file://"))) return QUrl(head).toLocalFile();
+    if (head.startsWith(QLatin1Char('/'))) return head;
     return QDir(baseDir).absoluteFilePath(head);
 }
 
@@ -109,10 +104,13 @@ struct Reader {
 
     void absorbPlaylist(const QString &path, Imported &r) {
         const QString canonical = QFileInfo(path).absoluteFilePath();
-        if (visited.contains(canonical)) return;   // 循环/重复引用防护
+        if (visited.contains(canonical)) return; // 循环/重复引用防护
         visited.insert(canonical);
         const QString text = readText(canonical);
-        if (text.isEmpty()) { r.fail(); return; }
+        if (text.isEmpty()) {
+            r.fail();
+            return;
+        }
         const QString baseDir = QFileInfo(canonical).absolutePath();
         const QStringList lines = text.split(QChar('\n'), Qt::SkipEmptyParts);
         QString title;
@@ -120,10 +118,14 @@ struct Reader {
             if (cancel && cancel->load()) return;
             const QString line = raw.trimmed();
             if (line.isEmpty()) continue;
-            if (line.startsWith("#EXTINF:", Qt::CaseInsensitive)) { title = line.section(',',1); continue; }
-            if (line.startsWith(QLatin1Char('#'))) continue;   // 注释/EXTINF/marker 一律跳过
+            if (line.startsWith("#EXTINF:", Qt::CaseInsensitive)) {
+                title = line.section(',', 1);
+                continue;
+            }
+            if (line.startsWith(QLatin1Char('#'))) continue; // 注释/EXTINF/marker 一律跳过
             absorbLine(line, baseDir, r);
-            if (!title.isEmpty() && (line.startsWith("http://") || line.startsWith("https://"))) r.names.insert(line,title);
+            if (!title.isEmpty() && (line.startsWith("http://") || line.startsWith("https://")))
+                r.names.insert(line, title);
             title.clear();
         }
     }
@@ -138,7 +140,7 @@ struct Reader {
         }
         bool isExtended = false;
         const QString key = toIdentityKey(line, baseDir, &isExtended);
-        if (isExtended) {   // TTPlayer 扩展写法：精确的一条 CUE 分轨 / 归档里的一个条目
+        if (isExtended) { // TTPlayer 扩展写法：精确的一条 CUE 分轨 / 归档里的一个条目
             r.keep(key, filePartExists(key));
             return;
         }
@@ -149,14 +151,18 @@ struct Reader {
             if (visited.contains(canonical)) return;
             visited.insert(canonical);
             QDir directory(key);
-            const auto files = directory.entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks, QDir::Name);
-            for (const QFileInfo &entry : files) absorbLine(entry.absoluteFilePath(), key, r);
+            const auto files =
+                directory.entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks, QDir::Name);
+            for (const QFileInfo &entry : files)
+                absorbLine(entry.absoluteFilePath(), key, r);
             return;
         }
         const QString suffix = fi.suffix().toLower();
         if (suffix == QLatin1String("m3u") || suffix == QLatin1String("m3u8")) {
-            if (fi.exists()) absorbPlaylist(key, r);
-            else r.fail();
+            if (fi.exists())
+                absorbPlaylist(key, r);
+            else
+                r.fail();
             return;
         }
         if (suffix == "cue" && fi.exists()) {
@@ -167,15 +173,20 @@ struct Reader {
             return;
         }
         if (Archive::looksLikeArchive(key) && fi.exists()) {
-            for (const QString &entry : Archive::listAudioEntries(key)) r.keep(Archive::entryUrl(key,entry).toString(),true);
+            for (const QString &entry : Archive::listAudioEntries(key))
+                r.keep(Archive::entryUrl(key, entry).toString(), true);
             return;
         }
         if (fi.exists()) {
-            if (exts.contains(suffix)) r.keep(key, true);
-            else r.fail();   // 不可播的后缀（备注/封面/别的支持不了的）留下只是假条目
+            if (exts.contains(suffix))
+                r.keep(key, true);
+            else
+                r.fail(); // 不可播的后缀（备注/封面/别的支持不了的）留下只是假条目
         } else {
-            if (exts.contains(suffix)) r.keep(key, false);   // 声明为可播但文件不在盘上：留成失效
-            else r.fail();
+            if (exts.contains(suffix))
+                r.keep(key, false); // 声明为可播但文件不在盘上：留成失效
+            else
+                r.fail();
         }
     }
 };
@@ -189,9 +200,12 @@ bool importFile(const QString &path, Imported &out) {
 }
 
 void importPaths(const QStringList &paths, Imported &out, const std::atomic<bool> *cancel) {
-    Reader reader;reader.cancel=cancel;
-    for (const QString &path : paths) reader.absorbLine(path,QDir::currentPath(),out);
-    for (const QString &image : out.coveredImages) out.keys.removeAll(image);
+    Reader reader;
+    reader.cancel = cancel;
+    for (const QString &path : paths)
+        reader.absorbLine(path, QDir::currentPath(), out);
+    for (const QString &image : out.coveredImages)
+        out.keys.removeAll(image);
 }
 
 } // namespace PlaylistM3U

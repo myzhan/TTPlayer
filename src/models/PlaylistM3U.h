@@ -1,6 +1,6 @@
 #pragma once
 
-// 自建歌单的 M3U / M3U8 读写（F04）。对齐 Swift Models/PlaylistM3U.swift 一套行写法：
+// 自建歌单的 M3U / M3U8 读写（F04）。行写法：
 // - 普通文件 → 绝对路径（第三方播放器也认）
 // - 电台 → 完整 http/https 地址
 // - 精确选中的一条 CUE 分轨 → `<分轨表路径>#track=<轨号>`
@@ -29,8 +29,8 @@ extern const QString compatibilityNote;
 QString lineFor(const Track &track);
 
 /// 按键导出。names/durations 是键 → 显示名 / 秒（缺失写空名、-1 时长）
-bool exportKeys(const QStringList &keys, const QHash<QString, QString> &names,
-                const QHash<QString, double> &durations, const QString &path);
+bool exportKeys(const QStringList &keys, const QHash<QString, QString> &names, const QHash<QString, double> &durations,
+                const QString &path);
 /// 用界面上正在显示的那批曲目导出（键从曲目现算，保证与存档写法一致）
 bool exportTracks(const QList<Track> &tracks, const QString &path);
 
@@ -44,7 +44,7 @@ struct Imported {
     QHash<QString, QString> names;
 
     void keep(const QString &key, bool exists) {
-        if (seen.contains(key)) return;   // 嵌套/循环引用会反复递同一首，歌单里只留一行
+        if (seen.contains(key)) return; // 嵌套/循环引用会反复递同一首，歌单里只留一行
         seen.insert(key);
         keys.append(key);
         if (!exists) missing.append(key);

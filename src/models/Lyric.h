@@ -1,6 +1,6 @@
 #pragma once
 
-// LRC 歌词解析与查找（对应 Swift Models/Lyric.swift）。支持一行多时间标签、
+// LRC 歌词解析与查找。支持一行多时间标签、
 // [mm:ss] / [mm:ss.xx] / [mm:ss:xxx]、全局 [offset:±毫秒]（正值=歌词提前，解析时
 // 已算进每行 time，显示不再二次叠加）。二分查当前行。
 // 查找优先级：同名 .lrc → 同目录归一化唯一命中（「01 - 歌名」↔「歌名」），拿不准
@@ -15,7 +15,7 @@
 #include <vector>
 
 struct LyricLine {
-    double time = 0;   // 秒（已含 offset）
+    double time = 0; // 秒（已含 offset）
     QString text;
 };
 
@@ -31,9 +31,7 @@ public:
 
     /// 把「本段内的播放位置」换成歌词自己的时间轴：整盘词加段起点，
     /// 用户校准（正值 = 歌词延后显示）减掉。显示与查行只认这一个换算
-    double alignedTime(double segmentTime, double delay) const {
-        return segmentTime + m_mirrorShift - delay;
-    }
+    double alignedTime(double segmentTime, double delay) const { return segmentTime + m_mirrorShift - delay; }
 
     /// 当前时间对应的行下标；早于首行返回 -1（显示「纯音乐/无歌词」）
     int lineIndexAt(double t) const;

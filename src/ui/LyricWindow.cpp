@@ -7,23 +7,25 @@
 
 LyricWindow::LyricWindow(PlayerController *controller, QWidget *parent)
     : SkinWindow(QStringLiteral("歌词"), true, parent), m_controller(controller) {
-    resize(480, 260 + 30);   // 高度补上自绘标题条（~30）
+    resize(480, 260 + 30); // 高度补上自绘标题条（~30）
     setMinimumSize(320, 160);
 
     connect(m_controller, &PlayerController::trackChanged, this, &LyricWindow::reload);
     connect(m_controller, &PlayerController::lyricShiftChanged, this, &LyricWindow::reload);
-    connect(m_controller, &PlayerController::positionTicked, this,
-            [this](double pos, double) {
-                m_pos = pos;
-                // 查行只认控制器对齐后的歌词时间轴（整盘词加段起点、用户校准减掉）
-                const int idx = m_lyric.lineIndexAt(m_controller->alignedLyricTime(pos));
-                if (idx != m_index) { m_index = idx; update(); }
-            });
+    connect(m_controller, &PlayerController::positionTicked, this, [this](double pos, double) {
+        m_pos = pos;
+        // 查行只认控制器对齐后的歌词时间轴（整盘词加段起点、用户校准减掉）
+        const int idx = m_lyric.lineIndexAt(m_controller->alignedLyricTime(pos));
+        if (idx != m_index) {
+            m_index = idx;
+            update();
+        }
+    });
     reload();
 }
 
 void LyricWindow::reload() {
-    m_lyric = m_controller->currentLyric();   // 控制器统一持有当前歌词
+    m_lyric = m_controller->currentLyric(); // 控制器统一持有当前歌词
     m_pos = m_controller->position();
     m_index = m_lyric.lineIndexAt(m_controller->alignedLyricTime(m_pos));
     update();
@@ -36,8 +38,7 @@ void LyricWindow::paintBody(QPainter *p, const QRectF &r) {
     const QRectF box(0, 0, r.width(), r.height());
     // 统一毛玻璃：与主窗/列表窗同一层浅玻璃（不再铺深蓝 well），单一 alpha。
     const float wA = GlassStyle::enabled() ? GlassStyle::wellAlpha() : 1.0f;
-    Painter::drawWell(p, box.adjusted(0.5, 0.5, -0.5, -0.5),
-                      Theme::windowTop, Theme::windowBottom, wA, 5);
+    Painter::drawWell(p, box.adjusted(0.5, 0.5, -0.5, -0.5), Theme::windowTop, Theme::windowBottom, wA, 5);
 
     const QRectF area = box.adjusted(14, 10, -14, -10);
     if (m_lyric.isEmpty()) {

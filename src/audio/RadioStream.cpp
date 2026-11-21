@@ -17,8 +17,7 @@
 class RadioFetcher : public QObject {
     Q_OBJECT
 public:
-    RadioFetcher(QUrl url, RadioStreamSource *sink)
-        : m_url(std::move(url)), m_sink(sink) {}
+    RadioFetcher(QUrl url, RadioStreamSource *sink) : m_url(std::move(url)), m_sink(sink) {}
 
 public slots:
     void run() {
@@ -39,9 +38,9 @@ public slots:
             consume(c);
         });
         connect(m_reply, &QNetworkReply::finished, this, [this] {
-            const int status=m_reply?m_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt():0;
-            if(m_reply&&m_reply->error()!=QNetworkReply::NoError&&m_sink->onError)
-                m_sink->onError(status,m_reply->errorString());
+            const int status = m_reply ? m_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() : 0;
+            if (m_reply && m_reply->error() != QNetworkReply::NoError && m_sink->onError)
+                m_sink->onError(status, m_reply->errorString());
             if (m_reply) {
                 const QByteArray c = m_reply->readAll();
                 consume(c);
@@ -64,25 +63,37 @@ public slots:
 
 private:
     void consume(const QByteArray &data) {
-        if (m_interval <= 0) { if (!data.isEmpty()) m_sink->push(data.constData(), data.size()); return; }
+        if (m_interval <= 0) {
+            if (!data.isEmpty()) m_sink->push(data.constData(), data.size());
+            return;
+        }
         int offset = 0;
         while (offset < data.size() && !m_sink->stopRequested()) {
             if (m_audioLeft > 0) {
                 const int n = std::min(m_audioLeft, int(data.size()) - offset);
-                m_sink->push(data.constData()+offset, n); offset += n; m_audioLeft -= n;
+                m_sink->push(data.constData() + offset, n);
+                offset += n;
+                m_audioLeft -= n;
             } else if (m_metaLeft < 0) {
-                m_metaLeft = uint8_t(data[offset++]) * 16; m_metadata.clear();
-                if (m_metaLeft == 0) { m_audioLeft = m_interval; m_metaLeft = -1; }
+                m_metaLeft = uint8_t(data[offset++]) * 16;
+                m_metadata.clear();
+                if (m_metaLeft == 0) {
+                    m_audioLeft = m_interval;
+                    m_metaLeft = -1;
+                }
             } else {
                 const int n = std::min(m_metaLeft, int(data.size()) - offset);
-                m_metadata.append(data.constData()+offset, n);offset += n;m_metaLeft -= n;
+                m_metadata.append(data.constData() + offset, n);
+                offset += n;
+                m_metaLeft -= n;
                 if (!m_metaLeft) {
                     static const QRegularExpression title(QStringLiteral("StreamTitle='(.*?)';"));
                     QString text = QString::fromUtf8(m_metadata);
                     if (text.contains(QChar::ReplacementCharacter)) text = QString::fromLatin1(m_metadata);
                     const auto match = title.match(text);
                     if (match.hasMatch() && m_sink->onMetadata) m_sink->onMetadata(match.captured(1));
-                    m_audioLeft = m_interval;m_metaLeft = -1;
+                    m_audioLeft = m_interval;
+                    m_metaLeft = -1;
                 }
             }
         }
@@ -122,15 +133,15 @@ void RadioStreamSource::stop() {
     m_stopReq.store(true);
     {
         std::lock_guard<std::mutex> lk(m_mtx);
-        m_cv.notify_all();   // 唤醒可能卡在背压 push 里的工作线程
+        m_cv.notify_all(); // 唤醒可能卡在背压 push 里的工作线程
     }
     if (m_thread) {
-        m_thread->quit();    // 事件循环退出（若正阻塞在 push，已被上面 notify 放开）
+        m_thread->quit(); // 事件循环退出（若正阻塞在 push，已被上面 notify 放开）
         m_thread->wait();
         delete m_thread;
         m_thread = nullptr;
     }
-    m_fetcher = nullptr;     // 随 QThread::finished 的 deleteLater 释放
+    m_fetcher = nullptr; // 随 QThread::finished 的 deleteLater 释放
 }
 
 void RadioStreamSource::push(const char *data, qint64 len) {
@@ -138,15 +149,14 @@ void RadioStreamSource::push(const char *data, qint64 len) {
     qint64 off = 0;
     while (off < len && !m_stopReq.load()) {
         if (m_buf.size() >= kCapBytes) {
-            m_cv.wait(lk);   // 等消费侧腾空间（read 里 notify）
+            m_cv.wait(lk); // 等消费侧腾空间（read 里 notify）
             continue;
         }
-        const size_t take =
-            size_t(std::min<qint64>(qint64(kCapBytes - m_buf.size()), len - off));
+        const size_t take = size_t(std::min<qint64>(qint64(kCapBytes - m_buf.size()), len - off));
         const char *p = data + off;
         m_buf.insert(m_buf.end(), p, p + take);
         off += qint64(take);
-        m_cv.notify_all();   // 唤醒读侧
+        m_cv.notify_all(); // 唤醒读侧
     }
 }
 
@@ -161,13 +171,13 @@ int64_t RadioStreamSource::read(uint8_t *buf, int buf_size) {
     std::unique_lock<std::mutex> lk(m_mtx);
     // 没数据就阻塞等：直到有字节 / 流结束 / 被停止
     m_cv.wait(lk, [&] { return !m_buf.empty() || m_done || m_stopReq.load(); });
-    if (m_buf.empty()) return 0;   // 结束或停止 → EOF（Decoder 映射 AVERROR_EOF）
+    if (m_buf.empty()) return 0; // 结束或停止 → EOF（Decoder 映射 AVERROR_EOF）
     const size_t n = std::min<size_t>(size_t(buf_size), m_buf.size());
     for (size_t i = 0; i < n; ++i) {
         buf[i] = m_buf.front();
         m_buf.pop_front();
     }
-    m_cv.notify_all();             // 唤醒可能卡在背压的 push
+    m_cv.notify_all(); // 唤醒可能卡在背压的 push
     return int64_t(n);
 }
 

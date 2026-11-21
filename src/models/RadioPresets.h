@@ -1,6 +1,6 @@
 #pragma once
 
-// 一台内置电台（出厂内容，对齐 Swift Models/RadioPresets.swift）。
+// 一台内置电台（出厂内容）。
 //
 // address 存字符串而不是 QUrl：入表一律走 RadioURL.normalize 那一条口子，与用户手输、
 // m3u 导进来的地址共用同一个校验与同一个身份写法（电台的 identityKey 就是完整地址），
@@ -16,12 +16,12 @@ struct RadioPreset {
     QString name;
     QString address;
 
-    QUrl url() const;              // normalize 后的地址；非法返回空 QUrl
-    QString identityKey() const;   // 与 Track::identityKey 对齐（完整地址）
-    Track toTrack() const;         // 建成 radio Track，标题走内置台名
+    QUrl url() const;            // normalize 后的地址；非法返回空 QUrl
+    QString identityKey() const; // 与 Track::identityKey 对齐（完整地址）
+    Track toTrack() const;       // 建成 radio Track，标题走内置台名
 };
 
-// 电台地址归一化（对齐 Swift Audio/RadioStream.swift 的 RadioURL）：只认 http/https，
+// 电台地址归一化：只认 http/https，
 // 没写协议补 http://，剥掉从浏览器复制常带的引号/尖括号。
 namespace RadioURL {
 QUrl normalize(const QString &raw);
@@ -35,5 +35,5 @@ QString displayName(const QUrl &url);
 // 台名也不写进别名表（那张记的是用户自己起的名字）：显示时按地址兜底。
 namespace RadioPresets {
 const QList<RadioPreset> &all();
-QString nameFor(const QUrl &url);   // 这个地址是不是出厂自带的那一台（是 → 内置台名）
+QString nameFor(const QUrl &url); // 这个地址是不是出厂自带的那一台（是 → 内置台名）
 } // namespace RadioPresets
