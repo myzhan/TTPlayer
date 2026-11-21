@@ -1373,7 +1373,7 @@ int main(int argc, char *argv[]) {
     }
     if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--version")) {
         QTextStream out(stdout);
-        out << "TTPlayer 1.1.4 Qt " << qVersion() << " " << QSysInfo::currentCpuArchitecture() << '\n';
+        out << "TTPlayer 1.1.5 Qt " << qVersion() << " " << QSysInfo::currentCpuArchitecture() << '\n';
         return 0;
     }
     std::unique_ptr<InstanceGuard> instance;

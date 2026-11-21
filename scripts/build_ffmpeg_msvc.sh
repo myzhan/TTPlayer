@@ -41,6 +41,7 @@ ffmpeg_begin_build "$PREFIX"
 BDIR="$PREFIX/.obj-msvc"
 rm -rf "$BDIR"
 mkdir -p "$BDIR"
+# configure 的 MSVC 过滤器会把 -L 转成 -libpath:；直接传 -LIBPATH: 会被再次转换、损坏路径。
 ( cd "$BDIR" && "$SRC/configure" --toolchain=msvc --arch=x86_64 --target-os=win64 \
     --prefix="$PREFIX" \
     --enable-static --disable-shared \
@@ -49,7 +50,7 @@ mkdir -p "$BDIR"
     --enable-zlib \
     --enable-avformat --enable-avcodec --enable-avutil --enable-swresample \
     --extra-cflags="-I$(cygpath -m "$ZLIB_ROOT/include")" \
-    --extra-ldflags="-LIBPATH:$(cygpath -m "$ZLIB_ROOT/lib")" \
+    --extra-ldflags="-L$(cygpath -m "$ZLIB_ROOT/lib")" \
     "${COMPONENTS[@]}" )
 
 ffmpeg_make_install "$BDIR" "$(nproc)"
