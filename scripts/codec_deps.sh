@@ -67,8 +67,30 @@ codecs_begin_build() {
 }
 
 codecs_finish_build() {
+    # FFmpeg 的 test_pkg_config 只调 `pkg-config --libs`（不带 --static），不会展开
+    # Requires.private；静态库场景下 `-lvorbis` 单独链接就会缺 ogg 符号
+    # （_oggpack_*）。Linux/MinGW/MSVC 是直装到 prefix，不像 macOS 那样过
+    # codecs_merge_libs，所以这里统一把私有依赖提升为公开依赖。幂等：
+    # 第二次运行读到的已是 Requires:，合并后写出同样内容。
+    codecs_promote_pc_dir "$1/lib/pkgconfig"
     printf '%s\n' "$3" > "$1/.built-commit"
     printf '%s\n' "$2" > "$1/.built-config"
+}
+
+codecs_promote_pc_dir() {
+    local dir="$1" pc
+    [[ -d "$dir" ]] || return 0
+    for pc in "$dir"/*.pc; do
+        [[ -f "$pc" ]] || continue
+        awk '
+            /^Requires:/          { v = $0; sub(/^Requires:[ \t]*/, "", v)
+                                    req = (req == "" ? v : req " " v); next }
+            /^Requires\.private:/ { v = $0; sub(/^Requires\.private:[ \t]*/, "", v)
+                                    req = (req == "" ? v : req " " v); next }
+            { print }
+            END { if (req != "") printf "Requires: %s\n", req }
+        ' "$pc" > "$pc.tmp" && mv "$pc.tmp" "$pc"
+    done
 }
 
 # CMake 驱动的三个 Xiph 库；$3 起是透传的 -D 参数（架构、CRT 等）。

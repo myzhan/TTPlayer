@@ -119,11 +119,14 @@ if [[ "${1:-}" == "--force" ]] || ! codecs_is_built "$CODEC_LIBS_PREFIX" "$CODEC
     # LAME：上游 Makefile.MSVC 是 VS6 时代产物（/machine:I386、/MT、废弃开关），
     # 用最小 CMake 包装现编，直接得到 mp3lame.lib 并安装回头文件。
     LAME_DIR="$(cygpath -m "$CODEC_3RD/lame")"
+    # 注意：heredoc 不加引号是为了让 ${LAME_DIR} 被展开，因此 CMake 自己的变量
+    # （${CMAKE_CURRENT_BINARY_DIR}、${LAME_SOURCES}）必须写 \${…}；漏一个就会在
+    # set -u 下报 unbound variable。
     cat > "$CODEC_BUILD/lame-CMakeLists.txt" <<LAME_CMAKE
 cmake_minimum_required(VERSION 3.21)
 project(ttplayer_mp3lame C)
 file(READ "${LAME_DIR}/configMS.h" _lame_cfg)
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/config.h" "\${_lame_cfg}")
+file(WRITE "\${CMAKE_CURRENT_BINARY_DIR}/config.h" "\${_lame_cfg}")
 file(GLOB LAME_SOURCES "${LAME_DIR}/libmp3lame/*.c" "${LAME_DIR}/mpglib/*.c")
 add_library(mp3lame STATIC \${LAME_SOURCES})
 target_include_directories(mp3lame PUBLIC "${LAME_DIR}/include" "${LAME_DIR}" "\${CMAKE_CURRENT_BINARY_DIR}")
