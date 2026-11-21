@@ -25,3 +25,6 @@
 [submodule "3rd/lame"]
 	path = 3rd/lame
 	url = https://github.com/lameproject/lame.git
+[submodule "3rd/bzip2"]
+	path = 3rd/bzip2
+	url = https://github.com/libarchive/bzip2.git

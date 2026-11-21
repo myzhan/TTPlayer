@@ -121,6 +121,29 @@ if(TTPLAYER_VENDORED)
   set(LIBLZMA_HAS_EASY_ENCODER 1 CACHE INTERNAL "")
   set(LIBLZMA_HAS_LZMA_PRESET 1 CACHE INTERNAL "")
 
+  # bzip2：libarchive 读 tar.bz2 必须有内置 bzlib。找不到它时 libarchive 会退回
+  # 外部 `bzip2 -d` 程序过滤器，Windows 的 MSYS bzip2 在管道上会卡死不返回
+  # （CI 实测整档 120s 超时）。这里只取上游库源码编静态库，不用它的 CMakeLists：
+  # 那份 CMake 会注册 CTest、man 与安装规则，把上游噪音带进本工程。
+  set(_tt_bz2_dir "${CMAKE_CURRENT_SOURCE_DIR}/3rd/bzip2")
+  set(BZ_VERSION 1.1.0)
+  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bzip2")
+  configure_file("${_tt_bz2_dir}/bz_version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/bzip2/bz_version.h" @ONLY)
+  add_library(bz2static STATIC
+      "${_tt_bz2_dir}/blocksort.c" "${_tt_bz2_dir}/huffman.c" "${_tt_bz2_dir}/crctable.c"
+      "${_tt_bz2_dir}/randtable.c" "${_tt_bz2_dir}/compress.c" "${_tt_bz2_dir}/decompress.c"
+      "${_tt_bz2_dir}/bzlib.c")
+  target_include_directories(bz2static PUBLIC "${_tt_bz2_dir}" "${CMAKE_CURRENT_BINARY_DIR}/bzip2")
+  target_compile_definitions(bz2static PUBLIC BZ2_STATICLIB)
+  if(WIN32)
+    target_compile_definitions(bz2static PRIVATE _CRT_SECURE_NO_WARNINGS)
+  endif()
+  # libarchive 用 FindBZip2：把 vendored 的头与 target 直接交给它。
+  set(BZIP2_INCLUDE_DIR "${_tt_bz2_dir}" CACHE PATH "" FORCE)
+  set(BZIP2_LIBRARIES bz2static CACHE STRING "" FORCE)
+  set(BZIP2_VERSION_STRING "${BZ_VERSION}" CACHE STRING "" FORCE)
+  set(BZIP2_FOUND TRUE CACHE BOOL "" FORCE)
+
   # libarchive：保留 zlib / bzip2 / lzma（现网支持的 ZIP、tar.gz/bz2、7z），
   # 其余可选依赖（OpenSSL / libxml2 / expat / lz4 / zstd / libb2）全部关闭：
   # libb2 开着会静默链上 Homebrew 的 libb2.dylib，而 BLAKE2 用 libarchive 自带的实现就够。
@@ -136,6 +159,11 @@ if(TTPLAYER_VENDORED)
   set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
   add_subdirectory(3rd/libarchive EXCLUDE_FROM_ALL)
   set(ARCHIVE_LIBRARY archive_static)
+  # 校验 libarchive 真的用上了内置 bz2：这条退化只能从生成物里看出来，必须硬拦。
+  file(STRINGS "${CMAKE_CURRENT_BINARY_DIR}/3rd/libarchive/config.h" _tt_bz2_config REGEX "HAVE_BZLIB_H")
+  if(NOT _tt_bz2_config MATCHES "HAVE_BZLIB_H 1")
+    message(FATAL_ERROR "libarchive 没有启用内置 bzip2（${_tt_bz2_config}）：tar.bz2 会退回外部 bzip2 程序过滤器")
+  endif()
   # 头文件仍用稳定子集声明：shim 只声明用到的接口，不复制上游实现。
   set(CLIBARCHIVE_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/src/clibarchive/include)
 
@@ -166,7 +194,7 @@ if(TTPLAYER_VENDORED)
 
   # 3rd/ 下的上游历史代码有少量警告，我们不改人家源码，也不让它们进主工程日志。
   # （产品的 -Wall/-Wextra 门禁只针对 ttplayer 自己的源码。）
-  foreach(_tt_vendor_target zlibstatic zlib archive_static liblzma SDL3-static)
+  foreach(_tt_vendor_target zlibstatic zlib archive_static liblzma bz2static SDL3-static)
     if(TARGET ${_tt_vendor_target})
       if(MSVC)
         target_compile_options(${_tt_vendor_target} PRIVATE /w)

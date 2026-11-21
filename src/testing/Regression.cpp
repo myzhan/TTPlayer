@@ -1000,6 +1000,12 @@ public:
             out << "PERF cover_cache_bytes=" << CoverArt::cacheBytes() << '\n';
         } else if (suite == "ARCHIVE") {
             const QDir fixtures(qEnvironmentVariable("TTPLAYER_TESTDIR", QStringLiteral("testlib")));
+            // 7z 与加密 ZIP 只由 7z 工具现场生成；缺工具时 fixture-skips 已记一条 SKIP，
+            // 这里也显式列出，避免「少测了两档却看起来全过」。
+            if (!QFile::exists(fixtures.filePath(QStringLiteral("archive.7z"))))
+                out << "REVIEW_PROBE archive_7z SKIP fixture unavailable\n";
+            if (!QFile::exists(fixtures.filePath(QStringLiteral("encrypted.zip"))))
+                out << "REVIEW_PROBE encrypted_archive_rejected SKIP fixture unavailable\n";
             int containers = 0;
             for (const QString &name :
                  fixtures.entryList({"*.zip", "*.tar", "*.tar.gz", "*.tar.bz2", "*.7z"}, QDir::Files, QDir::Name)) {
@@ -1021,13 +1027,23 @@ public:
                     QString parsed, entryName;
                     check("archive_URL_roundtrip", Archive::parseEntryUrl(url, parsed, entryName) &&
                                                        parsed == archivePath && entryName == entry);
+                    // 开流与读 PCM 分开计时并刷到 stderr：超时被杀时能分辨卡在
+                    // FFmpeg 探测（openStream）还是解归档取数据（read）。
+                    QElapsedTimer stage;
+                    stage.start();
                     auto decoder =
                         Decoder::openStream(std::make_shared<ArchiveEntrySource>(archivePath, entry), url.toString());
+                    std::fprintf(stderr, "ARCHIVE openStream ok=%d ms=%lld\n", int(bool(decoder)),
+                                 static_cast<long long>(stage.elapsed()));
+                    std::fflush(stderr);
                     check("archive_true_decoder", bool(decoder));
                     if (decoder) {
                         float l[128], r[128], repeat[128], right[128];
+                        stage.restart();
                         const int count = decoder->read(l, r, 128, 44100);
                         const int again = decoder->read(repeat, right, 128, 44100);
+                        std::fprintf(stderr, "ARCHIVE read2 ms=%lld\n", static_cast<long long>(stage.elapsed()));
+                        std::fflush(stderr);
                         check("archive_seek_PCM", count == 128 && again == 128 && std::equal(l, l + 128, repeat));
                     }
                 }
