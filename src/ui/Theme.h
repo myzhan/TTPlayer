@@ -46,6 +46,8 @@ extern const QColor inkOnGlass, inkOnGlassSoft, inkOnGlassAccent;
 /// 而是给一组跨平台优先级字体栈 + sans-serif 兜底（消除 "missing font family" 告警）。
 namespace Fonts {
 extern const QFont base, small, tiny, title, panelTitle;
+// Windows 的纯数字读数使用 Segoe UI；其他平台与对应文本字体完全相同。
+extern const QFont numericSmall, numericTiny;
 }
 
 /// 跨平台视觉一致的地基：强制 Fusion 控件风格（不跟随各 OS 原生 style）+ 固定调色板

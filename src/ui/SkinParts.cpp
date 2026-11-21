@@ -564,10 +564,11 @@ double VolumeSlider::knobDiameter() const {
 }
 
 QRectF VolumeSlider::readoutRect() const {
-    const QFontMetricsF metrics(Fonts::tiny);
+    const QFontMetricsF textMetrics(Fonts::tiny);
+    const QFontMetricsF numberMetrics(Fonts::numericTiny);
     // 留足最长读数的字形宽度，不随当前数值改变槽长，避免拖动时跳动。
-    const double textWidth = qCeil(qMax(metrics.horizontalAdvance(QStringLiteral("100%")),
-                                        metrics.horizontalAdvance(QStringLiteral("静音")))) +
+    const double textWidth = qCeil(qMax(numberMetrics.horizontalAdvance(QStringLiteral("100%")),
+                                        textMetrics.horizontalAdvance(QStringLiteral("静音")))) +
                              2.0;
     return QRectF(width() - textWidth - 2.0, 0, textWidth, height());
 }
@@ -651,7 +652,7 @@ void VolumeSlider::paintEvent(QPaintEvent *) {
 
     // 右侧读数
     const QString pct = m_muted ? QStringLiteral("静音") : QStringLiteral("%1%").arg(int(m_value * 100));
-    p.setFont(Fonts::tiny);
+    p.setFont(m_muted ? Fonts::tiny : Fonts::numericTiny);
     p.setPen((m_muted || m_value == 0) ? Theme::meterRed : Theme::inkOnGlassSoft);
     p.drawText(readoutRect(), Qt::AlignVCenter | Qt::AlignRight, pct);
 }

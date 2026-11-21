@@ -26,7 +26,7 @@ protected:
         const qreal top = 6, bottom = height() - 26;
         if (bottom - top < 10) return;
         const qreal travel = bottom - top;
-        p.setFont(Fonts::tiny);
+        p.setFont(Fonts::numericTiny);
         for (double db : {12.0, 6.0, 0.0, -6.0, -12.0}) {
             const qreal ratio = (12 - db) / 24;
             const qreal y = top + travel * ratio;
@@ -106,12 +106,12 @@ EqWindow::EqWindow(AudioEnginePtr engine, QWidget *parent)
         f->setRange(-12, 12);
         m_faders[i] = f;
         auto *gain = new QLabel(QStringLiteral("0"), this);
-        gain->setFont(Fonts::tiny);
+        gain->setFont(Fonts::numericTiny);
         gain->setAlignment(Qt::AlignCenter);
         gain->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(Theme::inkOnGlassAccent.name()));
         m_gainLabels[i] = gain;
         auto *name = new QLabel(freqLabel(freqs[i]), this);
-        name->setFont(Fonts::tiny);
+        name->setFont(Fonts::numericTiny);
         name->setAlignment(Qt::AlignCenter);
         name->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(Theme::inkOnGlassSoft.name()));
         col->addWidget(f, 1);

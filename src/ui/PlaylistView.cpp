@@ -217,7 +217,7 @@ void PlaylistView::paintEvent(QPaintEvent *) {
             durText = clock(t.duration());
         else
             durText = QStringLiteral("...");
-        QFont durFont = Fonts::small;
+        QFont durFont = t.isRadio() ? Fonts::small : Fonts::numericSmall;
         durFont.setStyleStrategy(QFont::PreferMatch);
         p.setFont(durFont);
         p.setPen(isCurrent ? Theme::inkOnGlassAccent : Theme::inkOnGlassSoft);

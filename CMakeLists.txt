@@ -158,6 +158,8 @@ if(TTPLAYER_VENDORED)
   set(ENABLE_COVERAGE OFF CACHE BOOL "" FORCE)
   set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
   add_subdirectory(3rd/libarchive EXCLUDE_FROM_ALL)
+  # 上游只给静态库自身定义此宏；消费方也必须携带，避免 Windows 头文件声明为 dllimport。
+  target_compile_definitions(archive_static INTERFACE LIBARCHIVE_STATIC)
   set(ARCHIVE_LIBRARY archive_static)
   # 校验 libarchive 真的用上了内置 bz2：这条退化只能从生成物里看出来，必须硬拦。
   file(STRINGS "${CMAKE_CURRENT_BINARY_DIR}/3rd/libarchive/config.h" _tt_bz2_config REGEX "HAVE_BZLIB_H")

@@ -71,6 +71,30 @@ constexpr UInt32 kCfStringRefSize = sizeof(void *);
 #endif
 
 namespace {
+// 纯文本基准也走 QWidget：FreeType 对 QWidget / QImage 请求的字形缓存格式不同，
+// 直接在 QImage 上画字会把栅格化差异误报成遮挡。同屏父对象同时保证点字号 DPI 一致。
+class VolumeReadoutReference final : public QWidget {
+public:
+    VolumeReadoutReference(QWidget *source, const QRectF &rect, const QString &text, const QColor &color)
+        : QWidget(source), m_rect(rect), m_text(text), m_color(color) {
+        resize(source->size());
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setFont(font());
+        painter.setPen(m_color);
+        painter.drawText(m_rect, Qt::AlignVCenter | Qt::AlignRight, m_text);
+    }
+
+private:
+    QRectF m_rect;
+    QString m_text;
+    QColor m_color;
+};
+
 #ifdef Q_OS_WIN
 // 用真实 HWND 的 owner/扩展样式核对任务栏资格；offscreen 的 Qt flags 不能充当此证据。
 bool ownedToolWindow(QWidget *panel, QWidget *owner) {
@@ -1385,16 +1409,28 @@ public:
                 check("approved_dark_inkOnGlassAccent", Theme::inkOnGlassAccent.rgba() == 0xfff2a93bu);
                 check("approved_font_size",
                       Fonts::base.pointSize() == 13 && Fonts::small.pointSize() == 12 && Fonts::tiny.pointSize() == 11);
+                check("numeric_font_size_weight_preserved",
+                      Fonts::numericSmall.pointSize() == Fonts::small.pointSize() &&
+                          Fonts::numericTiny.pointSize() == Fonts::tiny.pointSize() &&
+                          Fonts::numericSmall.weight() == Fonts::small.weight() &&
+                          Fonts::numericTiny.weight() == Fonts::tiny.weight());
 #ifdef Q_OS_WIN
                 check("approved_font_families",
-                      Fonts::base.families() == QStringList{"Microsoft YaHei", "Segoe UI", "Helvetica Neue", "Arial",
-                                                            "Noto Sans", "DejaVu Sans", "PingFang SC", "sans-serif"});
-                check("windows_font_all_roles", QApplication::font().family() == QStringLiteral("Microsoft YaHei") &&
+                      Fonts::base.families() == QStringList{"Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI",
+                                                            "Helvetica Neue", "Arial", "Noto Sans", "DejaVu Sans",
+                                                            "PingFang SC", "sans-serif"});
+                check("windows_font_all_roles", QApplication::font().family() == QStringLiteral("Microsoft YaHei UI") &&
                                                     Fonts::small.family() == Fonts::base.family() &&
                                                     Fonts::tiny.family() == Fonts::base.family() &&
                                                     Fonts::title.family() == Fonts::base.family() &&
                                                     Fonts::panelTitle.family() == Fonts::base.family());
+                check("windows_numeric_font_roles",
+                      Fonts::numericSmall.family() == QStringLiteral("Segoe UI") &&
+                          Fonts::numericTiny.families() == Fonts::numericSmall.families() &&
+                          Fonts::numericTiny.families().contains("Microsoft YaHei UI"));
 #else
+                check("numeric_fonts_preserve_platform",
+                      Fonts::numericSmall == Fonts::small && Fonts::numericTiny == Fonts::tiny);
                 check("approved_font_families",
                       Fonts::base.families() == QStringList{"Segoe UI", "Helvetica Neue", "Arial", "Noto Sans",
                                                             "DejaVu Sans", "PingFang SC", "Microsoft YaHei",
@@ -1624,9 +1660,10 @@ public:
                     const QRectF groove = volume->grooveRect();
                     const double radius = volume->knobDiameter() / 2.0;
                     const QFontMetricsF metrics(Fonts::tiny);
+                    const QFontMetricsF numberMetrics(Fonts::numericTiny);
                     check("UI_volume_readout_fits_longest_text",
                           volume->width() == 96 && readout.left() >= 0 && readout.right() <= volume->width() &&
-                              readout.width() >= metrics.horizontalAdvance(QStringLiteral("100%")) &&
+                              readout.width() >= numberMetrics.horizontalAdvance(QStringLiteral("100%")) &&
                               readout.width() >= metrics.horizontalAdvance(QStringLiteral("静音")));
                     check("UI_volume_knob_cannot_cover_readout",
                           groove.left() - radius >= 0.5 && groove.right() + radius + 0.5 < readout.left());
@@ -1636,18 +1673,30 @@ public:
                         QImage actual(volume->size(), QImage::Format_ARGB32_Premultiplied);
                         actual.fill(Qt::transparent);
                         volume->render(&actual, QPoint(), QRegion(), QWidget::RenderFlags{});
-                        QImage expected(volume->size(), QImage::Format_ARGB32_Premultiplied);
-                        expected.fill(Qt::transparent);
-                        QPainter painter(&expected);
-                        painter.setRenderHint(QPainter::Antialiasing, true);
-                        painter.setFont(Fonts::tiny);
-                        painter.setPen((muted || value == 0) ? Theme::meterRed : Theme::inkOnGlassSoft);
                         const QString text =
                             muted ? QStringLiteral("静音") : QStringLiteral("%1%").arg(int(value * 100));
-                        painter.drawText(readout, Qt::AlignVCenter | Qt::AlignRight, text);
-                        painter.end();
+                        VolumeReadoutReference reference(
+                            volume, readout, text, (muted || value == 0) ? Theme::meterRed : Theme::inkOnGlassSoft);
+                        reference.setFont(muted ? Fonts::tiny : Fonts::numericTiny);
+                        QImage expected(volume->size(), QImage::Format_ARGB32_Premultiplied);
+                        expected.fill(Qt::transparent);
+                        reference.render(&expected, QPoint(), QRegion(), QWidget::RenderFlags{});
                         const QRect crop = readout.toAlignedRect();
-                        return actual.copy(crop) == expected.copy(crop) && volume->grooveRect() == groove;
+                        const bool matches = actual.copy(crop) == expected.copy(crop) && volume->grooveRect() == groove;
+                        if (!matches) {
+                            out << "REVIEW_PROBE volume_pixels value=" << value << " muted=" << muted
+                                << " widget_dpi=" << volume->logicalDpiX() << '/' << volume->logicalDpiY()
+                                << " reference_dpi=" << reference.logicalDpiX() << '/' << reference.logicalDpiY()
+                                << " widget_dpr=" << volume->devicePixelRatioF() << '\n';
+                            const QString report = qEnvironmentVariable("TTPLAYER_PROBE");
+                            if (!report.isEmpty()) {
+                                const QString stem =
+                                    report + QStringLiteral("/volume-%1-%2").arg(int(value * 100)).arg(muted);
+                                actual.save(stem + QStringLiteral("-actual.png"));
+                                expected.save(stem + QStringLiteral("-expected.png"));
+                            }
+                        }
+                        return matches;
                     };
                     check("UI_volume_readout_unobscured_pixels", textMatches(0, false) && textMatches(0.99, false) &&
                                                                      textMatches(1, false) && textMatches(1, true));
@@ -1670,6 +1719,9 @@ public:
                 window.toggleEqPanel();
                 check("UI_EQ_visible", window.m_eqWindow && window.m_eqWindow->isVisible());
                 auto *eq = window.m_eqWindow;
+                check("UI_EQ_gain_uses_numeric_font",
+                      std::all_of(eq->m_gainLabels.begin(), eq->m_gainLabels.end(),
+                                  [](const QLabel *label) { return label && label->font() == Fonts::numericTiny; }));
                 eq->m_preamp->setValue(6);
                 engine->setEQPreamp(6);
                 eq->m_faders[3]->setGain(4.5);
@@ -1708,7 +1760,10 @@ public:
                           }));
                 if (QGuiApplication::platformName() == QStringLiteral("windows")) {
                     check("UI_windows_resolved_font",
-                          QFontInfo(QApplication::font()).family() == QStringLiteral("Microsoft YaHei"));
+                          QFontInfo(QApplication::font()).family() == QStringLiteral("Microsoft YaHei UI"));
+                    check("UI_windows_resolved_numeric_font",
+                          QFontInfo(Fonts::numericSmall).family() == QStringLiteral("Segoe UI") &&
+                              QFontInfo(Fonts::numericTiny).family() == QStringLiteral("Segoe UI"));
                     QCoreApplication::processEvents();
                     const auto owned = [&] {
                         return std::all_of(windowsPanels.begin(), windowsPanels.end(),

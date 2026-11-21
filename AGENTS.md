@@ -3,7 +3,7 @@
 当前产品位于 `src/`，使用 C++20 / Qt 6 Widgets / FFmpeg / libarchive；Windows/Linux 输出使用 SDL3，macOS 按 UID 打开 HAL AudioUnit。
 修改行为时，应对照 `src/testing` 自检，不能仅以编译成功作为验收。
 
-**用户确认的视觉基线是当前 Qt 深色样式。Windows 字体按用户要求优先微软雅黑；所有品牌入口统一使用 AppIcon 耳机图标，音量读数修复只调整控件内部间距。其余字体、字号、配色、布局、透明度规则和控件外观保持不变。**
+**用户确认的视觉基线是当前 Qt 深色样式。Windows 中文字体按用户要求优先 Microsoft YaHei UI（普通微软雅黑兜底），独立的时间、百分比、均衡器数字读数用 Segoe UI；中文与数字读数分别按实际字体度量，保留既有字号和字重。所有品牌入口统一使用 AppIcon 耳机图标，音量读数修复只调整控件内部间距。macOS/Linux 字体及其余配色、布局、透明度规则和控件外观保持不变。**
 
 ## 必须遵守
 

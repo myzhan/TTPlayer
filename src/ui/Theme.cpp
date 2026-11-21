@@ -88,10 +88,11 @@ static QFont uiFont(int pt, bool bold) {
                    QStringLiteral("Noto Sans"), QStringLiteral("DejaVu Sans"), QStringLiteral("PingFang SC"),
                    QStringLiteral("Microsoft YaHei"), QStringLiteral("sans-serif")});
 #ifdef Q_OS_WIN
-    // Windows 优先微软雅黑，保留既有字号、字重与缺字回退；其他平台不变。
+    // Windows 中文优先微软雅黑 UI，普通微软雅黑兜底；保留字号和字重，其他平台不变。
     QStringList families = f.families();
     families.removeAll(QStringLiteral("Microsoft YaHei"));
     families.prepend(QStringLiteral("Microsoft YaHei"));
+    families.prepend(QStringLiteral("Microsoft YaHei UI"));
     f.setFamilies(families);
 #endif
     f.setStyleHint(QFont::SansSerif);
@@ -104,6 +105,22 @@ const QFont small = uiFont(12, false);
 const QFont tiny = uiFont(11, false);
 const QFont title = uiFont(13, true);
 const QFont panelTitle = uiFont(13, true);
+
+static QFont numericFont(const QFont &textFont) {
+#ifdef Q_OS_WIN
+    QFont f = textFont;
+    // 纯数字/时间/百分比用 Segoe UI；静态创建，绘制时不重建字体族列表。
+    QStringList families = f.families();
+    families.removeAll(QStringLiteral("Segoe UI"));
+    families.prepend(QStringLiteral("Segoe UI"));
+    f.setFamilies(families);
+    return f;
+#else
+    return textFont;
+#endif
+}
+const QFont numericSmall = numericFont(small);
+const QFont numericTiny = numericFont(tiny);
 } // namespace Fonts
 
 void Theme::applyAppStyle(QApplication *app) {

@@ -144,7 +144,7 @@ private:
     int64_t m_nextOutPos = 0;         // 下次 read 的交付位置：只按实际交付的 PCM 帧数推进
     int64_t m_runningOutPos = 0;      // 重采样输出时间轴，包含 seek 时丢弃的样本
     bool m_outputPosAnchored = false; // 冷启动后只用第一帧 PTS 定位一次，之后按实际产出计数
-    int64_t m_ptsBase = 0;       // 可听第 0 帧的 pts 坐标
+    int64_t m_ptsBase = 0;            // 可听第 0 帧的 pts 坐标
     bool m_ptsCalibrated = false;
     int64_t m_discardUntil = -1; // seek 后要丢到的目标帧（-1 = 无需丢弃）
     bool m_flushSent = false;
