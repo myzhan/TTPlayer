@@ -48,8 +48,12 @@ def version(path):
 def check_major(path, name):
     line = version(path)
     major = line.split("version ")[-1].split(".")[0] if "version " in line else "?"
-    if major != "18":
-        print(f"注意：{name} 是 {line}；规则按 18 写，换版本可能出现格式漂移", file=sys.stderr)
+    if major != PINNED.split(".")[0]:
+        # 容错不是宽容：格式规则按 18 写，换成别的版本会静默漂移（PATH 上装了
+        # Homebrew 的 clang-format 就会遮蔽 venv 里的固定版），必须直接报错。
+        sys.exit(f"{name} 版本不对：{line}；本项目固定 {PINNED}。"
+                 f"装法：pip install clang-format=={PINNED} clang-tidy=={PINNED}"
+                 f"（或用 {name.upper().replace('-', '_')} 指向该版本）")
 
 
 def git(*args, check=True):

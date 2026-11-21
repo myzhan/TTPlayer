@@ -42,6 +42,7 @@
 #include <cmath>
 #include <chrono>
 #include <algorithm>
+#include <cstdio>
 #include <vector>
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -175,10 +176,12 @@ public:
         const QString sameExt = AudioConvert::uniqueOutputPath(srcPath, dir.path(), QStringLiteral("wav"));
         check("convert_output_never_overwrites",
               sameExt != srcPath && sameExt.endsWith(QStringLiteral("ramp (2).wav")));
-        check("convert_output_dir_defaults_to_source",
-              QFileInfo(
-                  AudioConvert::uniqueOutputPath(QStringLiteral("/x/y/song.wav"), QString(), QStringLiteral("flac")))
-                      .absolutePath() == QStringLiteral("/x/y"));
+        // 用真实临时目录，而不是 "/x/y" 这种 POSIX 字面量：Windows 会把它解析到当前盘符
+        // （C:/x/y），直接比字符串就假失败了。
+        const QString defaultSource = dir.path() + QStringLiteral("/song.wav");
+        const QString defaultDir =
+            QFileInfo(AudioConvert::uniqueOutputPath(defaultSource, QString(), QStringLiteral("flac"))).absolutePath();
+        check("convert_output_dir_defaults_to_source", defaultDir == QDir(dir.path()).absolutePath());
 
         // —— 参数翻译：有损只带码率，无损只带压缩档 ——
         ConvertParams lossyParams;
@@ -1001,6 +1004,10 @@ public:
             for (const QString &name :
                  fixtures.entryList({"*.zip", "*.tar", "*.tar.gz", "*.tar.bz2", "*.7z"}, QDir::Files, QDir::Name)) {
                 const QString archivePath = fixtures.filePath(name);
+                // 套件超时会直接杀掉进程，stdout 里的探针结果也就跟着丢了；容器名与条目名
+                // 先刷到 stderr，卡在哪个归档上（Windows 曾整档超时）从日志里直接能看出来。
+                std::fprintf(stderr, "ARCHIVE container=%s\n", qUtf8Printable(name));
+                std::fflush(stderr);
                 const auto entries = Archive::listAudioEntries(archivePath);
                 if (name == "encrypted.zip") {
                     check("encrypted_archive_rejected", entries.isEmpty());
@@ -1008,6 +1015,8 @@ public:
                 }
                 check("archive_entries", !entries.isEmpty());
                 for (const QString &entry : entries) {
+                    std::fprintf(stderr, "ARCHIVE entry=%s\n", qUtf8Printable(entry));
+                    std::fflush(stderr);
                     const QUrl url = Archive::entryUrl(archivePath, entry);
                     QString parsed, entryName;
                     check("archive_URL_roundtrip", Archive::parseEntryUrl(url, parsed, entryName) &&
