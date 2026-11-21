@@ -301,6 +301,9 @@ python3 scripts/package.py
 
 - macOS：`build/dist/ttplayer.app`，脚本会重签名；packaging 资源在 `packaging/`。
 - Linux / Windows：安装到 `build/dist`，生成对应可执行与桌面文件。
+- 发布用的 Linux AppImage 不在这里生成，而是由 `.github/workflows/release.yml` 在 ubuntu:22.04 容器里用
+  linuxdeploy + linuxdeploy-plugin-qt 现打（Qt 库与插件一起打包，glibc/GL/X11/DBus 仍由系统提供）。
+  本机没有 Linux 环境时，只能靠 workflow_dispatch 试跑验证，不要用 macOS 产物代推结论。
 - 打包脚本只生成本地产物，不发布、不打 tag。
 - 更新 README 截图前，先按 [截图说明](screenshots/README.md) 隔离存档并核对内容。
 

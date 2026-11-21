@@ -1,4 +1,4 @@
-# 发布流水线：推送 v* tag 时构建 Linux / Windows / macOS 安装包，并创建 GitHub Release。
+# 发布流水线：推送 v* tag 时构建 Linux AppImage / Windows zip / macOS dmg，并创建 GitHub Release。
 # - 版本号取自 tag（去掉前缀 v）；Linux job 会校验它与 CMakeLists 的 CPACK_PACKAGE_VERSION 一致。
 # - 手动 workflow_dispatch 只构建并上传 artifacts，不创建 Release，用于发版前试跑。
 # - FFmpeg 冻结在 9.0：三个平台都先打印 3rd/ffmpeg/RELEASE 与 commit，再由构建脚本校验。
@@ -18,31 +18,51 @@ concurrency:
 
 jobs:
   linux:
-    # 产物：TTPlayer-<ver>-linux-x86_64.tar.gz（bin/ttplayer 与 share/ 桌面文件；Qt 6 由系统提供，SDL3/libarchive/zlib/liblzma 静态内置）
+    # 产物：TTPlayer-<ver>-linux-x86_64.AppImage（Qt 6 与 Qt 插件、SDL3/libarchive/zlib/liblzma 已内置；
+    # glibc、OpenGL、X11/xcb、DBus 仍由系统提供）。
+    # 编译放在 ubuntu:22.04 容器里，把 AppImage 的 glibc 门槛固定在 2.35（Ubuntu 22.04 / Debian 12 /
+    # Fedora 36 起）；runner 标签本身用当前受支持的 24.04，不必依赖已进入弃用期的 ubuntu-22.04。
     name: Linux x86_64
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    container: ubuntu:22.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
     steps:
+      - name: Container base tools
+        # 容器镜像里没有 git 也没有 sudo：checkout 之前先装最小的取码工具。
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
       - name: Linux dependencies
         run: |
-          sudo apt-get update
           # 系统 Qt 只用来提供 GL/xkb/dbus 等依赖库；实际链接下一步装的 6.8.3。
+          # jammy 没有 qt6-5compat-dev，Core5Compat 由 aqt 的 -m qt5compat 提供。
           # SDL3 / libarchive / liblzma 由 3rd/ 下 submodule 现编；zlib1g-dev 只给
-          # scripts/build_ffmpeg_linux.sh 的 --enable-zlib 探测用，最终链接仍用 vendored zlib。
-          sudo apt-get install -y qt6-base-dev qt6-5compat-dev zlib1g-dev nasm yasm pkg-config
+          # scripts/build_ffmpeg_linux.sh 的 --enable-zlib 探测用，最终链接仍用 vendored zlib；
+          # libicu-dev 是 Qt 官方 Linux 包的链接期依赖。
+          # libxcb-* / libxkbcommon-x11 与 xvfb 是 xcb 平台插件的依赖与冒烟环境，缺了 linuxdeploy 就打包不全。
+          apt-get install -y --no-install-recommends \
+            build-essential cmake nasm yasm pkg-config zlib1g-dev libicu-dev \
+            qt6-base-dev \
+            python3 python3-pip \
+            wget file patchelf \
+            libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
+            libxcb-xinerama0 libxcb-xkb1 libxcb-sync1 libxcb-xfixes0 libxcb-util1 \
+            xvfb xauth
       - name: Linux Qt 6.8.3
         run: |
-          python -m pip install aqtinstall
-          python -m aqt install-qt linux desktop 6.8.3 linux_gcc_64 -m qt5compat -O "$RUNNER_TEMP/Qt"
+          python3 -m pip install --upgrade pip
+          python3 -m pip install aqtinstall
+          python3 -m aqt install-qt linux desktop 6.8.3 linux_gcc_64 -m qt5compat -O "$RUNNER_TEMP/Qt"
           echo "CMAKE_PREFIX_PATH=$RUNNER_TEMP/Qt/6.8.3/gcc_64" >> "$GITHUB_ENV"
+          echo "QT_ROOT=$RUNNER_TEMP/Qt/6.8.3/gcc_64" >> "$GITHUB_ENV"
       - name: FFmpeg (frozen 9.0)
         run: |
           echo "frozen FFmpeg source: $(cat 3rd/ffmpeg/RELEASE) @ $(git -C 3rd/ffmpeg rev-parse --short HEAD)"
@@ -63,21 +83,95 @@ jobs:
         run: |
           cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release
           cmake --build build/release -j 4
-      - name: Install to build/dist
-        run: cmake --install build/release --prefix build/dist
-      - name: Smoke test
-        run: |
-          QT_QPA_PLATFORM=offscreen TTPLAYER_QT_STATE="$RUNNER_TEMP/state.json" \
-            build/dist/bin/ttplayer --version
-      - name: Pack tar.gz
+      - name: Install into AppDir
+        # Qt 的 Linux 部署脚本会把 Qt 库与 RPATH 写进 usr/lib；Qt 插件由后面的 linuxdeploy-plugin-qt 补齐。
+        run: cmake --install build/release --prefix build/AppDir/usr
+      - name: Build AppImage
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: tar -czf "TTPlayer-$VERSION-linux-x86_64.tar.gz" -C build/dist .
+        run: |
+          tools="$RUNNER_TEMP/appimage-tools"
+          mkdir -p "$tools"
+          # 三个工具都取 continuous 版；打包后的冒烟与依赖检查会在 CI 里立刻暴露上游变动。
+          wget -q -O "$tools/linuxdeploy" \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q -O "$tools/linuxdeploy-plugin-qt" \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          wget -q -O "$tools/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x "$tools"/*
+          export PATH="$tools:$PATH"
+          # 容器里没有 FUSE：linuxdeploy、qt 插件与 appimagetool 自身都是 AppImage，统一解包运行。
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          # qt 插件靠 qmake -query 定 Qt 安装位置，必须指到 aqt 的 6.8.3。
+          export QMAKE="$QT_ROOT/bin/qmake"
+          # qt 插件默认只打 xcb；自检与无头运行要 offscreen，一并打进去。
+          export EXTRA_PLATFORM_PLUGINS="libqoffscreen.so"
+          linuxdeploy --appdir build/AppDir \
+            --executable build/AppDir/usr/bin/ttplayer \
+            --desktop-file packaging/ttplayer.desktop \
+            --icon-file packaging/ttplayer.svg \
+            --plugin qt
+          ARCH=x86_64 appimagetool build/AppDir "TTPlayer-$VERSION-linux-x86_64.AppImage"
+      - name: Smoke test AppImage
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          appimage="TTPlayer-$VERSION-linux-x86_64.AppImage"
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          export TTPLAYER_QT_STATE="$RUNNER_TEMP/state.json"
+          export TTPLAYER_SILENT_OUTPUT=1
+          # 1) offscreen：证明内置 Qt 与 offscreen 平台插件可用（自检/无头路径）。
+          out=$(QT_QPA_PLATFORM=offscreen "./$appimage" --version)
+          echo "$out"
+          # workflow_dispatch 的版本是 dev，不跟 CPACK 版本比，只校验入口确实起来了。
+          case "$out" in
+            "TTPlayer "*" Qt "*" x86_64") ;;
+            *) echo "版本输出不符: $out" >&2; exit 1 ;;
+          esac
+          # 2) xvfb：显式使用 xcb 平台插件，证明桌面路径的依赖也齐。
+          QT_QPA_PLATFORM=xcb xvfb-run -a "./$appimage" --version
+      - name: Verify bundled dependencies
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          appimage="TTPlayer-$VERSION-linux-x86_64.AppImage"
+          "./$appimage" --appimage-extract >/dev/null
+          # 平台插件必须真的打进来：xcb 是桌面默认，offscreen 给自检与无头运行。
+          for plugin in xcb offscreen; do
+            test -f "squashfs-root/usr/plugins/platforms/libq$plugin.so" \
+              || { echo "AppImage 缺少平台插件 libq$plugin.so" >&2; exit 1; }
+          done
+          # Qt 本体也必须在包内，不能再依赖系统 Qt。
+          test -f squashfs-root/usr/lib/libQt6Widgets.so.6 \
+            || { echo "AppImage 缺少内置 Qt 库" >&2; exit 1; }
+          # 运行时会加载的 ELF（可执行文件、Qt 库、xcb/offscreen 平台插件）里出现 "not found" 就是真故障。
+          shopt -s nullglob
+          required=(squashfs-root/usr/bin/ttplayer
+            squashfs-root/usr/plugins/platforms/libqxcb.so
+            squashfs-root/usr/plugins/platforms/libqoffscreen.so
+            squashfs-root/usr/lib/libQt6*.so.6)
+          missing=0
+          for f in "${required[@]}"; do
+            if ldd "$f" 2>/dev/null | grep -q 'not found'; then
+              echo "依赖缺失: $f" >&2
+              ldd "$f" | grep 'not found' >&2
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || { echo "AppImage 运行路径依赖不完整" >&2; exit 1; }
+          # 其余插件（eglfs/vnc/非 sqlite 驱动等）只在用到时加载，缺依赖只提示不判失败。
+          while IFS= read -r -d '' f; do
+            file -b "$f" | grep -q '^ELF' || continue
+            report=$(ldd "$f" 2>/dev/null || true)
+            printf '%s\n' "$report" | { grep 'not found' || true; } | sed "s|^|可选组件缺依赖 ($f): |"
+          done < <(find squashfs-root -type f -print0)
+          exit 0
       - name: Upload Linux package
         uses: actions/upload-artifact@v4
         with:
           name: linux-x86_64
-          path: TTPlayer-*-linux-x86_64.tar.gz
+          path: TTPlayer-*-linux-x86_64.AppImage
           if-no-files-found: error
 
   windows:
@@ -233,10 +327,10 @@ jobs:
             ## 安装
 
             - **Windows**：解压到可写目录（不要放 Program Files），运行 `bin/ttplayer.exe`。用户数据保存在 exe 同目录。
-            - **Linux**：解压后运行 `bin/ttplayer`。需要系统提供 Qt 6（SDL3、libarchive、zlib、liblzma 已静态内置）。
+            - **Linux**：下载 `.AppImage`，`chmod +x` 后直接运行，无需安装。Qt 6 与 Qt 插件已打包在内；系统只需提供 glibc 2.35 及以上的 OpenGL、X11/xcb、DBus 运行库（Ubuntu 22.04+、Debian 12+、Fedora 36+ 均满足）。
             - **macOS**：打开 dmg，把 ttplayer.app 拖进 Applications。包为 adhoc 签名、未公证，首次启动请右键「打开」。
 
-            附件：`TTPlayer-<版本>-linux-x86_64.tar.gz`、`TTPlayer-<版本>-windows-x64.zip`、`TTPlayer-<版本>-macos-arm64.dmg`。
+            附件：`TTPlayer-<版本>-linux-x86_64.AppImage`、`TTPlayer-<版本>-windows-x64.zip`、`TTPlayer-<版本>-macos-arm64.dmg`。
 
             本版本使用 FFmpeg 9.0 静态链接。
           files: |

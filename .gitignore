@@ -16,6 +16,8 @@ testlib/
 3rd/codec-build/
 # MSVC 下预编给 FFmpeg 的 zlib（scripts/build_ffmpeg_msvc.sh 生成）
 3rd/zlib-build/
+# 发布流水线在仓库根产出的 AppImage（本地跑 linux 打包时同理）
+/*.AppImage
 # 调试用的界面截图/探针产物（仓库根目录）
 /*.png
 /*.txt

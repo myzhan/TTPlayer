@@ -150,7 +150,7 @@ python3 scripts/package.py               # 只生成本地 build/dist，不发�
 （macOS），仍必须保留 `TTPLAYER_SILENT_OUTPUT=1`；采样发生在最终静音门之前。
 真实设备拔插、锁屏、系统媒体按键和桌面合成应另做实机检查，不把 dummy 当硬件证据。
 发布门槛：双构型全量、打包版冒烟；改输出链额外跑打包版全量与 ASan/UBSan。这一档在发布前执行，不在日常改动里执行。
-发布产物由 `.github/workflows/release.yml` 生成：推 `v*` tag 会构建 Linux x86_64 tar.gz、Windows x64 zip、macOS arm64 dmg 并发布 Release；手动 workflow_dispatch 只产出 artifacts。Linux job 会校验 tag 与 `CPACK_PACKAGE_VERSION` 一致，macOS 包为 adhoc 签名、未公证。
+发布产物由 `.github/workflows/release.yml` 生成：推 `v*` tag 会构建 Linux x86_64 AppImage、Windows x64 zip、macOS arm64 dmg 并发布 Release；手动 workflow_dispatch 只产出 artifacts。Linux job 会校验 tag 与 `CPACK_PACKAGE_VERSION` 一致；AppImage 在 ubuntu:22.04 容器里编译以固定 glibc 2.35 门槛，Qt 6 与 Qt 插件打包在内，glibc/GL/X11/xcb/DBus 由系统提供；macOS 包为 adhoc 签名、未公证。
 
 ## 分层和生命周期
 
