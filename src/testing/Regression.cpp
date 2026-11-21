@@ -132,7 +132,8 @@ public:
         std::vector<float> left(4096), right(4096);
         const int got = dec->read(left.data(), right.data(), 4096, pos);
         float peak = 0.0f;
-        for (int i = 0; i < got; ++i) peak = std::max(peak, std::abs(left[static_cast<size_t>(i)]));
+        for (int i = 0; i < got; ++i)
+            peak = std::max(peak, std::abs(left[static_cast<size_t>(i)]));
         return got > 0 ? peak : -1.0f;
     }
     // 格式转换：格式表 / 输出路径 / 参数翻译 / 真编解码回读（不开设备，不碰用户文件）
@@ -150,23 +151,33 @@ public:
         bool hasEncoder = true;
         for (const ConvertFormat &f : AudioConvert::formats()) {
             ids << f.id;
-            hasEncoder = hasEncoder && f.codecId != AV_CODEC_ID_NONE && avcodec_find_encoder(f.codecId) != nullptr;
+            // 外部库格式按 encoderName 找（mp3/vorbis/opus），其余按 codecId。
+            const AVCodec *enc = f.encoderName
+                                     ? avcodec_find_encoder_by_name(f.encoderName)
+                                     : (f.codecId != AV_CODEC_ID_NONE ? avcodec_find_encoder(f.codecId) : nullptr);
+            hasEncoder = hasEncoder && enc != nullptr;
         }
         bool uniqueIds = !ids.isEmpty();
         for (int i = 0; i < ids.size(); ++i)
-            for (int j = i + 1; j < ids.size(); ++j) uniqueIds = uniqueIds && ids[i] != ids[j];
+            for (int j = i + 1; j < ids.size(); ++j)
+                uniqueIds = uniqueIds && ids[i] != ids[j];
         check("convert_formats_unique", uniqueIds);
         check("convert_formats_have_encoder", hasEncoder);
         check("convert_format_lookup", AudioConvert::formatById(QStringLiteral("flac")) != nullptr &&
-                                           AudioConvert::formatById(QStringLiteral("mp3")) == nullptr);
+                                           AudioConvert::formatById(QStringLiteral("mp3")) != nullptr &&
+                                           AudioConvert::formatById(QStringLiteral("vorbis")) != nullptr &&
+                                           AudioConvert::formatById(QStringLiteral("opus")) != nullptr &&
+                                           AudioConvert::formatById(QStringLiteral("nope")) == nullptr);
 
         // —— 输出路径：换后缀、同名加序号、绝不写回源文件 ——
-        check("convert_output_name", AudioConvert::outputName(QStringLiteral("/a/b/song.flac"), QStringLiteral("m4a")) ==
-                                         QStringLiteral("song.m4a"));
+        check("convert_output_name", AudioConvert::outputName(QStringLiteral("/a/b/song.flac"),
+                                                              QStringLiteral("m4a")) == QStringLiteral("song.m4a"));
         const QString sameExt = AudioConvert::uniqueOutputPath(srcPath, dir.path(), QStringLiteral("wav"));
-        check("convert_output_never_overwrites", sameExt != srcPath && sameExt.endsWith(QStringLiteral("ramp (2).wav")));
+        check("convert_output_never_overwrites",
+              sameExt != srcPath && sameExt.endsWith(QStringLiteral("ramp (2).wav")));
         check("convert_output_dir_defaults_to_source",
-              QFileInfo(AudioConvert::uniqueOutputPath(QStringLiteral("/x/y/song.wav"), QString(), QStringLiteral("flac")))
+              QFileInfo(
+                  AudioConvert::uniqueOutputPath(QStringLiteral("/x/y/song.wav"), QString(), QStringLiteral("flac")))
                       .absolutePath() == QStringLiteral("/x/y"));
 
         // —— 参数翻译：有损只带码率，无损只带压缩档 ——
@@ -228,6 +239,41 @@ public:
         check("convert_wav_ok", wavResult.ok && wavBack && wavBack->sampleRate() == 44100 &&
                                     wavBack->channelCount() == 2 && qAbs(wavBack->totalFrames() - 88200) < 4096);
 
+        // —— 外部编码库：MP3 / OGG Vorbis / Opus 各真转一篇并回读 ——
+        // 这三项能过，说明 vendored 编码库真的链进了 libavcodec，而不只是“表里有名字”。
+        ConvertParams mp3Params;
+        mp3Params.formatId = QStringLiteral("mp3");
+        const QString mp3Out = AudioConvert::uniqueOutputPath(srcPath, dir.path(), QStringLiteral("mp3"));
+        const AudioEncoder::Result mp3Result =
+            AudioEncoder::convert(srcPath, mp3Out, AudioConvert::targetFor(mp3Params), {}, never);
+        auto mp3Back = Decoder::openFile(mp3Out);
+        // MP3 有编码器延迟 + 尾部填充，帧数比源多出几个帧长是正常的。
+        check("convert_mp3_ok", mp3Result.ok && mp3Back && mp3Back->sampleRate() == 44100 &&
+                                    mp3Back->channelCount() == 2 && qAbs(mp3Back->totalFrames() - 88200) < 8192 &&
+                                    QFileInfo(mp3Out).size() > 1000);
+
+        ConvertParams vorbisParams;
+        vorbisParams.formatId = QStringLiteral("vorbis");
+        const QString vorbisOut = AudioConvert::uniqueOutputPath(srcPath, dir.path(), QStringLiteral("ogg"));
+        const AudioEncoder::Result vorbisResult =
+            AudioEncoder::convert(srcPath, vorbisOut, AudioConvert::targetFor(vorbisParams), {}, never);
+        auto vorbisBack = Decoder::openFile(vorbisOut);
+        check("convert_vorbis_ok",
+              vorbisResult.ok && vorbisBack && vorbisBack->sampleRate() == 44100 && vorbisBack->channelCount() == 2 &&
+                  qAbs(vorbisBack->totalFrames() - 88200) < 8192 && QFileInfo(vorbisOut).size() > 1000);
+
+        ConvertParams opusParams;
+        opusParams.formatId = QStringLiteral("opus");
+        const QString opusOut = AudioConvert::uniqueOutputPath(srcPath, dir.path(), QStringLiteral("opus"));
+        const AudioEncoder::Result opusResult =
+            AudioEncoder::convert(srcPath, opusOut, AudioConvert::targetFor(opusParams), {}, never);
+        auto opusBack = Decoder::openFile(opusOut);
+        // 44.1k 源进 libopus 会被映射到 48k：这是 Opus 的格式约束（只认 8/12/16/24/48k），
+        // 不是“跟源”失效；回读的采样率就是证据。时长不变，所以帧数按 48k 算（2s ≈ 96000）。
+        check("convert_opus_ok", opusResult.ok && opusBack && opusBack->sampleRate() == 48000 &&
+                                     opusBack->channelCount() == 2 && qAbs(opusBack->totalFrames() - 96000) < 8192 &&
+                                     QFileInfo(opusOut).size() > 1000);
+
         // —— 增益真的落在样本上：-3 dB ≈ 0.708 倍（用无损格比对，避开有损编码误差）——
         ConvertParams gainParams = flacParams;
         gainParams.gainDb = -3.0;
@@ -269,7 +315,8 @@ public:
             // 选 FLAC，然后走对话框自己的异步通路（worker 线程 + 排队信号）真转一首。
             if (!combos.isEmpty()) {
                 for (int i = 0; i < combos.first()->count(); ++i)
-                    if (combos.first()->itemData(i).toString() == QStringLiteral("flac")) combos.first()->setCurrentIndex(i);
+                    if (combos.first()->itemData(i).toString() == QStringLiteral("flac"))
+                        combos.first()->setCurrentIndex(i);
             }
             win.start();
             bool finished = false;
@@ -891,17 +938,19 @@ public:
             window.collections().playlists().create("Saved", &id);
             window.collections().playlists().addKeys({a.identityKey()}, id);
             ctl.queue().appendLater({a});
-            const auto entry = ctl.queue().items().first().id;
+            const auto entry = ctl.queue().items().value(0).id;
             const QString old = a.identityKey();
             ctl.setLyricShiftTable({{old, 1.5}});
             check("root_relocation", window.relocateLibraryRoot(dir.path(), dir.path() + "/new").isEmpty());
             const QString moved = QUrl::fromLocalFile(dir.path() + "/new/a.wav").toLocalFile();
             check("root_favorite_migrated", window.collections().favorites() == QStringList{moved});
             check("root_list_migrated", window.collections().playlists().keysOf(id) == QStringList{moved});
-            check("root_queue_identity_source", ctl.queue().items().first().id == entry &&
+            check("root_queue_identity_source", !ctl.queue().items().isEmpty() &&
+                                                    ctl.queue().items().first().id == entry &&
                                                     ctl.queue().items().first().source == QueueSource::Later &&
                                                     ctl.queue().items().first().track.identityKey() == moved);
-            check("root_old_reference_gone", window.collections().allTracks().first().identityKey() != old);
+            check("root_old_reference_gone", !window.collections().allTracks().isEmpty() &&
+                                                 window.collections().allTracks().first().identityKey() != old);
             check("root_lyric_calibration_migrated",
                   ctl.lyricShiftTable().value(moved) == 1.5 && !ctl.lyricShiftTable().contains(old));
         } else if (suite == "IMPORT") {
@@ -1504,9 +1553,9 @@ int runRegressionSuite(const QString &suite, QTextStream &out) {
 }
 
 QStringList regressionSuites() {
-    return {"REVIEW", "CONVERT", "DECODER", "FORMAT", "GAPLESS", "GAIN", "SPECTRUM", "PLAYBACK", "SCENE",
-            "DEVICE", "SLEEP",   "LIBRARY", "IMPORT", "COVER", "SEARCH", "UI",       "PERF",
-            "SYSTEM", "ARCHIVE", "CUE",     "LISTS",   "SHIFT", "PLAYLIST"};
+    return {"REVIEW", "CONVERT", "DECODER", "FORMAT",  "GAPLESS", "GAIN",  "SPECTRUM", "PLAYBACK",
+            "SCENE",  "DEVICE",  "SLEEP",   "LIBRARY", "IMPORT",  "COVER", "SEARCH",   "UI",
+            "PERF",   "SYSTEM",  "ARCHIVE", "CUE",     "LISTS",   "SHIFT", "PLAYLIST"};
 }
 
 int runQueueCoverage(QTextStream &out) {

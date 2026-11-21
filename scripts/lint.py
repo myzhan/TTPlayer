@@ -244,6 +244,9 @@ def tidy_check(base, all_files, fix, build_dir):
         found = source_diagnostics(output)
         if not all_files:
             found = [line for line in found if on_changed_line(line)]
+        if done.returncode and not found:
+            # 工具崩溃/参数错误也必须挂，不能因没有标准 warning/error 行而误判通过。
+            found.append(f"{file}: error: clang-tidy exited {done.returncode}; see {trace}")
         for line in found:
             print(line.replace(str(ROOT) + os.sep, ""))
         warnings += found

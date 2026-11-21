@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -115,7 +116,8 @@ def run_suite(binary, suite, radio_mode, fixtures, isolation, log):
 
     start = time.monotonic()
     try:
-        result = subprocess.run([binary], env=env, capture_output=True, text=True, timeout=TIMEOUT_SECONDS)
+        result = subprocess.run([binary], env=env, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=TIMEOUT_SECONDS)
         output = result.stdout + result.stderr
         code = result.returncode
     except subprocess.TimeoutExpired as error:
@@ -137,6 +139,12 @@ def run_suite(binary, suite, radio_mode, fixtures, isolation, log):
     log.write(line + "\n" + output + "\n")
     log.flush()
     if failed:
+        # 临时存档会在整轮结束时删除；先保留失败进程的隔离崩溃日志，方便 CI 定位栈。
+        for crash in (Path(isolation) / suite).rglob("crash.log"):
+            artifact = Path(log.name).parent / "failures" / label.replace(":", "-") / crash.name
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(crash, artifact)
+            print("CRASH_LOG", artifact, flush=True)
         print(output, flush=True)
     return passed, failed, skipped
 
@@ -157,7 +165,7 @@ def main(argv):
     report.mkdir(parents=True, exist_ok=True)
     log_path = report / "selftest.log"
     passed = failed = skipped = 0
-    with tempfile.TemporaryDirectory(prefix="ttplayer-selftest-") as isolation, log_path.open("w") as log:
+    with tempfile.TemporaryDirectory(prefix="ttplayer-selftest-") as isolation, log_path.open("w", encoding="utf-8") as log:
         metadata = {
             "binary": str(binary),
             "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
@@ -167,7 +175,7 @@ def main(argv):
             "audio_driver": os.environ.get("TTPLAYER_AUDIO_DRIVER", "dummy"),
             "state_before": before,
         }
-        (report / "run.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2))
+        (report / "run.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
 
         fixtures = Path(isolation) / "fixtures"
         # 只有这几档需要编码矩阵；其余用最小的确定性素材即可。

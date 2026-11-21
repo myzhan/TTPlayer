@@ -36,9 +36,11 @@
 #include <QApplication>
 #include <QSysInfo>
 #include <QWidget>
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <QFileInfo>
 #include <QFile>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QStringList>
 #include <QDir>
 #include <QUrl>
@@ -1303,7 +1305,7 @@ static int runResumeProbe(AudioEnginePtr engine, PlayerController &controller, Q
 
 // R06 存档可靠性探针（纯 LibraryStore，不开设备）：
 // ① 坏 JSON 不被静默当空档覆盖（首启迁移前先留 .corrupt-*，再建库）；
-// ② 写入失败（目录不可写）→ save 返回 false，已存的值不变。
+// ② 写入失败（数据库写锁）→ save 返回 false，已存的值不变。
 static int runSaveProbe(QTextStream &out) {
     int fail = 0;
     const auto check = [&](const char *name, bool ok) {
@@ -1336,16 +1338,29 @@ static int runSaveProbe(QTextStream &out) {
         check("corrupt_bytes_preserved", found);
     }
 
-    // ② 写失败旧档不变：先关连接，再把目录改成只读，新连接建不了 -wal 也写不进
+    // ② 写失败旧档不变：用独立连接持有写锁，避免把 Windows 目录只读属性当成 ACL。
     {
         LibraryStore::closeDatabase();
-        QFile::setPermissions(dir, QFileDevice::ReadOwner | QFileDevice::ExeOwner);
         LibraryStore::Loaded s2;
         s2.volume = 0.99; // 故意不同值，证明没落盘
-        const bool ok = LibraryStore::save(s2);
-        QFile::setPermissions(dir, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
-                                       QFileDevice::ExeOwner); // 恢复以便 QTemporaryDir 清理
-        check("save_fails_on_unlocked_dir", !ok);
+        const QString lockName = QStringLiteral("save_probe_lock");
+        bool locked = false;
+        bool ok = true;
+        {
+            QSqlDatabase blocker = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), lockName);
+            blocker.setDatabaseName(LibraryStore::dbFilePath());
+            if (blocker.open()) {
+                QSqlQuery query(blocker);
+                locked = query.exec(QStringLiteral("BEGIN EXCLUSIVE"));
+                if (locked) {
+                    ok = LibraryStore::save(s2);
+                    query.exec(QStringLiteral("ROLLBACK"));
+                }
+                blocker.close();
+            }
+        }
+        QSqlDatabase::removeDatabase(lockName);
+        check("save_fails_on_locked_database", locked && !ok);
         check("old_state_unchanged", std::abs(LibraryStore::load().volume - 0.42) < 1e-9);
     }
 
@@ -1356,7 +1371,7 @@ static int runSaveProbe(QTextStream &out) {
 // 跨平台播放器入口。命令行可给文件/目录直接载入（自检与"双击即播"用）：
 //   ttplayer testlib/demo01.wav
 int main(int argc, char *argv[]) {
-    SDL_SetMainReady(); // 自管入口时，必须在任何 SDL_Init 前通知 SDL。
+    // SDL3 已移除 SDL_SetMainReady：入口自管时不再需要提前通知，SDL_Init 可直接调用。
     // 三平台视觉一致：关掉所有原生平台对话框（文件/消息/颜色/字体），改用 Qt 自带实现。
     QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
     PlayerApplication app(argc, argv);
@@ -1449,7 +1464,8 @@ int main(int argc, char *argv[]) {
         return failed == 0 ? 0 : 1;
     }
 
-    if (SDL_Init(SDL_INIT_AUDIO) != 0) {
+    // SDL3 的 SDL_Init 返回 bool（true = 成功）。
+    if (!SDL_Init(SDL_INIT_AUDIO)) {
         qWarning("SDL audio init failed: %s", SDL_GetError());
         return 1;
     }
@@ -1800,7 +1816,8 @@ int main(int argc, char *argv[]) {
         QTimer::singleShot(300, [&controller, &inputs, convertShot, &app] {
             QList<Track> tracks = controller.tracks();
             if (tracks.isEmpty())
-                for (const QString &p : inputs) tracks.append(Track(QUrl::fromLocalFile(p)));
+                for (const QString &p : inputs)
+                    tracks.append(Track(QUrl::fromLocalFile(p)));
             auto *cw = new ConvertWindow(tracks);
             cw->show();
             QTimer::singleShot(300, [cw, convertShot, &app] {

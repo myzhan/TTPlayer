@@ -12,6 +12,7 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 cd "$SCRIPT_DIR/.."
 ROOT=$(pwd)
 source "$SCRIPT_DIR/ffmpeg_components.sh"
+source "$SCRIPT_DIR/codec_deps.sh"
 
 SRC="$ROOT/3rd/ffmpeg"
 PREFIX="$ROOT/3rd/ffmpeg-build"
@@ -33,10 +34,52 @@ if [[ -n "$TTPLAYER_ARCHS" ]]; then
     ARCHS=(${=TTPLAYER_ARCHS})
 fi
 
+# ---- 外部编码库（mp3 / vorbis / opus）先于 FFmpeg 编好 ----
+# FFmpeg configure 阶段就要探测它们，所以不能等到 CMake 再编；多架构时逐架构
+# install 到 stage，再 lipo 成 universal。幂等判断独立于 FFmpeg，避免旧产物被跳过。
+codec_require_sources
+CODEC_COMMIT=$(codec_sources_commit)
+CODEC_HASH=$(shasum -a 256 "$SCRIPT_DIR/codec_deps.sh" | awk '{print $1}')
+CODEC_KEY="$CODEC_COMMIT|$CODEC_HASH|${(j:,:)ARCHS}|macos=$DEPLOYMENT_TARGET"
+CODEC_JOBS=$(sysctl -n hw.ncpu)
+export CODEC_JOBS
+if [[ "${1:-}" == "--force" ]] || ! codecs_is_built "$CODEC_PREFIX" "$CODEC_KEY" "$CODEC_COMMIT"; then
+    codecs_begin_build "$CODEC_PREFIX"
+    CODEC_STAGES=()
+    for arch in "${ARCHS[@]}"; do
+        stage="$CODEC_PREFIX/.stage-$arch"
+        rm -rf "$stage"
+        CODEC_BUILD="$CODEC_PREFIX/.obj-$arch"
+        cmake_flags=(-DCMAKE_OSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET")
+        if [[ "$arch" != "native" ]]; then
+            cmake_flags+=(-DCMAKE_OSX_ARCHITECTURES="$arch")
+            export CFLAGS="-arch $arch -mmacosx-version-min=$DEPLOYMENT_TARGET"
+            export LDFLAGS="-arch $arch -mmacosx-version-min=$DEPLOYMENT_TARGET"
+        else
+            export CFLAGS="-mmacosx-version-min=$DEPLOYMENT_TARGET"
+            export LDFLAGS="-mmacosx-version-min=$DEPLOYMENT_TARGET"
+        fi
+        echo "=== 编译外部编码库（ogg/vorbis/opus/lame, $arch）==="
+        codec_build_cmake ogg "$CODEC_3RD/ogg" "$stage" \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DINSTALL_DOCS=OFF "${cmake_flags[@]}" || exit 1
+        codec_build_cmake opus "$CODEC_3RD/opus" "$stage" \
+            -DBUILD_SHARED_LIBS=OFF -DOPUS_BUILD_TESTING=OFF -DOPUS_BUILD_PROGRAMS=OFF "${cmake_flags[@]}" || exit 1
+        codec_build_cmake vorbis "$CODEC_3RD/vorbis" "$stage" \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DCMAKE_PREFIX_PATH="$stage" "${cmake_flags[@]}" || exit 1
+        codec_build_lame "$stage" || exit 1
+        CODEC_STAGES+=("$stage")
+    done
+    codecs_merge_libs "$CODEC_PREFIX" "${CODEC_STAGES[@]}" || exit 1
+    rm -rf "$CODEC_PREFIX"/.stage-* "$CODEC_PREFIX"/.obj-*
+    codecs_finish_build "$CODEC_PREFIX" "$CODEC_KEY" "$CODEC_COMMIT"
+else
+    echo "外部编码库已就绪（$CODEC_PREFIX），跳过编译"
+fi
+
 # 旧版只记 commit，macOS/架构/编译参数变化后会误用旧库。
 SCRIPT_HASH=$(shasum -a 256 "$SCRIPT_DIR/build_ffmpeg.sh" | awk '{print $1}')
 COMP_HASH=$(shasum -a 256 "$SCRIPT_DIR/ffmpeg_components.sh" | awk '{print $1}')
-CONFIG_KEY="$COMMIT|$SCRIPT_HASH|$COMP_HASH|${(j:,:)ARCHS}|$(uname -m)|macos=$DEPLOYMENT_TARGET"
+CONFIG_KEY="$COMMIT|$SCRIPT_HASH|$COMP_HASH|$CODEC_HASH|${(j:,:)ARCHS}|$(uname -m)|macos=$DEPLOYMENT_TARGET"
 
 if [[ "${1:-}" != "--force" ]] && ffmpeg_is_built "$PREFIX" "$CONFIG_KEY" "$COMMIT"; then
     echo "FFmpeg 静态库已就绪（commit ${COMMIT:0:8}），跳过编译；需重来用 scripts/build_ffmpeg.sh --force"
@@ -54,7 +97,10 @@ ffmpeg_arch() {
 
 build_one() {
     local arch="$1"
-    local compiler_flags="-mmacosx-version-min=$DEPLOYMENT_TARGET"
+    local compiler_flags="-mmacosx-version-min=$DEPLOYMENT_TARGET -I$CODEC_PREFIX/include"
+    local link_flags="-mmacosx-version-min=$DEPLOYMENT_TARGET -L$CODEC_PREFIX/lib"
+    local pkg_flag
+    pkg_flag=$(codecs_pkg_config_flag)
     local bdir="$PREFIX/.obj-$arch"
     local jobs
     local arch_arg=()
@@ -69,15 +115,18 @@ build_one() {
             --disable-asm
         )
         compiler_flags+=" -arch $arch"
+        link_flags+=" -arch $arch"
     fi
 
     rm -rf "$bdir"
     mkdir -p "$bdir"
     # 源码内 configure 会污染工作树，用 out-of-tree 构建：从独立目录调 ../configure
-    ( cd "$bdir" && "$SRC/configure" \
+    ( cd "$bdir" && PKG_CONFIG_PATH="$CODEC_PREFIX/lib/pkgconfig" \
+        "$SRC/configure" \
         "${arch_arg[@]}" \
+        ${pkg_flag} \
         --extra-cflags="$compiler_flags" \
-        --extra-ldflags="$compiler_flags" \
+        --extra-ldflags="$link_flags" \
         --prefix="$PREFIX" \
         --enable-static --disable-shared \
         --disable-doc --disable-programs --disable-debug \

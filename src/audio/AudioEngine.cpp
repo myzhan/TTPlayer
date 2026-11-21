@@ -4,6 +4,7 @@
 #include <QMetaObject>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <cmath>
 #include <utility>
@@ -21,6 +22,8 @@ AudioEngine::AudioEngine() {
     m_ringR.assign(kRingCap, 0.0f);
     m_cbL.assign(4096, 0.0f);
     m_cbR.assign(4096, 0.0f);
+    // SDL3 回调拿不到可写的设备缓冲，只能自己准备一块交织暂存再 Put（回调里不分配）。
+    m_sdlOut.assign(std::size_t{kSdlStageFrames} * 2, 0.0f);
 }
 
 std::shared_ptr<AudioEngine> AudioEngine::create() {
@@ -171,7 +174,12 @@ void AudioEngine::pauseDevice(bool paused) {
         return;
     }
 #endif
-    SDL_PauseAudioDevice(m_deviceId, paused ? 1 : 0);
+    if (m_stream) {
+        if (paused)
+            SDL_PauseAudioStreamDevice(m_stream);
+        else
+            SDL_ResumeAudioStreamDevice(m_stream);
+    }
 }
 
 bool AudioEngine::openNativeDevice(double sampleRate) {
@@ -293,35 +301,64 @@ bool AudioEngine::openDevice(double sampleRate) {
     if (QString::fromUtf8(SDL_GetCurrentAudioDriver()) == QStringLiteral("coreaudio"))
         return openNativeDevice(sampleRate);
 #endif
-    SDL_AudioSpec want{}, have{};
-    want.freq = int(sampleRate);
-    want.format = AUDIO_F32SYS;
-    want.channels = 2;
-    want.samples = 2048;
-    want.callback = sdlCallback;
-    want.userdata = this; // SDL_CloseAudioDevice waits for callbacks before destruction.
+    // m_outputDevice 里存的是设备名（非 macOS）；mac 的 UID 路径在上面的 native 分支里消化。
     QByteArray deviceName = m_outputDevice;
     for (const auto &device : outputDeviceDescriptors())
         if (device.id == QString::fromUtf8(m_outputDevice)) deviceName = device.name.toUtf8();
-    const char *dev = deviceName.isEmpty() ? nullptr : deviceName.constData();
-    m_deviceId = SDL_OpenAudioDevice(dev, 0, &want, &have, SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
+
+    SDL_AudioDeviceID target = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
+    bool namedRequested = false;
+    if (!deviceName.isEmpty()) {
+        int count = 0;
+        if (SDL_AudioDeviceID *devices = SDL_GetAudioPlaybackDevices(&count)) {
+            for (int i = 0; i < count; ++i) {
+                const char *name = SDL_GetAudioDeviceName(devices[i]);
+                if (name && deviceName == name) {
+                    target = devices[i];
+                    namedRequested = true;
+                    break;
+                }
+            }
+            SDL_free(devices);
+        }
+    }
+
+    // SDL3 的 stream 会做格式/声道转换：这里按设备原生率喂 F32 立体声，
+    // 引擎仍把解码结果重采样到设备率（与升级前一致，只是不再要求设备配合改率）。
+    SDL_AudioSpec have{};
+    int sampleFrames = 0;
+    if (!SDL_GetAudioDeviceFormat(target, &have, &sampleFrames) || have.freq <= 0) {
+        have.format = SDL_AUDIO_F32;
+        have.channels = 2;
+        have.freq = int(sampleRate);
+    }
+    SDL_AudioSpec want{};
+    want.format = SDL_AUDIO_F32;
+    want.channels = 2;
+    want.freq = have.freq;
+
+    m_stream = SDL_OpenAudioDeviceStream(target, &want, sdlStreamCallback, this);
     m_outputProblem.clear();
     m_actualOutput = QString::fromUtf8(deviceName);
-    if (m_deviceId == 0 && dev) {
+    if (!m_stream && namedRequested) {
         m_outputProblem = QStringLiteral("所选设备不可用，已回退系统默认");
         m_actualOutput.clear();
-        m_deviceId = SDL_OpenAudioDevice(nullptr, 0, &want, &have, SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
+        m_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &want, sdlStreamCallback, this);
     }
-    char *defaultName = nullptr;
-    SDL_AudioSpec defaultSpec{};
-    if (SDL_GetDefaultAudioInfo(&defaultName, &defaultSpec, 0) == 0) {
+    const char *defaultName = SDL_GetAudioDeviceName(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
+    if (defaultName) {
         m_defaultOutput = QString::fromUtf8(defaultName);
-        SDL_free(defaultName);
         if (m_actualOutput.isEmpty()) m_actualOutput = m_defaultOutput;
     }
-    m_deviceOpen = m_deviceId != 0;
-    if (!m_deviceOpen) qWarning("[audio] SDL_OpenAudioDevice failed: %s", SDL_GetError());
-    if (m_deviceOpen) m_deviceRate = have.freq > 0 ? have.freq : sampleRate;
+    m_deviceOpen = m_stream != nullptr;
+    if (m_deviceOpen) {
+        m_deviceId = SDL_GetAudioStreamDevice(m_stream);
+        SDL_ResumeAudioStreamDevice(m_stream); // 新开的 stream 默认暂停，resume 才真正出声
+        m_deviceRate = want.freq > 0 ? want.freq : sampleRate;
+    } else {
+        m_deviceId = 0;
+        qWarning("[audio] SDL_OpenAudioDeviceStream failed: %s", SDL_GetError());
+    }
     return m_deviceOpen;
 }
 
@@ -337,7 +374,11 @@ void AudioEngine::closeDevice() {
             m_boundDevice = 0;
         } else
 #endif
-            SDL_CloseAudioDevice(m_deviceId);
+        {
+            if (m_stream) SDL_DestroyAudioStream(m_stream); // 销毁即关闭它打开的设备
+            m_stream = nullptr;
+            m_deviceId = 0;
+        }
         m_deviceOpen = false;
     }
 }
@@ -429,7 +470,7 @@ void AudioEngine::stop() {
         ringClear();
         ++m_gen;
     }
-    if (m_deviceOpen) SDL_PauseAudioDevice(m_deviceId, 1);
+    if (m_stream) SDL_PauseAudioStreamDevice(m_stream);
     if (old) old->requestCancel(); // 断流时也能秒回：只置位+notify，不 join、不等 IO 完成
     m_cv.notify_all();
 }
@@ -446,11 +487,12 @@ bool AudioEngine::isPlaying() const {
 
 QStringList AudioEngine::outputDevices() {
     QStringList list;
-    const int n = SDL_GetNumAudioDevices(0); // 0 = 播放（输出）设备
-    for (int i = 0; i < n; ++i) {
-        const char *name = SDL_GetAudioDeviceName(i, 0);
-        if (name) list << QString::fromUtf8(name);
-    }
+    int count = 0;
+    SDL_AudioDeviceID *devices = SDL_GetAudioPlaybackDevices(&count);
+    if (!devices) return list;
+    for (int i = 0; i < count; ++i)
+        if (const char *name = SDL_GetAudioDeviceName(devices[i])) list << QString::fromUtf8(name);
+    SDL_free(devices);
     return list;
 }
 
@@ -497,13 +539,9 @@ QList<AudioEngine::OutputDevice> AudioEngine::outputDeviceDescriptors() {
 
 bool AudioEngine::pollDevices() {
     if (!m_deviceOpen) return false;
-    char *name = nullptr;
-    SDL_AudioSpec spec{};
     QString currentDefault;
-    if (SDL_GetDefaultAudioInfo(&name, &spec, 0) == 0) {
+    if (const char *name = SDL_GetAudioDeviceName(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK))
         currentDefault = QString::fromUtf8(name);
-        SDL_free(name);
-    }
 #ifdef __APPLE__
     if (m_nativeOutput && m_outputDevice.isEmpty()) {
         AudioObjectPropertyAddress property{kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyScopeGlobal,
@@ -730,13 +768,19 @@ bool AudioEngine::spectrumBands(float *out) {
     return m_spectrum.bands(out);
 }
 
-void AudioEngine::sdlCallback(void *userdata, Uint8 *stream, int len) {
+void AudioEngine::sdlStreamCallback(void *userdata, SDL_AudioStream *stream, int additional, int total) {
+    (void)total;
     auto *e = static_cast<AudioEngine *>(userdata);
-    if (!e) {
-        memset(stream, 0, size_t(len));
-        return;
+    if (!e || !stream || additional <= 0) return;
+    // additional 是设备还能收的字节数；按暂存容量分块，回调内不做任何分配。
+    int frames = additional / int(sizeof(float) * 2);
+    const int cap = int(e->m_sdlOut.size()) / 2;
+    while (frames > 0 && cap > 0) {
+        const int n = std::min(frames, cap);
+        e->callback(e->m_sdlOut.data(), n);
+        SDL_PutAudioStreamData(stream, e->m_sdlOut.data(), n * 2 * int(sizeof(float)));
+        frames -= n;
     }
-    e->callback(reinterpret_cast<float *>(stream), len / int(sizeof(float) * 2));
 }
 
 /// 回调（SDL 线程）：纯 CPU——从环取样本 → EQ → fade/volume/gain → 交织。环空即出静音，

@@ -11,6 +11,7 @@
 
 #include <sys/types.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -72,6 +73,8 @@ const char *archive_error_string(struct archive *);
 
 // 条目访问器
 const char *archive_entry_pathname(struct archive_entry *);
+const char *archive_entry_pathname_utf8(struct archive_entry *);
+const wchar_t *archive_entry_pathname_w(struct archive_entry *);
 la_int64_t archive_entry_size(struct archive_entry *);
 int archive_entry_is_encrypted(struct archive_entry *);
 

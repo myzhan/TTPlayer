@@ -1181,7 +1181,10 @@ QString MainWindow::relocateLibraryRoot(const QString &oldRoot, const QString &n
             token = moved + QStringLiteral("#track=%1").arg(track.cueNumber());
         else {
             QUrl url = track.url();
-            url.setPath(moved);
+            const QUrl local = QUrl::fromLocalFile(moved);
+            // fromLocalFile 会补 Windows 盘符前的斜杠并解析 UNC host；fragment 原样保留。
+            url.setHost(local.host());
+            url.setPath(local.path(QUrl::FullyDecoded));
             token = url.toString();
         }
         Track replacement = Collections::resolveToken(token);

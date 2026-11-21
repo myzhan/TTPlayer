@@ -1,6 +1,7 @@
 build/
-build-release/
-# CMake 构建产物统一在 build/（含 Release 子目录与打包输出）
+# CMake 构建产物统一在 build/（含 Release 子目录与打包输出）：
+# Debug = build/、Release = build/release/、打包 = build/package/ 与 build/dist/。
+# 不要再另开 build-xxx 旁路目录（它们不被本文件覆盖，会直接污染 git status）。
 CMakeCache.txt
 CMakeFiles/
 *_autogen/
@@ -11,6 +12,10 @@ testlib/
 .DS_Store
 # FFmpeg 源码子模块的编译产物（scripts/build_ffmpeg.sh 生成，3rd/ffmpeg 本身是 submodule 要入库）
 3rd/ffmpeg-build/
+# 格式转换用外部编码库（lame/ogg/vorbis/opus）的静态库与 .pc，scripts/codec_deps.sh 生成
+3rd/codec-build/
+# MSVC 下预编给 FFmpeg 的 zlib（scripts/build_ffmpeg_msvc.sh 生成）
+3rd/zlib-build/
 # 调试用的界面截图/探针产物（仓库根目录）
 /*.png
 /*.txt
@@ -19,4 +24,3 @@ testlib/
 
 __pycache__/
 aqtinstall.log
-build-asan/

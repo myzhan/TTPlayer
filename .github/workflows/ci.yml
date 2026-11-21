@@ -9,6 +9,41 @@ on:
 permissions:
   contents: read
 jobs:
+  linter:
+    name: Linter
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Linter dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qt6-base-dev qt6-5compat-dev nasm yasm pkg-config
+          python -m pip install --quiet aqtinstall clang-format==18.1.8 clang-tidy==18.1.8
+          python -m aqt install-qt linux desktop 6.8.3 linux_gcc_64 -m qt5compat -O "$RUNNER_TEMP/Qt"
+          echo "CMAKE_PREFIX_PATH=$RUNNER_TEMP/Qt/6.8.3/gcc_64" >> "$GITHUB_ENV"
+      - name: FFmpeg (frozen 9.0)
+        run: |
+          echo "frozen FFmpeg source: $(cat 3rd/ffmpeg/RELEASE) @ $(git -C 3rd/ffmpeg rev-parse --short HEAD)"
+          bash scripts/build_ffmpeg_linux.sh
+      - name: Configure and generate moc headers
+        run: |
+          cmake -S . -B build/lint-ci -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build/lint-ci --target ttplayer_autogen -j 4
+      - name: Lint (whole src tree)
+        # 不设 continue-on-error；脚本非零退出会使本 job 和整个 CI 失败。
+        run: python scripts/lint.py all --all --build-dir build/lint-ci
+      - name: Upload linter diagnostics
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ci-linter-diagnostics
+          path: build/lint-ci/lint
   unix:
     name: Unix (${{ matrix.os }}, ${{ matrix.config }})
     strategy:
@@ -29,7 +64,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           # 系统 Qt 只用来提供 GL/xkb/dbus 等依赖库；实际链接下一步装的 6.8.3。
-          sudo apt-get update && sudo apt-get install -y qt6-base-dev qt6-5compat-dev libsdl2-dev libarchive-dev zlib1g-dev ffmpeg nasm yasm
+          # SDL3 / libarchive / liblzma 由 3rd/ 下 submodule 现编；zlib1g-dev 只给
+          # scripts/build_ffmpeg_linux.sh 的 --enable-zlib 探测用，最终链接仍用 vendored zlib。
+          sudo apt-get update && sudo apt-get install -y qt6-base-dev qt6-5compat-dev zlib1g-dev ffmpeg nasm yasm pkg-config
       - name: Linux Qt 6.8.3
         if: runner.os == 'Linux'
         run: |
@@ -39,16 +76,11 @@ jobs:
       - name: macOS dependencies
         if: runner.os == 'macOS'
         run: |
-          brew install nasm yasm ffmpeg
+          brew install nasm yasm ffmpeg pkg-config
           python -m pip install aqtinstall
           python -m aqt install-qt mac desktop 6.8.3 clang_64 -m qt5compat -O "$RUNNER_TEMP/Qt"
-          # 环境变量在 Unix 上以冒号分隔；分号只用于 CMake 的 -D 列表。
-          echo "CMAKE_PREFIX_PATH=$RUNNER_TEMP/Qt/6.8.3/macos:$RUNNER_TEMP/SDL" >> "$GITHUB_ENV"
-          curl --fail --location https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz -o "$RUNNER_TEMP/sdl.tar.gz"
-          tar -xf "$RUNNER_TEMP/sdl.tar.gz" -C "$RUNNER_TEMP"
-          cmake -S "$RUNNER_TEMP/SDL2-2.32.10" -B "$RUNNER_TEMP/sdl-build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/SDL"
-          cmake --build "$RUNNER_TEMP/sdl-build" -j 4
-          cmake --install "$RUNNER_TEMP/sdl-build"
+          # 环境变量在 Unix 上以冒号分隔；SDL3 走 3rd/sdl3 子模块，不再现编安装。
+          echo "CMAKE_PREFIX_PATH=$RUNNER_TEMP/Qt/6.8.3/macos" >> "$GITHUB_ENV"
       - name: FFmpeg (frozen 9.0)
         shell: bash
         run: |
@@ -57,21 +89,15 @@ jobs:
           if [[ "$RUNNER_OS" == macOS ]]; then zsh scripts/build_ffmpeg.sh; else bash scripts/build_ffmpeg_linux.sh; fi
       - name: Build (${{ matrix.config }})
         run: |
-          cmake -S . -B build-ci -DCMAKE_BUILD_TYPE=${{ matrix.config }}
-          cmake --build build-ci -j 4
-      - name: Lint (whole src tree)
-        if: runner.os == 'Linux' && matrix.config == 'Debug'
-        run: |
-          python -m pip install --quiet clang-format==18.1.8 clang-tidy==18.1.8
-          # 整仓口径：src/ 下任何一行不合规都挂，不靠“只查改动行”给历史债留口子。
-          python scripts/lint.py all --all --build-dir build-ci
+          cmake -S . -B build/ci -DCMAKE_BUILD_TYPE=${{ matrix.config }}
+          cmake --build build/ci -j 4
       - name: Full selftest
         env:
-          TTPLAYER_BIN: build-ci/ttplayer
-          TTPLAYER_PROBE: build-ci/selftest
+          TTPLAYER_BIN: build/ci/ttplayer
+          TTPLAYER_PROBE: build/ci/selftest
         run: python scripts/selftest.py all
       - name: CTest
-        run: ctest --test-dir build-ci --output-on-failure
+        run: ctest --test-dir build/ci --output-on-failure
       - name: Prepare distributable (Release)
         if: matrix.config == 'Release'
         run: python scripts/package.py
@@ -81,8 +107,7 @@ jobs:
         with:
           name: ci-${{ matrix.os }}-${{ matrix.config }}-validation
           path: |
-            build-ci/selftest
-            build-ci/lint
+            build/ci/selftest
             build/dist
   windows:
     name: Windows x64
@@ -106,11 +131,9 @@ jobs:
         run: |
           python -m pip install aqtinstall
           python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -m qt5compat -O "$env:RUNNER_TEMP/Qt"
-          vcpkg install sdl2:x64-windows libarchive:x64-windows zlib:x64-windows
-          echo "TTPLAYER_VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows" >> $env:GITHUB_ENV
-          echo "CMAKE_PREFIX_PATH=$env:RUNNER_TEMP/Qt/6.8.3/msvc2022_64;$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows" >> $env:GITHUB_ENV
+          # SDL3 / libarchive / zlib / liblzma 全部由 3rd/ 子模块静态现编，不再装 vcpkg 包。
+          echo "CMAKE_PREFIX_PATH=$env:RUNNER_TEMP/Qt/6.8.3/msvc2022_64" >> $env:GITHUB_ENV
           echo "$env:RUNNER_TEMP/Qt/6.8.3/msvc2022_64/bin" >> $env:GITHUB_PATH
-          echo "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin" >> $env:GITHUB_PATH
           choco install ffmpeg -y --no-progress
       - name: FFmpeg (frozen 9.0, MSVC ABI)
         shell: msys2 {0}
@@ -121,18 +144,18 @@ jobs:
       - name: Build, selftest and package (Debug + Release)
         shell: pwsh
         run: |
-          # 同一个 build-ci 目录分别构建 Debug / Release，各自跑全量自检与 CTest；
+          # 同一个 build/ci 目录分别构建 Debug / Release，各自跑全量自检与 CTest；
           # 最后只把 Release 安装成 build/dist 供 artifact 留存。
-          cmake -S . -B build-ci -G "Visual Studio 17 2022" -A x64
+          cmake -S . -B build/ci -G "Visual Studio 17 2022" -A x64
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $dependencyPath = $env:PATH
           $debugCrt = Join-Path $env:VCToolsRedistDir "debug_nonredist/x64/Microsoft.VC143.DebugCRT"
           foreach ($config in @("Debug", "Release")) {
-            $env:PATH = if ($config -eq "Debug") { "$env:TTPLAYER_VCPKG_ROOT/debug/bin;$debugCrt;$env:WindowsSdkVerBinPath/x64;$dependencyPath" } else { $dependencyPath }
-            cmake --build build-ci --config $config -j 4
+            $env:PATH = if ($config -eq "Debug") { "$debugCrt;$env:WindowsSdkVerBinPath/x64;$dependencyPath" } else { $dependencyPath }
+            cmake --build build/ci --config $config -j 4
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
-            $env:TTPLAYER_BIN="build-ci/$config/ttplayer.exe"
-            $env:TTPLAYER_PROBE="build-ci/selftest-$config"
+            $env:TTPLAYER_BIN="build/ci/$config/ttplayer.exe"
+            $env:TTPLAYER_PROBE="build/ci/selftest-$config"
             $env:QT_QPA_PLATFORM="offscreen"
             $env:TTPLAYER_SILENT_OUTPUT="1"
             $env:TTPLAYER_QT_STATE="$env:RUNNER_TEMP/ci-version-$config/state.json"
@@ -144,7 +167,7 @@ jobs:
             }
             python scripts/selftest.py all
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
-            ctest --test-dir build-ci -C $config --output-on-failure
+            ctest --test-dir build/ci -C $config --output-on-failure
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           }
           python scripts/package.py
@@ -156,7 +179,7 @@ jobs:
           name: ci-windows-validation
           include-hidden-files: true
           path: |
-            build-ci/selftest-*
+            build/ci/selftest-*
             3rd/ffmpeg-build/.obj-msvc/ffbuild/config.log
             3rd/ffmpeg-build/debug/.obj-msvc/ffbuild/config.log
             build/dist

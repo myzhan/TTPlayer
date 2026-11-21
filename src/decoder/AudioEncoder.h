@@ -4,7 +4,10 @@
 // 不依赖外部 ffmpeg 命令行（本项目静态链的就是同一套库）。
 //
 // 解码复用 Decoder（统一输出立体声 float 平面帧），编码侧的采样率 / 声道 /
-// 采样格式差异由 swr 一次转换补齐；只认 FFmpeg 自带编码器，零新增第三方库。
+// 采样格式差异由 swr 一次转换补齐。
+// AAC/ALAC/FLAC/PCM 用 FFmpeg 自带编码器；MP3/Vorbis/Opus 用 vendored 的
+// libmp3lame / libvorbis / libopus（名字由各格式显式指定，避免 avcodec_find_encoder
+// 按 codec id 碰到别的实现），源码与构建见 scripts/codec_deps.sh。
 
 #include <QString>
 
@@ -18,6 +21,8 @@ extern "C" {
 /// 一次转码的目标参数（codec 层口径，与 UI 文案解耦）。
 struct EncodeTarget {
     AVCodecID codecId = AV_CODEC_ID_NONE;
+    // 指定编码器实现名（libmp3lame / libvorbis / libopus）；nullptr = 按 codecId 找。
+    const char *encoderName = nullptr;
     int sampleRate = 0;        // 0 = 跟源
     int channels = 0;          // 0 = 跟源，1 / 2 = 强制
     int bitrateKbps = 0;       // 0 = 编码器默认

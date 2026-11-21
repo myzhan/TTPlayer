@@ -2,9 +2,11 @@
 
 // 格式转换的「格式表 + 参数」与 codec 层目标的翻译（唯一真相）。
 //
-// 转换走内嵌 libav*（见 decoder/AudioEncoder），所以可选格式只能取 FFmpeg 自带
-// 编码器 —— 零新增第三方库：AAC / ALAC / FLAC / PCM(WAV)。
-// MP3 在 FFmpeg 里只有 libmp3lame / mp3_mf 这类外部实现，不进这份表。
+// 转换走内嵌 libav*（见 decoder/AudioEncoder）：
+//   有损 AAC / MP3 / OGG Vorbis / Opus；无损 ALAC / FLAC / PCM(WAV)。
+// MP3 / Vorbis / Opus 的编码器来自 3rd/ 下 vendored 的 libmp3lame / libvorbis /
+// libopus（静态链进同一份 libavcodec，见 scripts/codec_deps.sh），所以格式表里
+// 能用它们；encoderName 显式钉死具体实现，不靠 codec id 碰运气。
 
 #include "decoder/AudioEncoder.h"
 
@@ -15,12 +17,13 @@
 struct ConvertFormat {
     QString id;
     QString label;
-    QString extension;         // 输出后缀（决定封装器）
+    QString extension; // 输出后缀（决定封装器）
     AVCodecID codecId = AV_CODEC_ID_NONE;
     bool lossless = false;
-    bool supportsCompression = false; // 有压缩档可调（FLAC/ALAC）
-    int defaultKbps = 256;            // 有损格默认码率
-    int maxCompression = 12;          // 压缩档上限（ALAC 编码器只认 0..2）
+    bool supportsCompression = false;  // 有压缩档可调（FLAC/ALAC）
+    int defaultKbps = 256;             // 有损格默认码率
+    int maxCompression = 12;           // 压缩档上限（ALAC 编码器只认 0..2）
+    const char *encoderName = nullptr; // 外部编码器实现名（libmp3lame 等）；nullptr = 按 codecId 找
 };
 
 /// 一次转换的音频参数；0 / -1 表示「跟源」。

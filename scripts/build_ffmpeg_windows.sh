@@ -5,6 +5,7 @@
 #
 # 依赖（在 MSYS2 UCRT64 里先 pacman -S）：
 #   mingw-w64-ucrt-x86_64-{toolchain,nasm,yasm,zlib,pkg-config} make
+# 外部编码库（lame/ogg/vorbis/opus）由 scripts/codec_deps.sh 从 3rd/ 源码现编。
 # 必须在 UCRT64 环境跑（不是 MSYS/MSVC），否则 gcc 产的是 POSIX 层，链不进 MinGW Qt。
 #
 # 幂等：源码 commit、本脚本、组件清单三者一致且库齐全才跳过；--force 强制重来。
@@ -14,6 +15,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$SCRIPT_DIR/.."
 ROOT=$(pwd)
 source "$SCRIPT_DIR/ffmpeg_components.sh"
+source "$SCRIPT_DIR/codec_deps.sh"
 
 SRC="$ROOT/3rd/ffmpeg"
 PREFIX="$ROOT/3rd/ffmpeg-build"
@@ -30,9 +32,34 @@ esac
 
 require_frozen_ffmpeg "$SRC"
 COMMIT=$(git -C "$SRC" rev-parse HEAD)
+
+# ---- 外部编码库（mp3 / vorbis / opus）先于 FFmpeg 编好 ----
+codec_require_sources
+CODEC_COMMIT=$(codec_sources_commit)
+CODEC_HASH=$(sha256sum "$SCRIPT_DIR/codec_deps.sh" | awk '{print $1}')
+CODEC_KEY="$CODEC_COMMIT|$CODEC_HASH|$(uname -m)|windows"
+CODEC_JOBS=$(nproc)
+export CODEC_JOBS
+if [[ "${1:-}" == "--force" ]] || ! codecs_is_built "$CODEC_PREFIX" "$CODEC_KEY" "$CODEC_COMMIT"; then
+    codecs_begin_build "$CODEC_PREFIX"
+    CODEC_BUILD="$CODEC_PREFIX/.obj"
+    unset CFLAGS LDFLAGS
+    echo "=== 编译外部编码库（ogg/vorbis/opus/lame）==="
+    codec_build_cmake ogg "$CODEC_3RD/ogg" "$CODEC_PREFIX" \
+        -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DINSTALL_DOCS=OFF
+    codec_build_cmake opus "$CODEC_3RD/opus" "$CODEC_PREFIX" \
+        -DBUILD_SHARED_LIBS=OFF -DOPUS_BUILD_TESTING=OFF -DOPUS_BUILD_PROGRAMS=OFF
+    codec_build_cmake vorbis "$CODEC_3RD/vorbis" "$CODEC_PREFIX" \
+        -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DCMAKE_PREFIX_PATH="$CODEC_PREFIX"
+    codec_build_lame "$CODEC_PREFIX"
+    codecs_finish_build "$CODEC_PREFIX" "$CODEC_KEY" "$CODEC_COMMIT"
+else
+    echo "外部编码库已就绪（$CODEC_PREFIX），跳过编译"
+fi
+
 SCRIPT_HASH=$(sha256sum "$SCRIPT_DIR/build_ffmpeg_windows.sh" | awk '{print $1}')
 COMP_HASH=$(sha256sum "$SCRIPT_DIR/ffmpeg_components.sh" | awk '{print $1}')
-CONFIG_KEY="$COMMIT|$SCRIPT_HASH|$COMP_HASH|$(uname -m)|windows"
+CONFIG_KEY="$COMMIT|$SCRIPT_HASH|$COMP_HASH|$CODEC_HASH|$(uname -m)|windows"
 
 if [[ "${1:-}" != "--force" ]] && ffmpeg_is_built "$PREFIX" "$CONFIG_KEY" "$COMMIT"; then
     echo "FFmpeg 静态库已就绪（commit ${COMMIT:0:8}），跳过编译；需重来用 --force"
@@ -45,8 +72,12 @@ BDIR="$PREFIX/.obj-mingw"
 rm -rf "$BDIR"
 mkdir -p "$BDIR"
 # MinGW 原生 x86_64：asm 交给 yasm/nasm，不 --disable-asm；不 --enable-cross-compile（本机即目标）
-( cd "$BDIR" && "$SRC/configure" \
+( cd "$BDIR" && PKG_CONFIG_PATH="$CODEC_PREFIX/lib/pkgconfig" \
+    "$SRC/configure" \
     --prefix="$PREFIX" \
+    $(codecs_pkg_config_flag) \
+    --extra-cflags="-I$CODEC_PREFIX/include" \
+    --extra-ldflags="-L$CODEC_PREFIX/lib" \
     --enable-static --disable-shared \
     --disable-doc --disable-programs --disable-debug \
     --disable-everything --disable-autodetect \

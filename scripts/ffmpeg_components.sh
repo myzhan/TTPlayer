@@ -9,9 +9,11 @@
 # 电台与归档都不走 FFmpeg 内置网络/解包：前者由 QtNetwork 喂自定义 AVIOContext，
 # 后者由 libarchive 喂条目，所以这里不 enable http/tls/zip 等协议。
 #
-# 编码器只取 FFmpeg 原生实现（不引 libmp3lame/libvorbis/libopus 等外部库）：
-# aac / flac / alac / pcm 都是自带编码器，配合 ipod/mp4/flac/wav 封装器就够“格式转换”用了。
-# FFmpeg 没有原生 mp3 编码器（只有 libmp3lame / mp3_mf 这类外部实现），所以格式表不含 mp3。
+# 编码器：aac / flac / alac / pcm 用 FFmpeg 自带实现；mp3 / vorbis / opus 必须用外部库
+# （FFmpeg 没有原生 mp3/opus 编码器，原生 vorbis 编码器是 experimental 且质量不可用），
+# 三份外部源码以 submodule 冻结在 3rd/{lame,ogg,vorbis,opus}，由 scripts/codec_deps.sh
+# 统一编到 3rd/codec-build 并在 configure 前探测（libmp3lame 用 lame/lame.h + -lmp3lame，
+# libvorbis / libopus 走 pkg-config）。封装器对应 ipod/mp4/flac/wav/mp3/ogg。
 #
 # 兼容 zsh 与 bash：数组定义 + "${COMPONENTS[@]}" 展开在两者语义一致。
 
@@ -103,16 +105,26 @@ COMPONENTS=(
     --enable-decoder=bmp
     --enable-decoder=gif
     --enable-parser=mjpeg
-    # 编码器（格式转换：只用 FFmpeg 自带实现，不依赖外部编码库）
+    # 外部编码库开关：只开关 encoder 不够，库本身也要 enable，configure 才会做探测
+    # （libmp3lame 验证 lame/lame.h + -lmp3lame；libvorbis/libopus 走 pkg-config）。
+    --enable-libmp3lame
+    --enable-libvorbis
+    --enable-libopus
+    # 编码器（格式转换：自带实现 + 三份 vendored 外部库）
     --enable-encoder=aac
     --enable-encoder=flac
     --enable-encoder=alac
     --enable-encoder=pcm_s16le
+    --enable-encoder=libmp3lame
+    --enable-encoder=libvorbis
+    --enable-encoder=libopus
     # 封装器（转换输出）
     --enable-muxer=ipod
     --enable-muxer=mp4
     --enable-muxer=flac
     --enable-muxer=wav
+    --enable-muxer=mp3
+    --enable-muxer=ogg
 )
 
 # ---- 公共构建函数（各平台脚本共用） ----

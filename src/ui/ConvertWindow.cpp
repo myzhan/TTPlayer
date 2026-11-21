@@ -15,6 +15,8 @@
 #include <QLineEdit>
 #include <QVBoxLayout>
 
+#include <cmath>
+
 namespace {
 
 QLabel *hintLabel(QWidget *parent, const QString &text = QString()) {
@@ -34,7 +36,7 @@ ConvertWindow::ConvertWindow(const QList<Track> &tracks, QWidget *parent)
 
     // 只留真正能转的：本地文件、不是电台 / CUE 分轨 / 归档条目、文件还在。
     for (const Track &t : tracks) {
-        const QUrl url = t.url();
+        const QUrl &url = t.url();
         if (t.isNull() || t.isRadio() || t.isCueSegment()) continue;
         if (!url.isLocalFile() || !url.fragment().isEmpty()) continue;
         if (!QFileInfo::exists(url.toLocalFile())) continue;
@@ -331,9 +333,10 @@ void ConvertWindow::updateFormatUi() {
         if (m_compression->value() > fmt->maxCompression) m_compression->setValue(fmt->maxCompression);
     }
     if (fmt->lossless) {
-        m_codecHint->setText(fmt->supportsCompression
-                                 ? QStringLiteral("%1 · 无损，压缩档 0–%2（越大越省空间）").arg(fmt->label).arg(fmt->maxCompression)
-                                 : QStringLiteral("%1 · 无损，码率与压缩档不适用").arg(fmt->label));
+        m_codecHint->setText(
+            fmt->supportsCompression
+                ? QStringLiteral("%1 · 无损，压缩档 0–%2（越大越省空间）").arg(fmt->label).arg(fmt->maxCompression)
+                : QStringLiteral("%1 · 无损，码率与压缩档不适用").arg(fmt->label));
     } else {
         m_codecHint->setText(QStringLiteral("%1 · 有损，%2 kbps").arg(fmt->label).arg(m_bitrate->value()));
     }
@@ -342,9 +345,10 @@ void ConvertWindow::updateFormatUi() {
 void ConvertWindow::applyRunning(bool running) {
     m_running = running;
     const QList<QWidget *> inputs{static_cast<QWidget *>(m_format), static_cast<QWidget *>(m_bitrate),
-                                  static_cast<QWidget *>(m_rate),      static_cast<QWidget *>(m_channels),
-                                  static_cast<QWidget *>(m_gain),      static_cast<QWidget *>(m_dir)};
-    for (QWidget *w : inputs) w->setEnabled(!running);
+                                  static_cast<QWidget *>(m_rate),   static_cast<QWidget *>(m_channels),
+                                  static_cast<QWidget *>(m_gain),   static_cast<QWidget *>(m_dir)};
+    for (QWidget *w : inputs)
+        w->setEnabled(!running);
     m_browse->setEnabled(!running);
     m_start->setEnabled(!running && !m_jobs.isEmpty());
     m_cancelBtn->setEnabled(running);
@@ -354,12 +358,12 @@ void ConvertWindow::applyRunning(bool running) {
 
 void ConvertWindow::setStatus(const QString &text, bool error) {
     m_status->setText(text);
-    m_status->setStyleSheet(QStringLiteral("color:%1;background:transparent;")
-                                .arg((error ? Theme::textAccent : Theme::inkOnGlass).name()));
+    m_status->setStyleSheet(
+        QStringLiteral("color:%1;background:transparent;").arg((error ? Theme::textAccent : Theme::inkOnGlass).name()));
 }
 
 void ConvertWindow::setOverall(double ratio) {
     const double r = qBound(0.0, ratio, 1.0);
     m_progress->setRatio(r);
-    m_progress->setCaption(QStringLiteral("%1%").arg(int(r * 100.0 + 0.5)));
+    m_progress->setCaption(QStringLiteral("%1%").arg(int(std::lround(r * 100.0))));
 }

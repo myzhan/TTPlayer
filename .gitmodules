@@ -1,3 +1,27 @@
 [submodule "3rd/ffmpeg"]
 	path = 3rd/ffmpeg
 	url = https://github.com/FFmpeg/FFmpeg.git
+[submodule "3rd/zlib"]
+	path = 3rd/zlib
+	url = https://github.com/madler/zlib.git
+[submodule "3rd/libarchive"]
+	path = 3rd/libarchive
+	url = https://github.com/libarchive/libarchive.git
+[submodule "3rd/sdl3"]
+	path = 3rd/sdl3
+	url = https://github.com/libsdl-org/SDL.git
+[submodule "3rd/xz"]
+	path = 3rd/xz
+	url = https://github.com/tukaani-project/xz.git
+[submodule "3rd/ogg"]
+	path = 3rd/ogg
+	url = https://github.com/xiph/ogg.git
+[submodule "3rd/vorbis"]
+	path = 3rd/vorbis
+	url = https://github.com/xiph/vorbis.git
+[submodule "3rd/opus"]
+	path = 3rd/opus
+	url = https://github.com/xiph/opus.git
+[submodule "3rd/lame"]
+	path = 3rd/lame
+	url = https://github.com/lameproject/lame.git

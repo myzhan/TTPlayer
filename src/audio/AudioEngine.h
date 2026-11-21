@@ -2,7 +2,7 @@
 
 // 输出引擎：跨平台实现。
 // 拓扑：decoder → [EQ] → fade → volume → 设备。
-// Windows/Linux 设备 IO 走 SDL2；macOS 使用 HAL AudioUnit 按 CoreAudio UID 绑定，避免同名设备误选。
+// Windows/Linux 设备 IO 走 SDL3；macOS 使用 HAL AudioUnit 按 CoreAudio UID 绑定，避免同名设备误选。
 //
 // R08 线程模型（关键，别再改回去）：
 //   - 后台 producer 线程独占 Decoder，阻塞式拉 PCM 填「有界环」（唯一会碰网络/磁盘 IO 的地方）；
@@ -20,7 +20,8 @@
 #include <QPointer>
 #include <QString>
 #include <QStringList>
-#include <SDL2/SDL.h>
+// SDL3 与系统安装布局一致：头文件在 include/SDL3/ 下。
+#include <SDL3/SDL.h>
 #ifdef __APPLE__
 #include <AudioUnit/AudioUnit.h>
 #endif
@@ -114,7 +115,8 @@ private:
     std::vector<float> m_testCapture;
     size_t m_testCaptured = 0;
     AudioEngine();
-    static void sdlCallback(void *userdata, Uint8 *stream, int len);
+    /// SDL3 改用 push 模型：设备回调只告诉我们“还能收多少字节”，由本引擎自己填。
+    static void sdlStreamCallback(void *userdata, SDL_AudioStream *stream, int additional, int total);
     void callback(float *out, int frames);
 
     bool openDevice(double sampleRate);
@@ -199,13 +201,16 @@ private:
     Equalizer m_eq;
     SpectrumAnalyzer m_spectrum;
 
+    SDL_AudioStream *m_stream = nullptr; // SDL_OpenAudioDeviceStream 的句柄（销毁即关设备）
     SDL_AudioDeviceID m_deviceId = 0;
     void *m_nativeOutput = nullptr;
     uint32_t m_boundDevice = 0;
 
-    static constexpr int kPumpChunk = 2048; // producer 每次解码帧数
-    static constexpr int kRingCap = 131072; // 环容量（帧）≈ 3s @44.1k；回调只在不足时出静音
-    std::vector<float> m_cbL, m_cbR;        // callback 取窗暂存（仅回调线程用）
+    static constexpr int kPumpChunk = 2048;      // producer 每次解码帧数
+    static constexpr int kSdlStageFrames = 8192; // SDL3 回调一次最多填的帧数（超出分块 Put）
+    static constexpr int kRingCap = 131072;      // 环容量（帧）≈ 3s @44.1k；回调只在不足时出静音
+    std::vector<float> m_cbL, m_cbR;             // callback 取窗暂存（仅回调线程用）
+    std::vector<float> m_sdlOut;                 // SDL3 回调交织暂存（构造时分配，回调里绝不扩容）
 
     // 电平表峰值（回调写、UI 无锁读）：本窗交付样本的 |max|，含 fade*volume*gain
     std::atomic<float> m_peakL{0.0f}, m_peakR{0.0f};

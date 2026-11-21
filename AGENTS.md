@@ -1,6 +1,6 @@
 # AGENTS.md — TTPlayer 开发约定
 
-当前产品位于 `src/`，使用 C++20 / Qt 6 Widgets / FFmpeg / libarchive；Windows/Linux 输出使用 SDL2，macOS 按 UID 打开 HAL AudioUnit。
+当前产品位于 `src/`，使用 C++20 / Qt 6 Widgets / FFmpeg / libarchive；Windows/Linux 输出使用 SDL3，macOS 按 UID 打开 HAL AudioUnit。
 修改行为时，应对照 `src/testing` 自检，不能仅以编译成功作为验收。
 
 **用户确认的视觉基线是当前 Qt 深色样式。本轮禁止修改配色、字体、布局、透明度规则和控件外观。**
@@ -17,16 +17,43 @@
 
 ## 构建
 
-首次运行先初始化 FFmpeg 子模块（冻结在 n9.0，见下）：
+首次运行先初始化子模块（FFmpeg 冻结在 n9.0；zlib / xz / libarchive / SDL3 / lame /
+ogg / vorbis / opus 从源码静态编译）：
 
 ```sh
-git submodule update --init --depth 1 3rd/ffmpeg
+git submodule update --init --recursive --depth 1
 ```
 
-macOS 使用 Qt 6.8.x（含 Core5Compat）、SDL2、nasm/yasm 和 FFmpeg CLI。
+macOS 使用 Qt 6.8.x（含 Core5Compat）、nasm/yasm、`pkg-config` 和 FFmpeg CLI。
 部署目标固定 macOS 12.0，所有链接依赖也必须支持 12.0；不能用较新的 Homebrew bottle
-再提高最低系统版本来消除链接告警。CI 演示了官方 Qt 与现编 SDL 的设置。
-`CMAKE_PREFIX_PATH` 可以传入这些依赖的安装目录。
+再提高最低系统版本来消除链接告警。`CMAKE_PREFIX_PATH` 只需传 Qt 等真正的外部依赖。
+
+### 第三方源码（vendored）
+
+`3rd/` 下的 submodule 是构建输入，不是可选优化（版本以子模块 pin 的 tag 为准）：
+
+| 目录 | 内容 | 用途 |
+| --- | --- | --- |
+| `3rd/ffmpeg` | FFmpeg 9.0 | 解码，由 `scripts/build_ffmpeg*.sh` 现编静态库到 `3rd/ffmpeg-build/` |
+| `3rd/zlib` | zlib 1.3.2 | 静态 `zlibstatic`，同时供 libarchive 与 FFmpeg 静态库解析符号（FFmpeg configure 的 `--enable-zlib` 探测仍用系统头） |
+| `3rd/xz` | xz 5.8.4 | 静态 `liblzma`：macOS SDK 只带 liblzma.tbd 不带 `lzma.h`，7z / tar.xz 靠它 |
+| `3rd/libarchive` | libarchive 3.8.9 | 归档读取（ZIP / TAR.gz,bz2 / 7z），锚定 bzip2 走系统库，其余可选后端全关 |
+| `3rd/sdl3` | SDL3 3.4.20 | Windows/Linux 音频设备 IO（`SDL3-static`，不拷 dylib） |
+| `3rd/lame` | LAME 3.100（pin commit `1f5cc94`） | MP3 编码：FFmpeg 没有原生 mp3 编码器 |
+| `3rd/ogg` | libogg 1.3.6 | Vorbis / Opus 的容器层 |
+| `3rd/vorbis` | libvorbis 1.3.7 | OGG Vorbis 编码 / 解码 |
+| `3rd/opus` | libopus 1.6.1 | Opus 编码 / 解码 |
+
+`TTPLAYER_VENDORED=ON`（默认）时 CMake 用 `add_subdirectory` 直接编 zlib / xz / libarchive /
+SDL3，不再让 `find_package` 去捞 Homebrew/apt/vcpkg 的同类库；`-DTTPLAYER_VENDORED=OFF`
+才回到系统库兜底。格式转换用的 LAME / libogg / libvorbis / libopus 走另一条路径：
+FFmpeg 在 configure 阶段就要探测它们（`--enable-libmp3lame/-libvorbis/-libopus`），
+所以由 `scripts/codec_deps.sh` 在 FFmpeg 之前统一编到 `3rd/codec-build/`（含 `.pc`），
+CMake 再用 `-DCODEC_ROOT` 找到并静态链接同一份产物。macOS / Linux 需要 `pkg-config`
+（macOS 缺省时会自动生成一个只认本目录 `.pc` 的替身）；MSVC 走 MSYS2 的 `pkgconf`。
+新增可选后端前先确认它不会悄悄链上系统动态库（实测 `otool -L` /
+`ldd`），否则就一并 vendored 或关掉。构建目录统一在 `build/` 下（Debug `build/`、
+Release `build/release/`），不得另开 `build-xxx` 旁路目录。
 
 FFmpeg 源码冻结为 **9.0**（子模块 pin 在 tag `n9.0`）：`scripts/ffmpeg_components.sh` 里的
 `FFMPEG_RELEASE` 是唯一版本声明，四个 `build_ffmpeg*.sh` 都会校验 `3rd/ffmpeg/RELEASE`，
@@ -44,14 +71,16 @@ cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release
 cmake --build build/release -j 4
 ```
 
-Linux 依赖 Qt6 Widgets/Network/Core5Compat/Concurrent/DBus、SDL2、libarchive、zlib、FFmpeg CLI，
-运行 `bash scripts/build_ffmpeg_linux.sh`。Windows 使用 MSVC 2022、Qt msvc2022_64、
-vcpkg x64-windows 的 SDL2/libarchive/zlib；初始化 MSVC developer 环境后，
-在继承该环境的 MSYS shell 中运行 `scripts/build_ffmpeg_msvc.sh`，再由 CMake 构建。
-不要混链 MSVC 与 MinGW 的 C++ 库。具体的依赖版本、生成器和安装步骤见 [CI 配置](.github/workflows/ci.yml)。
-MSVC 的 FFmpeg 脚本默认同时构建 Release（/MD）与 Debug（/MDd），Debug 静态库放在
-`3rd/ffmpeg-build/debug/`；CMake 按构型选库。Debug 自检还需把 vcpkg 的 `debug/bin`
-加入 DLL 搜索路径，不能只提供 Release 的 `bin`。
+Linux 依赖 Qt6 Widgets/Network/Core5Compat/Concurrent/DBus、FFmpeg CLI、`pkg-config` 和
+`zlib1g-dev`（仅给 FFmpeg configure 探测），运行 `bash scripts/build_ffmpeg_linux.sh`。
+Windows 使用 MSVC 2022、Qt msvc2022_64；MSYS2 只需 `make nasm yasm pkgconf`。
+zlib、SDL3、libarchive 与 lame/ogg/vorbis/opus 一样由 `3rd/` 源码现编，不再需要 vcpkg。
+初始化 MSVC developer 环境后，在继承该环境的 MSYS shell 中运行 `scripts/build_ffmpeg_msvc.sh`，
+再由 CMake 构建。不要混链 MSVC 与 MinGW 的 C++ 库。具体的依赖版本、生成器和安装步骤见
+[CI 配置](.github/workflows/ci.yml)。MSVC 的 FFmpeg 脚本默认同时构建 Release（/MD）与
+Debug（/MDd），Debug 静态库放在 `3rd/ffmpeg-build/debug/`；CMake 按构型选库。
+用 `-DTTPLAYER_VENDORED=OFF` 回落到系统库时，Debug 自检仍需对应运行时的 DLL
+在搜索路径上，不能只提供 Release 的 `bin`。
 
 ### 运行当前 Qt 版
 

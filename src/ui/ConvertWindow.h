@@ -57,7 +57,7 @@ private:
     void setStatus(const QString &text, bool error = false);
     void setOverall(double ratio);
 
-    QList<Track> m_jobs; // 真正要转的本地文件（顺序即转换顺序）
+    QList<Track> m_jobs;    // 真正要转的本地文件（顺序即转换顺序）
     ConvertParams m_params; // 开转前在 UI 线程快照，工作线程只读这份
     QString m_outDir;
     bool m_running = false;

@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   linux:
-    # 产物：TTPlayer-<ver>-linux-x86_64.tar.gz（bin/ttplayer 与 share/ 桌面文件；Qt 6/SDL2/libarchive 依赖系统提供）
+    # 产物：TTPlayer-<ver>-linux-x86_64.tar.gz（bin/ttplayer 与 share/ 桌面文件；Qt 6 由系统提供，SDL3/libarchive/zlib/liblzma 静态内置）
     name: Linux x86_64
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -35,7 +35,9 @@ jobs:
         run: |
           sudo apt-get update
           # 系统 Qt 只用来提供 GL/xkb/dbus 等依赖库；实际链接下一步装的 6.8.3。
-          sudo apt-get install -y qt6-base-dev qt6-5compat-dev libsdl2-dev libarchive-dev zlib1g-dev nasm yasm
+          # SDL3 / libarchive / liblzma 由 3rd/ 下 submodule 现编；zlib1g-dev 只给
+          # scripts/build_ffmpeg_linux.sh 的 --enable-zlib 探测用，最终链接仍用 vendored zlib。
+          sudo apt-get install -y qt6-base-dev qt6-5compat-dev zlib1g-dev nasm yasm pkg-config
       - name: Linux Qt 6.8.3
         run: |
           python -m pip install aqtinstall
@@ -79,7 +81,7 @@ jobs:
           if-no-files-found: error
 
   windows:
-    # 产物：TTPlayer-<ver>-windows-x64.zip（bin/ 内已含 Qt 插件与 vcpkg DLL，解压到可写目录即可运行）
+    # 产物：TTPlayer-<ver>-windows-x64.zip（bin/ 内已含 Qt 插件，解压到可写目录即可运行；SDL3/zlib/libarchive 已静态内置）
     name: Windows x64
     runs-on: windows-2022
     timeout-minutes: 75
@@ -105,11 +107,9 @@ jobs:
         run: |
           python -m pip install aqtinstall
           python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -m qt5compat -O "$env:RUNNER_TEMP/Qt"
-          vcpkg install sdl2:x64-windows libarchive:x64-windows zlib:x64-windows
-          echo "TTPLAYER_VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows" >> $env:GITHUB_ENV
-          echo "CMAKE_PREFIX_PATH=$env:RUNNER_TEMP/Qt/6.8.3/msvc2022_64;$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows" >> $env:GITHUB_ENV
+          # SDL3 / libarchive / zlib / liblzma 全部由 3rd/ 子模块静态现编，不再装 vcpkg 包。
+          echo "CMAKE_PREFIX_PATH=$env:RUNNER_TEMP/Qt/6.8.3/msvc2022_64" >> $env:GITHUB_ENV
           echo "$env:RUNNER_TEMP/Qt/6.8.3/msvc2022_64/bin" >> $env:GITHUB_PATH
-          echo "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin" >> $env:GITHUB_PATH
       - name: FFmpeg (frozen 9.0, MSVC ABI)
         shell: msys2 {0}
         run: |
@@ -134,7 +134,7 @@ jobs:
         run: |
           cmake --install build/release --config Release --prefix build/dist
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          # install 已复制 vcpkg DLL 并调用 Qt 部署；这里幂等补齐插件与 VC 运行时。
+          # install 已调用 Qt 部署；这里幂等补齐插件与 VC 运行时。
           windeployqt --release --no-translations build/dist/bin/ttplayer.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Smoke test
@@ -171,17 +171,11 @@ jobs:
           python-version: '3.12'
       - name: macOS dependencies
         run: |
-          brew install nasm yasm
+          brew install nasm yasm pkg-config
           python -m pip install aqtinstall
           python -m aqt install-qt mac desktop 6.8.3 clang_64 -m qt5compat -O "$RUNNER_TEMP/Qt"
-          # 环境变量在 Unix 上以冒号分隔；分号只用于 CMake 的 -D 列表。
-          echo "CMAKE_PREFIX_PATH=$RUNNER_TEMP/Qt/6.8.3/macos:$RUNNER_TEMP/SDL" >> "$GITHUB_ENV"
-          curl --fail --location https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz -o "$RUNNER_TEMP/sdl.tar.gz"
-          tar -xf "$RUNNER_TEMP/sdl.tar.gz" -C "$RUNNER_TEMP"
-          cmake -S "$RUNNER_TEMP/SDL2-2.32.10" -B "$RUNNER_TEMP/sdl-build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/SDL"
-          cmake --build "$RUNNER_TEMP/sdl-build" -j 4
-          cmake --install "$RUNNER_TEMP/sdl-build"
-          echo "SDL2_DIR=$RUNNER_TEMP/SDL/lib/cmake/SDL2" >> "$GITHUB_ENV"
+          # SDL3 由 3rd/sdl3 子模块静态现编，不再下载安装 SDL2。
+          echo "CMAKE_PREFIX_PATH=$RUNNER_TEMP/Qt/6.8.3/macos" >> "$GITHUB_ENV"
       - name: FFmpeg (frozen 9.0)
         run: |
           echo "frozen FFmpeg source: $(cat 3rd/ffmpeg/RELEASE) @ $(git -C 3rd/ffmpeg rev-parse --short HEAD)"
@@ -239,7 +233,7 @@ jobs:
             ## 安装
 
             - **Windows**：解压到可写目录（不要放 Program Files），运行 `bin/ttplayer.exe`。用户数据保存在 exe 同目录。
-            - **Linux**：解压后运行 `bin/ttplayer`。需要系统提供 Qt 6、SDL2、libarchive 与 zlib。
+            - **Linux**：解压后运行 `bin/ttplayer`。需要系统提供 Qt 6（SDL3、libarchive、zlib、liblzma 已静态内置）。
             - **macOS**：打开 dmg，把 ttplayer.app 拖进 Applications。包为 adhoc 签名、未公证，首次启动请右键「打开」。
 
             附件：`TTPlayer-<版本>-linux-x86_64.tar.gz`、`TTPlayer-<版本>-windows-x64.zip`、`TTPlayer-<版本>-macos-arm64.dmg`。

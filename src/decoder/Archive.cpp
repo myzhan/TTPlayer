@@ -28,6 +28,19 @@ int openArchive(struct archive *reader, const QString &path) {
 #endif
 }
 
+bool nextEntry(struct archive *reader, struct archive_entry **entry) {
+    *entry = nullptr;
+    const int status = archive_read_next_header(reader, entry);
+    // Windows 的当前 C locale 不能表示 PAX UTF-8 名称时，header 仍可用、但返回 WARN。
+    return *entry && (status == CLARCHIVE_OK || status == CLARCHIVE_WARN);
+}
+
+QString archiveEntryName(struct archive_entry *entry) {
+    if (const char *name = archive_entry_pathname_utf8(entry)) return QString::fromUtf8(name);
+    if (const wchar_t *name = archive_entry_pathname_w(entry)) return QString::fromWCharArray(name);
+    return {};
+}
+
 // AVSEEK_SIZE：FFmpeg 用它查询流总大小（offset 参数无意义）
 constexpr int kSeekSize = 0x10000;
 
@@ -80,12 +93,11 @@ QStringList listAudioEntries(const QString &archivePath) {
         return out;
     }
     struct archive_entry *entry = nullptr;
-    while (archive_read_next_header(a, &entry) == CLARCHIVE_OK) {
-        const char *pn = archive_entry_pathname(entry);
+    while (nextEntry(a, &entry)) {
+        const QString name = archiveEntryName(entry);
         const la_int64_t sz = archive_entry_size(entry);
         const bool enc = archive_entry_is_encrypted(entry) != 0;
-        if (pn && sz >= 0) {
-            const QString name = QString::fromUtf8(pn);
+        if (!name.isEmpty() && sz >= 0) {
             if (!enc && exts.contains(suffixOf(name))) out.append(name);
         }
         // 不解数据，直接跳到下一条目
@@ -128,9 +140,8 @@ bool ArchiveEntrySource::openAt(int64_t skipBytes) {
     }
     struct archive_entry *entry = nullptr;
     bool found = false;
-    while (archive_read_next_header(a, &entry) == CLARCHIVE_OK) {
-        const char *pn = archive_entry_pathname(entry);
-        if (pn && QString::fromUtf8(pn) == m_entryName) {
+    while (nextEntry(a, &entry)) {
+        if (archiveEntryName(entry) == m_entryName) {
             m_entrySize = archive_entry_size(entry);
             found = true;
             break;

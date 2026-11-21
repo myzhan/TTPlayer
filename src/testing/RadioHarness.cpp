@@ -8,6 +8,7 @@
 #include <QCoreApplication>
 #include <QFile>
 #include <QThread>
+#include <QVariant>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
@@ -59,6 +60,27 @@ private:
         ++m_connections;
         QTcpSocket *sock = m_server->nextPendingConnection();
         m_socks.push_back(sock);
+        auto request = std::make_shared<QByteArray>();
+        const auto receive = [this, sock, request] {
+            if (sock->property("response-sent").toBool()) {
+                sock->readAll();
+                return;
+            }
+            request->append(sock->readAll());
+            if (request->size() > qint64{64} * 1024) {
+                sock->abort();
+                return;
+            }
+            if (!request->contains("\r\n\r\n")) return;
+            sock->setProperty("response-sent", true);
+            respond(sock);
+        };
+        // 先消费 GET 头再响应/关闭；Windows 关闭带未读请求的 socket 会导致客户端丢失 HTTP 状态。
+        connect(sock, &QIODevice::readyRead, this, receive);
+        receive();
+    }
+
+    void respond(QTcpSocket *sock) {
         if (m_mode == Mode::Denied || m_mode == Mode::Retry) {
             const int status = m_mode == Mode::Denied ? 403 : 503;
             sock->write("HTTP/1.1 " + QByteArray::number(status) +

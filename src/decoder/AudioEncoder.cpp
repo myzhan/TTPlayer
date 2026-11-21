@@ -58,7 +58,8 @@ AudioEncoder::Result encode(const QString &input, const QString &output, const E
         return result;
     };
 
-    const AVCodec *codec = avcodec_find_encoder(target.codecId);
+    const AVCodec *codec =
+        target.encoderName ? avcodec_find_encoder_by_name(target.encoderName) : avcodec_find_encoder(target.codecId);
     if (!codec) return fail(QStringLiteral("当前构建没有这个编码器"), AVERROR_ENCODER_NOT_FOUND);
 
     std::unique_ptr<Decoder> dec = Decoder::openFile(input);
@@ -70,6 +71,26 @@ AudioEncoder::Result encode(const QString &input, const QString &output, const E
     if (rc < 0 || !out.fmt) return fail(QStringLiteral("按扩展名找不到封装器"), rc < 0 ? rc : AVERROR_MUXER_NOT_FOUND);
 
     const int outRate = target.sampleRate > 0 ? target.sampleRate : int(dec->sampleRate());
+    // 编码器有采样率白名单时（libopus 只认 8/12/16/24/48 kHz），把目标率映射到最近的合法值，
+    // 否则 avcodec_open2 会直接拒绝（源 44.1k 转 Opus 是最常见的路径）。
+    int rate = outRate;
+    {
+        const void *rates = nullptr;
+        int rateCount = 0;
+        if (avcodec_get_supported_config(nullptr, codec, AV_CODEC_CONFIG_SAMPLE_RATE, 0, &rates, &rateCount) >= 0 &&
+            rates && rateCount > 0) {
+            const int *list = static_cast<const int *>(rates);
+            bool supported = false;
+            for (int i = 0; i < rateCount; ++i)
+                supported = supported || list[i] == rate;
+            if (!supported) {
+                int best = list[0];
+                for (int i = 1; i < rateCount; ++i)
+                    if (std::abs(list[i] - rate) < std::abs(best - rate)) best = list[i];
+                rate = best;
+            }
+        }
+    }
     const int srcCh = dec->channelCount() > 0 ? std::min(dec->channelCount(), 2) : 2;
     const int outCh = target.channels > 0 ? target.channels : srcCh;
 
@@ -77,8 +98,8 @@ AudioEncoder::Result encode(const QString &input, const QString &output, const E
     if (!out.st) return fail(QStringLiteral("创建输出流失败"), AVERROR(ENOMEM));
     out.cc = avcodec_alloc_context3(codec);
     if (!out.cc) return fail(QStringLiteral("创建编码器失败"), AVERROR(ENOMEM));
-    out.cc->sample_rate = outRate;
-    out.cc->time_base = AVRational{1, outRate};
+    out.cc->sample_rate = rate;
+    out.cc->time_base = AVRational{1, rate};
     av_channel_layout_default(&out.cc->ch_layout, outCh);
     if (target.bitrateKbps > 0) out.cc->bit_rate = qint64(target.bitrateKbps) * 1000;
     if (target.compressionLevel >= 0) out.cc->compression_level = target.compressionLevel;
@@ -87,8 +108,8 @@ AudioEncoder::Result encode(const QString &input, const QString &output, const E
     // FFmpeg 9 把 codec->sample_fmts 换成了 avcodec_get_supported_config 查询。
     const void *fmts = nullptr;
     int fmtCount = 0;
-    if (avcodec_get_supported_config(nullptr, codec, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0, &fmts, &fmtCount) < 0 ||
-        !fmts || fmtCount <= 0) {
+    if (avcodec_get_supported_config(nullptr, codec, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0, &fmts, &fmtCount) < 0 || !fmts ||
+        fmtCount <= 0) {
         out.cc->sample_fmt = AV_SAMPLE_FMT_FLTP;
     } else {
         out.cc->sample_fmt = *static_cast<const AVSampleFormat *>(fmts);
@@ -96,10 +117,15 @@ AudioEncoder::Result encode(const QString &input, const QString &output, const E
     // 整数采样格式显式声明位深：否则 flac / alac 编码器把「未指定」当成要压缩到 24 bit 并告警。
     switch (out.cc->sample_fmt) {
     case AV_SAMPLE_FMT_S16:
-    case AV_SAMPLE_FMT_S16P: out.cc->bits_per_raw_sample = 16; break;
+    case AV_SAMPLE_FMT_S16P:
+        out.cc->bits_per_raw_sample = 16;
+        break;
     case AV_SAMPLE_FMT_S32:
-    case AV_SAMPLE_FMT_S32P: out.cc->bits_per_raw_sample = 24; break;
-    default: break;
+    case AV_SAMPLE_FMT_S32P:
+        out.cc->bits_per_raw_sample = 24;
+        break;
+    default:
+        break;
     }
 
     rc = avcodec_open2(out.cc, codec, nullptr);
@@ -111,7 +137,7 @@ AudioEncoder::Result encode(const QString &input, const QString &output, const E
     // Decoder 恒交付立体声 float 平面帧，这里一次转换到目标采样率 / 声道 / 采样格式。
     AVChannelLayout inLayout;
     av_channel_layout_default(&inLayout, 2);
-    rc = swr_alloc_set_opts2(&out.swr, &out.cc->ch_layout, out.cc->sample_fmt, outRate, &inLayout, AV_SAMPLE_FMT_FLTP,
+    rc = swr_alloc_set_opts2(&out.swr, &out.cc->ch_layout, out.cc->sample_fmt, rate, &inLayout, AV_SAMPLE_FMT_FLTP,
                              int(dec->sampleRate()), 0, nullptr);
     if (rc < 0 || !out.swr) return fail(QStringLiteral("重采样初始化失败"), rc);
     if (std::abs(target.gainDb) > 1e-9) {
@@ -137,7 +163,7 @@ AudioEncoder::Result encode(const QString &input, const QString &output, const E
     for (AVFrame *f : {out.frame, out.scratch}) {
         f->nb_samples = cap;
         f->format = out.cc->sample_fmt;
-        f->sample_rate = outRate;
+        f->sample_rate = rate;
         av_channel_layout_copy(&f->ch_layout, &out.cc->ch_layout);
         rc = av_frame_get_buffer(f, 0);
         if (rc < 0) return fail(QStringLiteral("分配编码缓冲失败"), rc);
@@ -214,7 +240,7 @@ AudioEncoder::Result encode(const QString &input, const QString &output, const E
             return result;
         }
         // 按速率折算每轮要读多少输入帧，保证一次 swr_convert 的产出不会超过 cap。
-        int need = int(av_rescale(cap, inRate, outRate));
+        int need = int(av_rescale(cap, inRate, rate));
         need = std::clamp(need, 1, cap);
         const int got = dec->read(left.data(), right.data(), need, inPos);
         if (got <= 0) break;

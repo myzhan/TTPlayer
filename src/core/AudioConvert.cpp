@@ -7,10 +7,18 @@
 
 namespace {
 
-// 格式表：顺序即下拉框顺序。两种 m4a 靠 label 区分（AAC 有损 / ALAC 无损）。
+// 格式表：顺序即下拉框顺序。有损组在前、无损组在后；两种 m4a 靠 label 区分。
+// encoderName 只给外部库编码器填，其余留 nullptr 让 avcodec_find_encoder 按 codecId 找。
 const QList<ConvertFormat> kFormats{
     {QStringLiteral("aac"), QStringLiteral("AAC (M4A)"), QStringLiteral("m4a"), AV_CODEC_ID_AAC, false, false, 256, 0},
-    {QStringLiteral("alac"), QStringLiteral("ALAC (M4A 无损)"), QStringLiteral("m4a"), AV_CODEC_ID_ALAC, true, true, 0, 2},
+    {QStringLiteral("mp3"), QStringLiteral("MP3"), QStringLiteral("mp3"), AV_CODEC_ID_MP3, false, false, 192, 0,
+     "libmp3lame"},
+    {QStringLiteral("vorbis"), QStringLiteral("OGG Vorbis"), QStringLiteral("ogg"), AV_CODEC_ID_VORBIS, false, false,
+     192, 0, "libvorbis"},
+    {QStringLiteral("opus"), QStringLiteral("Opus"), QStringLiteral("opus"), AV_CODEC_ID_OPUS, false, false, 160, 0,
+     "libopus"},
+    {QStringLiteral("alac"), QStringLiteral("ALAC (M4A 无损)"), QStringLiteral("m4a"), AV_CODEC_ID_ALAC, true, true, 0,
+     2},
     {QStringLiteral("flac"), QStringLiteral("FLAC"), QStringLiteral("flac"), AV_CODEC_ID_FLAC, true, true, 0, 12},
     {QStringLiteral("wav"), QStringLiteral("WAV"), QStringLiteral("wav"), AV_CODEC_ID_PCM_S16LE, true, false, 0, 0},
 };
@@ -50,6 +58,7 @@ EncodeTarget targetFor(const ConvertParams &params) {
     if (!fmt) return target;
 
     target.codecId = fmt->codecId;
+    target.encoderName = fmt->encoderName;
     target.sampleRate = params.sampleRate;
     target.channels = params.channels;
     target.gainDb = params.gainDb;
