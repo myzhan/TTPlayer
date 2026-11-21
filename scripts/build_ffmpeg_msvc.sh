@@ -50,6 +50,8 @@ if [[ "$CONFIG" == Debug ]]; then ZLIB_PREFIX="$ZLIB_PREFIX/debug"; fi
 ZLIB_KEY="$CONFIG|$(git -C "$ZLIB_SRC" rev-parse HEAD 2>/dev/null || echo missing)"
 if [[ "${1:-}" == "--force" ]] || [[ ! -f "$ZLIB_PREFIX/.built-config" || "$(cat "$ZLIB_PREFIX/.built-config")" != "$ZLIB_KEY" ]]; then
     echo "=== 编译 zlib（$CONFIG）==="
+    # codec-build 目录在首次构建时还不存在，日志重定向会直接报 No such file；先建父目录。
+    mkdir -p "$CODEC_PREFIX"
     ZLIB_BUILD="$(cygpath -m "$CODEC_PREFIX")/.obj-zlib-$CONFIG"
     rm -rf "$ZLIB_BUILD"
     cmake -S "$ZLIB_SRC" -B "$ZLIB_BUILD" -G "NMake Makefiles" \

@@ -121,12 +121,15 @@ build_one() {
     rm -rf "$bdir"
     mkdir -p "$bdir"
     # 源码内 configure 会污染工作树，用 out-of-tree 构建：从独立目录调 ../configure
+    # --extra-libs="-lm" 与 Linux/MinGW 保持一致：那两个平台 libm 是独立库，
+    # 探测 opus/vorbis 时 pkg-config --libs 不展开 Libs.private，缺了会链接失败。
     ( cd "$bdir" && PKG_CONFIG_PATH="$CODEC_PREFIX/lib/pkgconfig" \
         "$SRC/configure" \
         "${arch_arg[@]}" \
         ${pkg_flag} \
         --extra-cflags="$compiler_flags" \
         --extra-ldflags="$link_flags" \
+        --extra-libs="-lm" \
         --prefix="$PREFIX" \
         --enable-static --disable-shared \
         --disable-doc --disable-programs --disable-debug \

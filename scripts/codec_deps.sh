@@ -80,7 +80,10 @@ codec_build_cmake() {
     rm -rf "$bdir"
     mkdir -p "$CODEC_BUILD"
     log="$CODEC_BUILD/$name"
-    if ! cmake -S "$src" -B "$bdir" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$stage" "$@" \
+    # CMake 4 移除了对 <3.5 的兼容，而上游还停在旧版本号（vorbis 2.8.12）；
+    # CMAKE_POLICY_VERSION_MINIMUM 让 4.x 按 3.5 的策略跑，3.x 会把它当未用变量忽略。
+    if ! cmake -S "$src" -B "$bdir" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$stage" \
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 "$@" \
         >"$log-cfg.log" 2>&1; then
         echo "错误：$name configure 失败" >&2
         tail -n 30 "$log-cfg.log" >&2

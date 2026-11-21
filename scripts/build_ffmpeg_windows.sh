@@ -72,12 +72,14 @@ BDIR="$PREFIX/.obj-mingw"
 rm -rf "$BDIR"
 mkdir -p "$BDIR"
 # MinGW 原生 x86_64：asm 交给 yasm/nasm，不 --disable-asm；不 --enable-cross-compile（本机即目标）
+# 与 Linux 一致要 --extra-libs="-lm"：pkg-config --libs 不展开 Libs.private 的 -lm。
 ( cd "$BDIR" && PKG_CONFIG_PATH="$CODEC_PREFIX/lib/pkgconfig" \
     "$SRC/configure" \
     --prefix="$PREFIX" \
     $(codecs_pkg_config_flag) \
     --extra-cflags="-I$CODEC_PREFIX/include" \
     --extra-ldflags="-L$CODEC_PREFIX/lib" \
+    --extra-libs="-lm" \
     --enable-static --disable-shared \
     --disable-doc --disable-programs --disable-debug \
     --disable-everything --disable-autodetect \

@@ -68,12 +68,16 @@ BDIR="$PREFIX/.obj-linux"
 rm -rf "$BDIR"
 mkdir -p "$BDIR"
 # out-of-tree：从独立目录调 configure，不污染 submodule 工作树
+# --extra-libs="-lm"：glibc 的 libm 是独立库，而 FFmpeg 的 test_pkg_config 只调
+# `pkg-config --libs`（不带 --static），不展开 opus.pc 的 Libs.private: -lm，
+# 静态探测就会缺 log/pow 一类符号。追加到每个链接测试末尾，解析顺序也对。
 ( cd "$BDIR" && PKG_CONFIG_PATH="$CODEC_PREFIX/lib/pkgconfig" \
     "$SRC/configure" \
     --prefix="$PREFIX" \
     $(codecs_pkg_config_flag) \
     --extra-cflags="-I$CODEC_PREFIX/include" \
     --extra-ldflags="-L$CODEC_PREFIX/lib" \
+    --extra-libs="-lm" \
     --enable-static --disable-shared --enable-pic \
     --disable-doc --disable-programs --disable-debug \
     --disable-everything --disable-autodetect \
