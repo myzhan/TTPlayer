@@ -61,6 +61,25 @@ def is_source(name):
     return bool(parts) and parts[0] in SOURCE_DIRS
 
 
+def source_diagnostics(output):
+    """整仓也只约束 src/；分析器不总是遵守 HeaderFilterRegex，编译错误仍全部保留。"""
+    found = []
+    for line in output.splitlines():
+        if ": error:" in line:
+            found.append(line)
+            continue
+        match = re.match(r"^(.*?):\d+:\d+: warning:", line)
+        if not match:
+            continue
+        try:
+            name = Path(match.group(1)).resolve().relative_to(ROOT)
+        except ValueError:
+            continue
+        if is_source(str(name)):
+            found.append(line)
+    return found
+
+
 def changed_files(base, include_untracked):
     """相对 base 的改动文件（重命名取新名、删除不计），只留 src/ 下的 C++ 源。"""
     diff = git("diff", "--name-only", "--diff-filter=ACMR", base, check=False)
@@ -214,11 +233,15 @@ def tidy_check(base, all_files, fix, build_dir):
         return any(start <= row <= end for start, end in spans)
 
     warnings = []
+    report = ROOT / build_dir / "lint"
     for index, file in enumerate(files, 1):
         args = [tidy, "-p", build_dir, "--quiet", str(file)] + (["--fix"] if fix else [])
         done = subprocess.run(args, text=True, capture_output=True, check=False)
-        found = [line for line in (done.stdout + done.stderr).splitlines()
-                 if ": warning:" in line or ": error:" in line]
+        output = done.stdout + done.stderr
+        trace = report / file.relative_to(ROOT).with_suffix(".log")
+        trace.parent.mkdir(parents=True, exist_ok=True)
+        trace.write_text(output)
+        found = source_diagnostics(output)
         if not all_files:
             found = [line for line in found if on_changed_line(line)]
         for line in found:

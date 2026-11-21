@@ -82,6 +82,7 @@ jobs:
           name: ci-${{ matrix.os }}-${{ matrix.config }}-validation
           path: |
             build-ci/selftest
+            build-ci/lint
             build/dist
   windows:
     name: Windows x64
@@ -98,7 +99,7 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MSYS
-          install: make nasm yasm
+          install: make nasm yasm pkgconf
           path-type: inherit
       - name: Windows dependencies
         shell: pwsh
@@ -140,6 +141,8 @@ jobs:
         if: always()
         with:
           name: ci-windows-validation
+          include-hidden-files: true
           path: |
             build-ci/selftest-*
+            3rd/ffmpeg-build/.obj-msvc/ffbuild/config.log
             build/dist

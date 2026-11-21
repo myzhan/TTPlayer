@@ -147,7 +147,8 @@ public slots:
     }
     void OpenUri(const QString &uri) { window->loadPaths({uri}); }
 signals:
-    void Seeked(qlonglong position);
+    // moc 为信号实现生成参数名 _t1；声明不命名，避免与生成代码的名字冲突。
+    void Seeked(qlonglong);
 };
 class LinuxMediaSession final : public QObject {
     QString service;

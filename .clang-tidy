@@ -6,6 +6,8 @@
 #    更严的档（narrowing / const-correctness / include-cleaner）噪音大，
 #    等对应模块顺手改了再逐条加回来，不在这里一次性挂红。
 # 2. 不检查第三方与生成代码：3rd/、build/、*_autogen/ 不在 HeaderFilterRegex 内。
+#    clang-analyzer 的诊断位置有时落在 Qt 系统头、忽略 HeaderFilterRegex；
+#    scripts/lint.py 按 src/ 筛选告警并保存完整轨迹，编译错误不筛掉。
 #
 # 关掉 clang-analyzer-cplusplus.NewDeleteLeaks：Qt 的 QObject 父子所有权它不建模，
 # 会把 new QFutureWatcher(this) 报成泄漏（MainWindow::rescanLibrary 等三处实测均为误报）。

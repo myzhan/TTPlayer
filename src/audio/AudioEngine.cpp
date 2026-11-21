@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cmath>
+#include <utility>
 #if defined(__APPLE__)
 #include <CoreAudio/CoreAudio.h>
 
@@ -542,7 +543,7 @@ void AudioEngine::adoptDeviceRate() {
     if (std::abs(m_sampleRate - m_deviceRate) < 0.5) return;
     if (m_next) {
         m_next->decoder->requestCancel();
-        m_retiredNext = std::move(m_next);
+        m_retiredNext = std::exchange(m_next, nullptr);
     }
     const double ratio = m_deviceRate / m_sampleRate;
     m_sampleRate = m_deviceRate;
@@ -678,7 +679,7 @@ void AudioEngine::clearNext() {
     std::shared_ptr<Prepared> old;
     {
         std::lock_guard<std::mutex> lk(m_mutex);
-        old = std::move(m_next);
+        old = std::exchange(m_next, nullptr);
     }
     if (old) old->decoder->requestCancel();
 }
@@ -700,7 +701,7 @@ bool AudioEngine::promoteNext() {
     ringPush(next.l.data(), next.r.data(), next.count);
     const QString key = next.key;
     const uint64_t generation = ++m_gen;
-    m_retiredNext = std::move(m_next);
+    m_retiredNext = std::exchange(m_next, nullptr);
     std::weak_ptr<AudioEngine> weak = shared_from_this();
     QMetaObject::invokeMethod(
         qApp,

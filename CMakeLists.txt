@@ -202,7 +202,11 @@ elseif(WIN32)
   target_link_libraries(ttplayer PRIVATE
     ws2_32 secur32 bcrypt advapi32 user32 ole32 oleaut32 uuid shell32 strmiids
     gdi32 vfw32 ntdll dbghelp windowsapp)
-  find_package(ZLIB REQUIRED)
+  # 新版 vcpkg 的 libz.lib 由 ZLIBConfig 导出；旧版本仍可走 FindZLIB。
+  find_package(ZLIB QUIET CONFIG)
+  if(NOT TARGET ZLIB::ZLIB)
+    find_package(ZLIB REQUIRED)
+  endif()
   target_link_libraries(ttplayer PRIVATE ZLIB::ZLIB)
   if(MINGW)
     target_link_libraries(ttplayer PRIVATE m winpthread)

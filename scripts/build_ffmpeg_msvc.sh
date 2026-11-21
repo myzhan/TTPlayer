@@ -6,6 +6,7 @@
 # 前置条件：
 #   - 已在同一 shell 里初始化 MSVC x64 developer environment（vcvars64）
 #   - TTPLAYER_VCPKG_ROOT 指向 vcpkg 的 installed/x64-windows（提供 zlib）
+#   - MSYS2 安装 pkgconf，用 vcpkg 的 zlib.pc 解析实际库名与链接路径
 #
 # 幂等：源码 commit、本脚本、组件清单、vcpkg 路径都一致且库齐全才跳过；--force 强制重来。
 set -euo pipefail
@@ -26,6 +27,15 @@ fi
 
 require_frozen_ffmpeg "$SRC"
 COMMIT=$(git -C "$SRC" rev-parse HEAD)
+ZLIB_NATIVE=$(cygpath -m "$ZLIB_ROOT")
+export PKG_CONFIG_LIBDIR="$(cygpath -u "$ZLIB_ROOT/lib/pkgconfig")"
+export PKG_CONFIG_PATH="$PKG_CONFIG_LIBDIR"
+if ! command -v pkgconf >/dev/null; then
+    echo "错误：MSYS2 需要 pkgconf（pacman -S pkgconf）来读取 vcpkg 的 zlib.pc" >&2
+    exit 1
+fi
+pkgconf --define-variable=prefix="$ZLIB_NATIVE" --exists zlib
+echo "zlib $(pkgconf --modversion zlib): $(pkgconf --define-variable=prefix="$ZLIB_NATIVE" --libs zlib)"
 SCRIPT_HASH=$(sha256sum "$SCRIPT_DIR/build_ffmpeg_msvc.sh" | awk '{print $1}')
 COMP_HASH=$(sha256sum "$SCRIPT_DIR/ffmpeg_components.sh" | awk '{print $1}')
 CONFIG_KEY="$COMMIT|$SCRIPT_HASH|$COMP_HASH|$(uname -m)|msvc|$(cygpath -m "$ZLIB_ROOT")"
@@ -41,17 +51,22 @@ ffmpeg_begin_build "$PREFIX"
 BDIR="$PREFIX/.obj-msvc"
 rm -rf "$BDIR"
 mkdir -p "$BDIR"
-# configure 的 MSVC 过滤器会把 -L 转成 -libpath:；直接传 -LIBPATH: 会被再次转换、损坏路径。
+# extra-ldflags 在探测 MSVC 前原样保存；通过 pkg-config 输入的 -L/-l 才会转换为原生参数。
+# vcpkg 的 zlib 1.4 使用 libz.lib，不能依赖 FFmpeg 的 zlib.lib 兜底名。
 ( cd "$BDIR" && "$SRC/configure" --toolchain=msvc --arch=x86_64 --target-os=win64 \
+    --pkg-config=pkgconf \
+    --pkg-config-flags="--define-variable=prefix=$ZLIB_NATIVE" \
     --prefix="$PREFIX" \
     --enable-static --disable-shared \
     --disable-doc --disable-programs --disable-debug \
     --disable-everything --disable-autodetect \
     --enable-zlib \
     --enable-avformat --enable-avcodec --enable-avutil --enable-swresample \
-    --extra-cflags="-I$(cygpath -m "$ZLIB_ROOT/include")" \
-    --extra-ldflags="-L$(cygpath -m "$ZLIB_ROOT/lib")" \
-    "${COMPONENTS[@]}" )
+    "${COMPONENTS[@]}" ) || {
+        result=$?
+        tail -n 100 "$BDIR/ffbuild/config.log" >&2
+        exit "$result"
+    }
 
 ffmpeg_make_install "$BDIR" "$(nproc)"
 
