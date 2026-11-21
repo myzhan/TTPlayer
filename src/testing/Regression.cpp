@@ -21,6 +21,7 @@
 #include "ui/AppIcon.h"
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QMenu>
 #include <QDropEvent>
 #include <QDragEnterEvent>
 #include <QMimeData>
@@ -55,6 +56,31 @@ constexpr UInt32 kCfStringRefSize = sizeof(void *);
 #endif
 
 namespace {
+// 右键菜单树摊平成「父/子/项」：探针据此核对分组与隐藏规则
+QStringList menuPaths(const QMenu &menu, const QString &prefix = QString()) {
+    QStringList out;
+    for (QAction *action : menu.actions()) {
+        if (action->isSeparator()) continue;
+        if (QMenu *sub = action->menu())
+            out += menuPaths(*sub, prefix + action->text() + QLatin1Char('/'));
+        else
+            out << prefix + action->text();
+    }
+    return out;
+}
+
+// 菜单树里按文字找动作（含子菜单）
+QAction *findMenuAction(QMenu &menu, const QString &text) {
+    for (QAction *action : menu.actions()) {
+        if (QMenu *sub = action->menu()) {
+            if (QAction *found = findMenuAction(*sub, text)) return found;
+        } else if (action->text() == text) {
+            return action;
+        }
+    }
+    return nullptr;
+}
+
 QByteArray wave(int seconds = 30, int rate = 44100) {
     QByteArray bytes;
     QDataStream w(&bytes, QIODevice::WriteOnly);
@@ -1182,6 +1208,97 @@ public:
                       Fonts::base.families() == QStringList{"Segoe UI", "Helvetica Neue", "Arial", "Noto Sans",
                                                             "DejaVu Sans", "PingFang SC", "Microsoft YaHei",
                                                             "sans-serif"});
+                {
+                    // 右键菜单：分组 + 子菜单 + 「当前页/当前行做不到的动作不生成」。
+                    // 只核对菜单树与动作派发，不 exec：模态菜单会把探针卡在 exec 里。
+                    Collections mcol;
+                    PlayerController mctl(engine);
+                    Track local(QUrl::fromLocalFile(path));
+                    local.setTitle("Local");
+                    Track missing(QUrl::fromLocalFile(dir.path() + "/missing.flac"));
+                    missing.setTitle("Missing");
+                    Track radio = Track::fromRadio(QUrl("http://example.com/live"));
+                    radio.setTitle("Radio");
+                    mcol.setAllTracks({local, missing, radio});
+                    mctl.setTracks(mcol.currentTracks());
+                    PlaylistWindow panel(&mctl, &mcol);
+                    auto menuPathsFor = [&](int row) {
+                        QMenu menu;
+                        panel.m_view->buildContextMenu(menu, row);
+                        return menuPaths(menu);
+                    };
+
+                    panel.m_view->selectAt(0, Qt::NoModifier);
+                    const QStringList rowLocal = menuPathsFor(0);
+                    check("menu_grouped_submenus",
+                          rowLocal.contains("文件/在文件管理器中打开目录") &&
+                              rowLocal.contains("文件/转换为其他格式…") &&
+                              rowLocal.contains("列表/播放模式/顺序播放") && rowLocal.contains("添加/添加文件…") &&
+                              rowLocal.contains("歌单/新建歌单…") && rowLocal.contains("从列表移除"));
+                    check("menu_hides_radio_group_for_local",
+                          !rowLocal.contains("电台/修改电台地址…") && !rowLocal.contains("电台/重命名台名…"));
+
+                    // 探不到的文件：不给「转换为其他格式…」（不再用灰项代替隐藏）
+                    panel.m_view->selectAt(1, Qt::NoModifier);
+                    const QStringList rowMissing = menuPathsFor(1);
+                    check("menu_hides_convert_for_missing_file",
+                          rowMissing.contains("文件/重新定位文件…") && !rowMissing.contains("文件/转换为其他格式…"));
+
+                    panel.m_view->selectAt(2, Qt::NoModifier);
+                    const QStringList rowRadio = menuPathsFor(2);
+                    check("menu_radio_group",
+                          rowRadio.contains("电台/修改电台地址…") && rowRadio.contains("电台/重试这个电台") &&
+                              rowRadio.contains("电台/重命名台名…") && rowRadio.contains("电台/移入分类/未分类") &&
+                              !rowRadio.contains("文件/在文件管理器中打开目录") && !rowRadio.contains("编辑显示信息…"));
+
+                    // 媒体库是扫描只读投影：删行/清空都不列
+                    mcol.setLibraryKeys({local.identityKey(), radio.identityKey()});
+                    mcol.setViewId(Collections::kLibraryViewId);
+                    mctl.setTracks(mcol.currentTracks());
+                    panel.m_view->selectAt(0, Qt::NoModifier);
+                    const QStringList rowLibrary = menuPathsFor(0);
+                    check("menu_hides_readonly_page_actions", !rowLibrary.contains("从列表移除") &&
+                                                                  !rowLibrary.contains("列表/清空当前列表") &&
+                                                                  !rowLibrary.contains("列表/排序/按标题"));
+
+                    // 自建歌单页：定义级动作只在真有定义可改时出现；空页没有可导出的内容
+                    QString mine;
+                    mcol.playlists().create("Mine", &mine);
+                    mcol.setViewId(mine);
+                    mctl.setTracks(mcol.currentTracks());
+                    const QStringList blankCustom = menuPathsFor(-1);
+                    check("menu_playlist_definition_actions", blankCustom.contains("歌单/重命名当前歌单…") &&
+                                                                  blankCustom.contains("歌单/删除当前歌单") &&
+                                                                  blankCustom.contains("歌单/添加文件到当前歌单…") &&
+                                                                  !blankCustom.contains("歌单/导出当前页为 m3u…"));
+                    check("menu_blank_page_facts",
+                          !blankCustom.contains("下一首播放") && !blankCustom.contains("从列表移除") &&
+                              !blankCustom.contains("列表/排序/按标题") && !blankCustom.contains("列表/定位当前曲") &&
+                              !blankCustom.contains("列表/清空当前列表") && blankCustom.contains("添加/添加网络电台…"));
+
+                    // 筛选态：清空/排序会连带命中之外的内容，先不列
+                    mcol.setViewId(Collections::kAllViewId);
+                    mctl.setTracks(mcol.currentTracks());
+                    panel.m_view->selectAt(0, Qt::NoModifier);
+                    panel.m_view->setFilterActive(true);
+                    const QStringList filtered = menuPathsFor(0);
+                    check("menu_hides_page_actions_while_filtering", !filtered.contains("列表/清空当前列表") &&
+                                                                         !filtered.contains("列表/排序/按标题") &&
+                                                                         filtered.contains("从列表移除"));
+                    panel.m_view->setFilterActive(false);
+
+                    // 菜单项走 triggered 真派发：加入收藏 / 清空当前列表
+                    QMenu favMenu;
+                    panel.m_view->buildContextMenu(favMenu, 0);
+                    QAction *fav = findMenuAction(favMenu, "加入收藏");
+                    if (fav) fav->trigger();
+                    check("menu_action_dispatch", fav != nullptr && mcol.isFavorite(local.identityKey()));
+                    QMenu clearMenu;
+                    panel.m_view->buildContextMenu(clearMenu, 0);
+                    QAction *clear = findMenuAction(clearMenu, "清空当前列表");
+                    if (clear) clear->trigger();
+                    check("menu_clear_list_dispatch", clear != nullptr && mctl.tracks().isEmpty());
+                }
                 MainWindow window(&ctl, engine);
                 window.show();
                 QCoreApplication::processEvents();

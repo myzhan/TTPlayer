@@ -2,7 +2,8 @@
 
 // 播放列表窗（F04/F05 完整版）：左栏多页浏览器（收藏 + 各自建歌单 + 全部）+
 // 右栏「歌曲列表」——顶部标题行（标题 + 固定放大镜 + 可展开搜索框 + 计数），
-// 下面是全自绘 PlaylistView；添加/电台/删除/排序/模式/队列/歌单管理都在列表右键里。
+// 下面是全自绘 PlaylistView；添加/电台/删除/排序/模式/队列/歌单动作都在列表右键里，
+// 按播放 / 收藏 / 曲目 / 电台 / 列表 / 歌单 / 添加分组。
 //
 // 分工：集合层 Collections 是各页内容的真相，
 // 搜索命中只是临时把控制器列表换成命中表（pitfall #13）——清空关键字即从
@@ -71,7 +72,9 @@ private:
     QString selectedViewId() const;          // 左栏当前选中页的 viewId（无=全部页）
     void updateInfo();                       // 「共 N 首 · MM:SS」计数
     void sortView(int key);                  // 当前页显示排序：0=标题 1=艺术家 2=专辑 3=时长 -1=还原
-    void buildListMenu(); // 右键「歌单管理…」：新建/导入/导出/重命名/删除歌单
+    // 右键「歌单」子菜单：每次现填，只列当前页真能做的定义级动作
+    // （新建/导入/导出/重命名/删除、往本歌单加歌）。
+    void buildListMenu(QMenu *menu);
     // 把外部目录/音频加进当前自建歌单：后台走 Importer（目录递归、m3u/CUE 展开），
     // 读完注册进媒体库再写歌单。非自建歌单页给出提示。
     void addPathsToCurrentPlaylist(const QStringList &paths);
@@ -91,7 +94,4 @@ private:
     bool m_searchOpen = false;
     std::optional<PlaylistView::Scene> m_beforeSearch;
     QSet<QString> m_formats;
-
-    // 歌单管理菜单（懒建，右键「歌单管理…」时在鼠标位置 exec）
-    QMenu *m_listMenu = nullptr;
 };

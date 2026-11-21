@@ -12,6 +12,7 @@
 #include <QSet>
 
 class Collections;
+class QMenu;
 
 class PlaylistView : public QAbstractScrollArea {
     Q_OBJECT
@@ -41,6 +42,8 @@ public:
     Scene scene() const;
     void restoreScene(const Scene &scene);
     void setSearching(bool active) { m_searching = active; }
+    /// 搜索或格式筛选生效中：此时显示的不是整页原貌，右键里的整页动作（排序 / 清空）先不给
+    void setFilterActive(bool active) { m_filterActive = active; }
 
     /// 空页时表中央的提示（来自 Collections::emptyHintFor）；空串=不画
     void setEmptyHint(const QString &hint) {
@@ -59,13 +62,15 @@ signals:
     void removeRequested(const QList<int> &rows);       // 右键「从列表移除」（可多选）
     void enqueueNextRequested(const QList<int> &rows);  // 右键「下一首播放」
     void enqueueLaterRequested(const QList<int> &rows); // 右键「稍后播放」
-    // 工具条已收进右键：添加 / 排序 / 模式 / 队列 / 歌单管理由上层执行或弹子菜单
+    // 工具条已收进右键：页级的添加 / 列表 / 歌单三个子菜单由上层执行或现填
     void addFilesRequested();
     void addFolderRequested();
     void addRadioRequested();
-    void queueRequested();
-    void sortRequested(int key);                         // 0-3 升序、4-7 降序、-1 还原
-    void playlistMenuRequested(const QPoint &globalPos); // 「歌单管理…」在鼠标位置弹菜单
+    void sortRequested(int key); // 0-3 升序、4-7 降序、-1 还原
+    void queueRequested();       // 「列表 / 待播队列」
+    void clearListRequested();   // 「列表 / 清空当前列表」
+    /// 「歌单」子菜单：本视图只管建菜单，内容由上层按当前页现填（哪些动作这一页真能做只有它知道）
+    void playlistMenuRequested(QMenu *submenu);
     void addToListRequested(const QList<int> &rows, const QString &listId); // @fav 或自建歌单 id
     void toggleFavoriteRequested(const QList<int> &rows);                   // 收藏 / 取消收藏
     void radioAliasRequested(const QList<int> &rows); // 右键电台行「重命名台名…」（上层弹框取名）
@@ -83,10 +88,14 @@ protected:
     void leaveEvent(QEvent *) override;
     void wheelEvent(QWheelEvent *) override;
     void keyPressEvent(QKeyEvent *) override;            // Delete 移除选中 / Ctrl+A 全选
-    void contextMenuEvent(QContextMenuEvent *) override; // 右键：从列表移除
+    void contextMenuEvent(QContextMenuEvent *) override; // 右键菜单（见 buildContextMenu）
 
 private:
+    friend class RegressionTests; // 探针直接调用 buildContextMenu 核对菜单树
     bool m_searching = false;
+    bool m_filterActive = false;
+    /// 按当前环境拼右键菜单：row=-1 表示空白处（只给页级动作）；动作一律走 triggered 连接
+    void buildContextMenu(QMenu &menu, int row);
     void reload();
     void updateScrollRange();
     int rowAtPos(const QPoint &p) const;
