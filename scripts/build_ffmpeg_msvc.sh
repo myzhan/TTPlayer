@@ -10,13 +10,14 @@
 #
 # zlib 与外部编码库（ogg/vorbis/opus/lame）一样从 3rd/ 源码现编，不再依赖 vcpkg：
 #   zlib 的官方 CMake 在 Windows 下把静态库叫 zs.lib（Debug 再带 d 后缀），
-#   而 zlib.pc 与 FFmpeg 都按 `-lz` 找，所以 install 后补一份 z.lib 副本。
+#   而 pkg-config 给出的 `-lz` 在 MSVC 下被 configure 映射成 zlib.lib（msvc_common_flags
+#   有 `-lz)` 特例），所以 install 后补一份 zlib.lib 副本。
 #
 # 外部编码库（ogg/vorbis/opus/lame）在 configure 之前用同一套 MSVC 现编：
 #   Xiph 三家都带 CMake；LAME 上游只有 autotools 与古董级 Makefile.MSVC
 #   （硬编码 /machine:I386 与 /MT，VS2022 跑不了），所以在构建目录生成一个
-#   最小 CMake 包装，把 libmp3lame/*.c + mpglib/*.c 编成 mp3lame.lib，
-#   配置头用上游自带的 configMS.h。
+#   最小 CMake 包装，把 libmp3lame/*.c（含 vector/ 的 SSE 实现）+ mpglib/*.c
+#   编成 mp3lame.lib，配置头用上游自带的 configMS.h。
 #
 # 幂等：源码 commit、本脚本、组件清单、依赖路径都一致且库齐全才跳过；--force 强制重来。
 set -euo pipefail
@@ -63,18 +64,19 @@ if [[ "${1:-}" == "--force" ]] || [[ ! -f "$ZLIB_PREFIX/.built-config" || "$(cat
         || { tail -n 30 "$ZLIB_BUILD-mk.log" >&2; exit 1; }
     cmake --install "$ZLIB_BUILD" > "$ZLIB_BUILD-ins.log" 2>&1 \
         || { tail -n 30 "$ZLIB_BUILD-ins.log" >&2; exit 1; }
-    # Windows 静态库叫 zs.lib（Debug 再带 d 后缀为 zsd.lib）；zlib.pc 与
-    # FFmpeg 的 `-lz` 找的是 z.lib，补一份副本让两边都命中。
-    for built in zs zsd; do
-        if [[ -f "$ZLIB_PREFIX/lib/$built.lib" ]]; then
-            cp "$ZLIB_PREFIX/lib/$built.lib" "$ZLIB_PREFIX/lib/z.lib"
-            break
-        fi
-    done
     printf '%s\n' "$ZLIB_KEY" > "$ZLIB_PREFIX/.built-config"
 else
     echo "zlib 已就绪（$ZLIB_PREFIX），跳过编译"
 fi
+# Windows 静态库叫 zs.lib（Debug 再带 d 后缀为 zsd.lib）；FFmpeg 的 `-lz` 在 MSVC 下
+# 被同一套 flags_filter 映射成 zlib.lib，缺了就是 LNK1181: cannot open input file。
+# 放在构建分支之外，已有安装目录也能补上。
+for built in zs zsd; do
+    if [[ -f "$ZLIB_PREFIX/lib/$built.lib" ]]; then
+        cp -f "$ZLIB_PREFIX/lib/$built.lib" "$ZLIB_PREFIX/lib/zlib.lib"
+        break
+    fi
+done
 ZLIB_LIBDIR="$ZLIB_PREFIX/lib"
 ZLIB_BINDIR="$ZLIB_PREFIX/bin"
 
@@ -188,7 +190,7 @@ mkdir -p "$BDIR"
 # extra-ldflags 在探测 MSVC 前原样保存，不走 configure 的 -L/-l → -libpath:/.lib 转换，
 # 所以库搜索路径必须自己写成 link.exe 认识的 -libpath:；写 -L 会被 LNK4044 忽略，
 # 紧接着的链接测试失败。经 pkg-config 输入的 -L/-l 才由 configure 转换。
-# 3rd/zlib 现编出来的静态库叫 zs.lib，上面已补一份 z.lib 给 `-lz` 用。
+# 3rd/zlib 现编出来的静态库叫 zs.lib，上面已补一份 zlib.lib 给 `-lz` 用。
 ( cd "$BDIR" && "$SRC/configure" --toolchain=msvc --arch=x86_64 --target-os=win64 \
     --pkg-config=pkgconf \
     --extra-cflags="$CRT -I$(cygpath -m "$CODEC_INSTALL_WIN")/include" \
