@@ -146,6 +146,12 @@ if(TTPLAYER_VENDORED)
   set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
   set(SDL_TESTS OFF CACHE BOOL "" FORCE)
   set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+  # 本项目用 SDL3 只做音频设备 IO，窗口与事件都归 Qt。Linux 上没有 X11/Wayland
+  # 开发包时，SDL 的 summary 检查会直接把 configure 判失败；打开
+  # SDL_UNIX_CONSOLE_BUILD 跳过这项检查，ALSA/PulseAudio 后端仍然保留。
+  if(UNIX AND NOT APPLE)
+    set(SDL_UNIX_CONSOLE_BUILD ON CACHE BOOL "" FORCE)
+  endif()
   add_subdirectory(3rd/sdl3 EXCLUDE_FROM_ALL)
   # 我们开了全局 CMAKE_AUTOMOC，它会顺带套到 SDL3 的 C target 上，
   # 与其预编译头生成规则冲突（cmake_pch_*.hxx.pch 无规则）。三方 target 一律不跑 moc。
