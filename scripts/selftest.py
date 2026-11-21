@@ -121,7 +121,9 @@ def run_suite(binary, suite, radio_mode, fixtures, isolation, log):
         output = result.stdout + result.stderr
         code = result.returncode
     except subprocess.TimeoutExpired as error:
-        output = "TIMEOUT\n" + str(error.stdout or "")
+        # 超时被直接杀掉，stdout/stderr 都要并进日志：套件自己打的进度轨迹
+        # （如 ARCHIVE 的容器名）通常就在 stderr 里，漏了就没法定位卡点。
+        output = "TIMEOUT\n" + str(error.stdout or "") + str(error.stderr or "")
         code = 124
 
     passed = len(re.findall(r" PASS$", output, re.M))

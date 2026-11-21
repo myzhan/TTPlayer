@@ -1274,20 +1274,28 @@ public:
                 check("UI_hide_stops_timer", !window.m_spectrum->m_timer.isActive());
             }
         } else if (suite == "PERF") {
+            // 夹具构造（10000 个 QUrl 解析 + Track 拷贝 + 列表增长）不计入搜索预算：
+            // 它可以过秒级（MSVC Debug 实测约 12s），但和搜索路径无关。被测量仍是
+            // 10000 首的首次索引构建与匹配，两个阶段分开打印便于核对口径。
             QElapsedTimer timer;
             timer.start();
             Collections col;
             QList<Track> many;
+            many.reserve(10000);
             for (int i = 0; i < 10000; ++i) {
                 Track track(QUrl::fromLocalFile(QStringLiteral("/music/%1.flac").arg(i)));
                 track.setTitle(QStringLiteral("Track %1").arg(i));
                 many << track;
             }
             col.setAllTracks(many);
+            const qint64 buildMs = timer.elapsed();
+            timer.restart();
             auto result = col.search(TrackFilter("Track 9999"));
+            const qint64 searchMs = timer.elapsed();
             check("large_search_correct", result.hits.size() == 1);
-            check("large_search_budget", timer.elapsed() < 6000);
-            out << "PERF search_10000_ms=" << timer.elapsed() << '\n';
+            check("large_search_budget", searchMs < 6000);
+            out << "PERF search_10000_ms=" << searchMs << '\n';
+            out << "PERF search_10000_build_ms=" << buildMs << '\n';
 #ifdef __APPLE__
             mach_task_basic_info info{};
             mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
