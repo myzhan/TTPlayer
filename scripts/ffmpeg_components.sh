@@ -5,9 +5,13 @@
 #   build_ffmpeg_msvc.sh（MSVC）
 # 保证各平台编出来的解码覆盖面完全一致，不会因为某个平台漏了某档而行为漂移。
 #
-# 只列“本项目解码用到的”解复用器 / 解码器 / 协议；configure 会自动补齐依赖（parser/bsf 等）。
+# 只列“本项目用到的”解复用器 / 解码器 / 编码器 / 封装器；configure 会自动补齐依赖（parser/bsf 等）。
 # 电台与归档都不走 FFmpeg 内置网络/解包：前者由 QtNetwork 喂自定义 AVIOContext，
 # 后者由 libarchive 喂条目，所以这里不 enable http/tls/zip 等协议。
+#
+# 编码器只取 FFmpeg 原生实现（不引 libmp3lame/libvorbis/libopus 等外部库）：
+# aac / flac / alac / pcm 都是自带编码器，配合 ipod/mp4/flac/wav 封装器就够“格式转换”用了。
+# FFmpeg 没有原生 mp3 编码器（只有 libmp3lame / mp3_mf 这类外部实现），所以格式表不含 mp3。
 #
 # 兼容 zsh 与 bash：数组定义 + "${COMPONENTS[@]}" 展开在两者语义一致。
 
@@ -99,6 +103,16 @@ COMPONENTS=(
     --enable-decoder=bmp
     --enable-decoder=gif
     --enable-parser=mjpeg
+    # 编码器（格式转换：只用 FFmpeg 自带实现，不依赖外部编码库）
+    --enable-encoder=aac
+    --enable-encoder=flac
+    --enable-encoder=alac
+    --enable-encoder=pcm_s16le
+    # 封装器（转换输出）
+    --enable-muxer=ipod
+    --enable-muxer=mp4
+    --enable-muxer=flac
+    --enable-muxer=wav
 )
 
 # ---- 公共构建函数（各平台脚本共用） ----

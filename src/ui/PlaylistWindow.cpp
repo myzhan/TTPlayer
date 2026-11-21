@@ -114,6 +114,7 @@ PlaylistWindow::PlaylistWindow(PlayerController *controller, Collections *collec
     m_view->setCollections(collections); // 右键需要拼「加入歌单」子菜单
     right->addWidget(m_view, 1);
     connect(m_view, &PlaylistView::propertiesRequested, this, &PlaylistWindow::propertiesRequested);
+    connect(m_view, &PlaylistView::convertRequested, this, &PlaylistWindow::convertRequested);
     connect(m_view, &PlaylistView::editRequested, this, &PlaylistWindow::editRequested);
     connect(m_view, &PlaylistView::relocateRequested, this, &PlaylistWindow::relocateRequested);
     connect(m_view, &PlaylistView::radioAddressRequested, this, &PlaylistWindow::radioAddressRequested);

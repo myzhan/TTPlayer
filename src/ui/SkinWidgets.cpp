@@ -638,3 +638,54 @@ void SkinLineEdit::paintEvent(QPaintEvent *) {
     const qreal y = height() - 1.5;
     p.drawLine(QPointF(2, y), QPointF(width() - 2, y));
 }
+
+// ————————————————————————————————————————————————
+// SkinProgress
+// ————————————————————————————————————————————————
+SkinProgress::SkinProgress(QWidget *parent) : QWidget(parent) {
+    setMinimumHeight(16);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    connect(&GlassNotifier::instance(), &GlassNotifier::changed, this, [this] { update(); });
+}
+
+void SkinProgress::setRatio(double r) {
+    m_ratio = qBound(-1.0, r, 1.0);
+    update();
+}
+
+void SkinProgress::setCaption(const QString &t) {
+    m_caption = t;
+    update();
+}
+
+void SkinProgress::paintEvent(QPaintEvent *) {
+    constexpr int H = 8;
+    if (width() <= 1 || height() <= H) return;
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    const QRectF groove(0, (height() - H) / 2.0, width(), H);
+    QPainterPath gp;
+    gp.addRoundedRect(groove, H / 2.0, H / 2.0);
+    p.fillPath(gp, Theme::groove);
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(Theme::hairline, 1));
+    p.drawPath(gp);
+
+    const double fillW = qBound(0.0, width() * m_ratio, double(width()));
+    if (fillW > 1) {
+        const QRectF fr(groove.x(), groove.y(), fillW, H);
+        QPainterPath fp;
+        fp.addRoundedRect(fr, H / 2.0, H / 2.0);
+        QLinearGradient g(fr.topLeft(), fr.bottomLeft());
+        g.setColorAt(0.0, Theme::spectrumBottom);
+        g.setColorAt(1.0, Theme::spectrumTop);
+        p.fillPath(fp, g);
+    }
+
+    if (!m_caption.isEmpty()) {
+        p.setFont(Fonts::tiny);
+        p.setPen(scaledAlpha(Theme::inkOnGlass, 0.85f));
+        p.drawText(rect(), Qt::AlignCenter, m_caption);
+    }
+}

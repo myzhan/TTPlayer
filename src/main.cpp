@@ -5,6 +5,7 @@
 #include "ui/QueueWindow.h"
 #include "ui/CoverWindow.h"
 #include "ui/PropertyWindow.h"
+#include "ui/ConvertWindow.h"
 #include "ui/TrayController.h"
 #include "ui/SkinDock.h"
 #include "ui/SettingsWindow.h"
@@ -1789,6 +1790,26 @@ int main(int argc, char *argv[]) {
             out << "SHOT_PROP " << (ok ? "ok " : "fail ") << propShot << "\n";
             out.flush();
             app.quit();
+        });
+    }
+
+    // 格式转换窗单独截图（需传入音频）。导入是异步的：等一会儿再开窗，
+    // 拿不到列表时直接拿命令行路径兜底。
+    const QByteArray convertShot = qgetenv("TTPLAYER_QT_SHOT_CONVERT");
+    if (!convertShot.isEmpty()) {
+        QTimer::singleShot(300, [&controller, &inputs, convertShot, &app] {
+            QList<Track> tracks = controller.tracks();
+            if (tracks.isEmpty())
+                for (const QString &p : inputs) tracks.append(Track(QUrl::fromLocalFile(p)));
+            auto *cw = new ConvertWindow(tracks);
+            cw->show();
+            QTimer::singleShot(300, [cw, convertShot, &app] {
+                const bool ok = cw->grab().save(QString::fromLocal8Bit(convertShot));
+                QTextStream out(stdout);
+                out << "SHOT_CONVERT " << (ok ? "ok " : "fail ") << convertShot << "\n";
+                out.flush();
+                app.quit();
+            });
         });
     }
 

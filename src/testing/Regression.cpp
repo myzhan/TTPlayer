@@ -2,6 +2,7 @@
 #include "audio/AudioEngine.h"
 #include "core/Collections.h"
 #include "core/PlayerController.h"
+#include "core/AudioConvert.h"
 #include "decoder/Archive.h"
 #include "decoder/FFmpeg.h"
 #include "ui/MainWindow.h"
@@ -12,6 +13,7 @@
 #include "ui/CoverWindow.h"
 #include "ui/QueueWindow.h"
 #include "ui/PropertyWindow.h"
+#include "ui/ConvertWindow.h"
 #include "ui/SettingsWindow.h"
 #include "ui/SpectrumView.h"
 #include "ui/Theme.h"
@@ -39,6 +41,8 @@
 #include <QThread>
 #include <cmath>
 #include <chrono>
+#include <algorithm>
+#include <vector>
 #ifdef __APPLE__
 #include <mach/mach.h>
 #include <CoreAudio/CoreAudio.h>
@@ -121,6 +125,172 @@ public:
         }
         return condition();
     }
+    // 某个位置的样本峰值（左声道），用于比对增益是否真的生效
+    static float peakAt(const QString &path, int64_t pos) {
+        auto dec = Decoder::openFile(path);
+        if (!dec) return -1.0f;
+        std::vector<float> left(4096), right(4096);
+        const int got = dec->read(left.data(), right.data(), 4096, pos);
+        float peak = 0.0f;
+        for (int i = 0; i < got; ++i) peak = std::max(peak, std::abs(left[static_cast<size_t>(i)]));
+        return got > 0 ? peak : -1.0f;
+    }
+    // 格式转换：格式表 / 输出路径 / 参数翻译 / 真编解码回读（不开设备，不碰用户文件）
+    int convert() {
+        QTemporaryDir dir;
+        const QString srcPath = dir.path() + "/ramp.wav";
+        {
+            QFile file(srcPath);
+            file.open(QIODevice::WriteOnly);
+            file.write(wave(2));
+        }
+
+        // —— 格式表必须都能真编（找不到编码器 = 这个构建被裁掉了）——
+        QStringList ids;
+        bool hasEncoder = true;
+        for (const ConvertFormat &f : AudioConvert::formats()) {
+            ids << f.id;
+            hasEncoder = hasEncoder && f.codecId != AV_CODEC_ID_NONE && avcodec_find_encoder(f.codecId) != nullptr;
+        }
+        bool uniqueIds = !ids.isEmpty();
+        for (int i = 0; i < ids.size(); ++i)
+            for (int j = i + 1; j < ids.size(); ++j) uniqueIds = uniqueIds && ids[i] != ids[j];
+        check("convert_formats_unique", uniqueIds);
+        check("convert_formats_have_encoder", hasEncoder);
+        check("convert_format_lookup", AudioConvert::formatById(QStringLiteral("flac")) != nullptr &&
+                                           AudioConvert::formatById(QStringLiteral("mp3")) == nullptr);
+
+        // —— 输出路径：换后缀、同名加序号、绝不写回源文件 ——
+        check("convert_output_name", AudioConvert::outputName(QStringLiteral("/a/b/song.flac"), QStringLiteral("m4a")) ==
+                                         QStringLiteral("song.m4a"));
+        const QString sameExt = AudioConvert::uniqueOutputPath(srcPath, dir.path(), QStringLiteral("wav"));
+        check("convert_output_never_overwrites", sameExt != srcPath && sameExt.endsWith(QStringLiteral("ramp (2).wav")));
+        check("convert_output_dir_defaults_to_source",
+              QFileInfo(AudioConvert::uniqueOutputPath(QStringLiteral("/x/y/song.wav"), QString(), QStringLiteral("flac")))
+                      .absolutePath() == QStringLiteral("/x/y"));
+
+        // —— 参数翻译：有损只带码率，无损只带压缩档 ——
+        ConvertParams lossyParams;
+        lossyParams.formatId = QStringLiteral("aac");
+        lossyParams.bitrateKbps = 192;
+        lossyParams.sampleRate = 48000;
+        lossyParams.channels = 1;
+        lossyParams.compressionLevel = 9;
+        lossyParams.gainDb = -3.0;
+        const EncodeTarget lossy = AudioConvert::targetFor(lossyParams);
+        check("convert_target_lossy", lossy.codecId == AV_CODEC_ID_AAC && lossy.bitrateKbps == 192 &&
+                                          lossy.sampleRate == 48000 && lossy.channels == 1 &&
+                                          lossy.compressionLevel == -1 && lossy.gainDb == -3.0);
+        ConvertParams flacParams;
+        flacParams.formatId = QStringLiteral("flac");
+        flacParams.bitrateKbps = 320;
+        flacParams.compressionLevel = 8;
+        const EncodeTarget flacTarget = AudioConvert::targetFor(flacParams);
+        check("convert_target_lossless", flacTarget.codecId == AV_CODEC_ID_FLAC && flacTarget.bitrateKbps == 0 &&
+                                             flacTarget.compressionLevel == 8 && flacTarget.sampleRate == 0 &&
+                                             flacTarget.channels == 0);
+
+        const std::atomic<bool> never{false};
+
+        // —— 真转 FLAC（无损）：能回读、采样参数不变、时长不能短 ——
+        const QString flacOut = AudioConvert::uniqueOutputPath(srcPath, dir.path(), QStringLiteral("flac"));
+        const AudioEncoder::Result flacResult = AudioEncoder::convert(srcPath, flacOut, flacTarget, {}, never);
+        check("convert_flac_ok", flacResult.ok && QFileInfo(flacOut).size() > 1000);
+        auto flacBack = Decoder::openFile(flacOut);
+        check("convert_flac_reopen", flacBack && flacBack->sampleRate() == 44100 && flacBack->channelCount() == 2);
+        check("convert_flac_length", flacBack && qAbs(flacBack->totalFrames() - 88200) < 4096);
+
+        // —— 真转 AAC（48k / 单声道 / 192k）——
+        const QString aacOut = AudioConvert::uniqueOutputPath(srcPath, dir.path(), QStringLiteral("m4a"));
+        const AudioEncoder::Result aacResult = AudioEncoder::convert(srcPath, aacOut, lossy, {}, never);
+        check("convert_aac_ok", aacResult.ok && QFileInfo(aacOut).size() > 1000);
+        auto aacBack = Decoder::openFile(aacOut);
+        check("convert_aac_reopen", aacBack && aacBack->sampleRate() == 48000 && aacBack->channelCount() == 1);
+
+        // —— 真转 ALAC（M4A 无损）——
+        ConvertParams alacParams;
+        alacParams.formatId = QStringLiteral("alac");
+        alacParams.compressionLevel = 4;
+        const QString alacOut = AudioConvert::uniqueOutputPath(srcPath, dir.path(), QStringLiteral("m4a"));
+        const AudioEncoder::Result alacResult =
+            AudioEncoder::convert(srcPath, alacOut, AudioConvert::targetFor(alacParams), {}, never);
+        auto alacBack = Decoder::openFile(alacOut);
+        check("convert_alac_ok", alacResult.ok && alacBack && alacBack->sampleRate() == 44100 &&
+                                     alacBack->channelCount() == 2 && QFileInfo(alacOut).size() > 1000);
+
+        // —— 真转 WAV（PCM 编码器 frame_size = 0，走固定 4096 分块）——
+        ConvertParams wavParams;
+        wavParams.formatId = QStringLiteral("wav");
+        const QString wavOut = AudioConvert::uniqueOutputPath(srcPath, dir.path(), QStringLiteral("wav"));
+        const AudioEncoder::Result wavResult =
+            AudioEncoder::convert(srcPath, wavOut, AudioConvert::targetFor(wavParams), {}, never);
+        auto wavBack = Decoder::openFile(wavOut);
+        check("convert_wav_ok", wavResult.ok && wavBack && wavBack->sampleRate() == 44100 &&
+                                    wavBack->channelCount() == 2 && qAbs(wavBack->totalFrames() - 88200) < 4096);
+
+        // —— 增益真的落在样本上：-3 dB ≈ 0.708 倍（用无损格比对，避开有损编码误差）——
+        ConvertParams gainParams = flacParams;
+        gainParams.gainDb = -3.0;
+        const QString gainOut = AudioConvert::uniqueOutputPath(srcPath, dir.path(), QStringLiteral("flac"));
+        const AudioEncoder::Result gainResult =
+            AudioEncoder::convert(srcPath, gainOut, AudioConvert::targetFor(gainParams), {}, never);
+        const float srcPeak = peakAt(srcPath, 4410);
+        const float outPeak = peakAt(gainOut, 4410);
+        check("convert_gain_applied", gainResult.ok && srcPeak > 0.05f && qAbs(outPeak / srcPeak - 0.708f) < 0.05f);
+
+        // —— 取消：不留半截文件 ——
+        const QString cancelOut = dir.path() + "/cancelled.flac";
+        std::atomic<bool> cancel{true};
+        const AudioEncoder::Result cancelResult = AudioEncoder::convert(srcPath, cancelOut, flacTarget, {}, cancel);
+        check("convert_cancel_cleans_output", cancelResult.cancelled && !QFileInfo::exists(cancelOut));
+
+        // —— 坏来源：报错且不留垃圾输出 ——
+        const QString junkSrc = dir.path() + "/junk.bin";
+        {
+            QFile file(junkSrc);
+            file.open(QIODevice::WriteOnly);
+            file.write("not audio");
+        }
+        const QString junkOut = dir.path() + "/junk.flac";
+        const AudioEncoder::Result badResult = AudioEncoder::convert(junkSrc, junkOut, flacTarget, {}, never);
+        check("convert_invalid_source_fails",
+              !badResult.ok && !badResult.error.isEmpty() && !QFileInfo::exists(junkOut));
+
+        // —— 窗口层：能构造，且下拉项与格式表同源 ——
+        {
+            QDir outDir(dir.path());
+            const QStringList flacBefore = outDir.entryList({QStringLiteral("*.flac")}, QDir::Files);
+            ConvertWindow win({Track(QUrl::fromLocalFile(srcPath)),
+                               Track(QUrl::fromLocalFile(dir.path() + QStringLiteral("/gone.flac")))});
+            const QList<SkinComboBox *> combos = win.findChildren<SkinComboBox *>();
+            check("convert_window_formats_listed",
+                  !combos.isEmpty() && combos.first()->count() == int(AudioConvert::formats().size()));
+
+            // 选 FLAC，然后走对话框自己的异步通路（worker 线程 + 排队信号）真转一首。
+            if (!combos.isEmpty()) {
+                for (int i = 0; i < combos.first()->count(); ++i)
+                    if (combos.first()->itemData(i).toString() == QStringLiteral("flac")) combos.first()->setCurrentIndex(i);
+            }
+            win.start();
+            bool finished = false;
+            QElapsedTimer timer;
+            timer.start();
+            while (timer.elapsed() < 20000) {
+                QCoreApplication::processEvents();
+                for (const QString &name : outDir.entryList({QStringLiteral("*.flac")}, QDir::Files)) {
+                    if (flacBefore.contains(name)) continue;
+                    auto probe = Decoder::openFile(outDir.filePath(name));
+                    finished = probe && qAbs(probe->totalFrames() - 88200) < 4096;
+                    if (finished) break;
+                }
+                if (finished) break;
+                QThread::msleep(10);
+            }
+            check("convert_window_end_to_end", finished);
+        }
+        return failed;
+    }
+
     int audio(const QString &suite) {
         QTemporaryDir dir;
         qputenv("TTPLAYER_QT_STATE", (dir.path() + "/state.json").toUtf8());
@@ -1326,6 +1496,7 @@ int runRegressionSuite(const QString &suite, QTextStream &out) {
     if (!regressionSuites().contains(suite)) return -1;
     RegressionTests tests{out};
     if (suite == "REVIEW") return tests.edges();
+    if (suite == "CONVERT") return tests.convert();
     if (QStringList{"DECODER", "FORMAT", "GAPLESS", "GAIN", "SPECTRUM", "PLAYBACK", "SCENE", "DEVICE", "SLEEP"}
             .contains(suite))
         return tests.audio(suite);
@@ -1333,8 +1504,8 @@ int runRegressionSuite(const QString &suite, QTextStream &out) {
 }
 
 QStringList regressionSuites() {
-    return {"REVIEW", "DECODER", "FORMAT",  "GAPLESS", "GAIN",  "SPECTRUM", "PLAYBACK", "SCENE",
-            "DEVICE", "SLEEP",   "LIBRARY", "IMPORT",  "COVER", "SEARCH",   "UI",       "PERF",
+    return {"REVIEW", "CONVERT", "DECODER", "FORMAT", "GAPLESS", "GAIN", "SPECTRUM", "PLAYBACK", "SCENE",
+            "DEVICE", "SLEEP",   "LIBRARY", "IMPORT", "COVER", "SEARCH", "UI",       "PERF",
             "SYSTEM", "ARCHIVE", "CUE",     "LISTS",   "SHIFT", "PLAYLIST"};
 }
 

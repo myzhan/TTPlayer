@@ -243,3 +243,22 @@ protected:
 private:
     QLineEdit *m_edit = nullptr;
 };
+
+// —— 进度条（替 QProgressBar）：凹陷细槽 + 蓝→青渐变已转段 + 居中读数 ——
+class SkinProgress : public QWidget {
+    Q_OBJECT
+public:
+    explicit SkinProgress(QWidget *parent = nullptr);
+    /// 0..1；负数 = 不确定进度（只画槽，不画已转段）
+    void setRatio(double r);
+    double ratio() const { return m_ratio; }
+    void setCaption(const QString &t);
+    QSize sizeHint() const override { return {220, 16}; }
+
+protected:
+    void paintEvent(QPaintEvent *) override;
+
+private:
+    double m_ratio = 0;
+    QString m_caption;
+};

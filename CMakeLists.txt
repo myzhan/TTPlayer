@@ -108,6 +108,7 @@ qt_add_executable(ttplayer
   src/decoder/FFmpeg.cpp
   src/decoder/Decoder.cpp
   src/decoder/Archive.cpp
+  src/decoder/AudioEncoder.cpp
   src/audio/AudioEngine.cpp
   src/audio/EQ.cpp
   src/audio/Spectrum.cpp
@@ -129,6 +130,7 @@ qt_add_executable(ttplayer
   src/core/PlayerController.cpp
   src/core/Collections.cpp
   src/core/CrashHandler.cpp
+  src/core/AudioConvert.cpp
   src/testing/RadioHarness.cpp
   src/testing/Regression.cpp
   src/ui/Theme.cpp
@@ -144,6 +146,7 @@ qt_add_executable(ttplayer
   src/ui/LyricWindow.cpp
   src/ui/CoverWindow.cpp
   src/ui/PropertyWindow.cpp
+  src/ui/ConvertWindow.cpp
   src/ui/TrayController.cpp
   src/ui/SpectrumView.cpp
   src/ui/SkinDock.cpp

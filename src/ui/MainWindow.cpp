@@ -8,6 +8,7 @@
 #include "CoverWindow.h"
 #include "QueueWindow.h"
 #include "PropertyWindow.h"
+#include "ConvertWindow.h"
 #include "SkinDock.h"
 #include "SettingsWindow.h"
 #include "models/CoverArt.h"
@@ -666,6 +667,9 @@ void MainWindow::togglePlaylistPanel() {
         // 右键「属性」：开曲目属性窗
         connect(m_playlist, &PlaylistWindow::propertiesRequested, this,
                 [this](const Track &track) { (new PropertyWindow(track, m_controller, this))->show(); });
+        // 右键「转换为其他格式…」：开转换窗（走内嵌 libav*，不开外部进程）
+        connect(m_playlist, &PlaylistWindow::convertRequested, this,
+                [this](const QList<Track> &tracks) { (new ConvertWindow(tracks, this))->show(); });
         connect(m_playlist, &PlaylistWindow::editRequested, this, [this](const Track &track) {
             bool ok = false;
             const QString title = QInputDialog::getText(this, QStringLiteral("编辑显示信息"),

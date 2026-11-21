@@ -1,4 +1,5 @@
 build/
+build-release/
 # CMake 构建产物统一在 build/（含 Release 子目录与打包输出）
 CMakeCache.txt
 CMakeFiles/

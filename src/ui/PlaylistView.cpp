@@ -26,6 +26,15 @@ QString clock(double sec) {
     return QStringLiteral("%1:%2").arg(s / 60).arg(s % 60, 2, 10, QLatin1Char('0'));
 }
 
+// 能否转格式：只收本机文件。电台没实体、CUE 分轨转出来会变成整张镜像、
+// 归档条目是压缩包内的一截（转换只认普通路径）。
+bool convertible(const Track &t) {
+    if (t.isNull() || t.isRadio() || t.isCueSegment()) return false;
+    const QUrl url = t.url();
+    if (!url.isLocalFile() || !url.fragment().isEmpty()) return false;
+    return QFileInfo::exists(url.toLocalFile());
+}
+
 } // namespace
 
 PlaylistView::PlaylistView(PlayerController *controller, QWidget *parent)
@@ -354,6 +363,7 @@ void PlaylistView::contextMenuEvent(QContextMenuEvent *event) {
     QAction *remove = nullptr;
     QAction *properties = nullptr;
     QAction *edit = nullptr;
+    QAction *convert = nullptr;
     QAction *reveal = nullptr;
     QAction *relocate = nullptr;
     QAction *address = nullptr;
@@ -381,6 +391,12 @@ void PlaylistView::contextMenuEvent(QContextMenuEvent *event) {
         remove = menu.addAction(QStringLiteral("从列表移除"));
         properties = menu.addAction(QStringLiteral("属性"));
         edit = menu.addAction(QStringLiteral("编辑显示信息…"));
+        convert = menu.addAction(QStringLiteral("转换为其他格式…"));
+        // 多选里只要有一条不能转（电台 / CUE 分轨 / 归档条目 / 文件不在）就整项禁用，
+        // 不偷偷只转一部分。
+        bool allConvertible = true;
+        for (int r : rows) allConvertible = allConvertible && convertible(m_tracks[r]);
+        convert->setEnabled(allConvertible);
         reveal = menu.addAction(QStringLiteral("在文件管理器中打开目录"));
         relocate = menu.addAction(QStringLiteral("重新定位文件…"));
         reveal->setEnabled(!t.isRadio());
@@ -457,6 +473,12 @@ void PlaylistView::contextMenuEvent(QContextMenuEvent *event) {
     }
     if (chosen == edit) {
         emit editRequested(t);
+        return;
+    }
+    if (chosen == convert) {
+        QList<Track> picked;
+        for (int r : rows) picked.append(m_tracks[r]);
+        emit convertRequested(picked);
         return;
     }
     if (chosen == reveal) {
