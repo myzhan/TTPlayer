@@ -183,12 +183,14 @@ ffmpeg_begin_build "$PREFIX"
 BDIR="$PREFIX/.obj-msvc"
 rm -rf "$BDIR"
 mkdir -p "$BDIR"
-# extra-ldflags 在探测 MSVC 前原样保存；通过 pkg-config 输入的 -L/-l 才会转换为原生参数。
+# extra-ldflags 在探测 MSVC 前原样保存，不走 configure 的 -L/-l → -libpath:/.lib 转换，
+# 所以库搜索路径必须自己写成 link.exe 认识的 -libpath:；写 -L 会被 LNK4044 忽略，
+# 紧接着的链接测试失败。经 pkg-config 输入的 -L/-l 才由 configure 转换。
 # 3rd/zlib 现编出来的静态库叫 zs.lib，上面已补一份 z.lib 给 `-lz` 用。
 ( cd "$BDIR" && "$SRC/configure" --toolchain=msvc --arch=x86_64 --target-os=win64 \
     --pkg-config=pkgconf \
     --extra-cflags="$CRT -I$(cygpath -m "$CODEC_INSTALL_WIN")/include" \
-    --extra-ldflags="-L$(cygpath -m "$CODEC_INSTALL_WIN")/lib" \
+    --extra-ldflags="-libpath:$(cygpath -m "$CODEC_INSTALL_WIN")/lib" \
     --prefix="$PREFIX" \
     --enable-static --disable-shared \
     --disable-doc --disable-programs --disable-debug \
