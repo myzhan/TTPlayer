@@ -49,6 +49,9 @@ Linux 依赖 Qt6 Widgets/Network/Core5Compat/Concurrent/DBus、SDL2、libarchive
 vcpkg x64-windows 的 SDL2/libarchive/zlib；初始化 MSVC developer 环境后，
 在继承该环境的 MSYS shell 中运行 `scripts/build_ffmpeg_msvc.sh`，再由 CMake 构建。
 不要混链 MSVC 与 MinGW 的 C++ 库。具体的依赖版本、生成器和安装步骤见 [CI 配置](.github/workflows/ci.yml)。
+MSVC 的 FFmpeg 脚本默认同时构建 Release（/MD）与 Debug（/MDd），Debug 静态库放在
+`3rd/ffmpeg-build/debug/`；CMake 按构型选库。Debug 自检还需把 vcpkg 的 `debug/bin`
+加入 DLL 搜索路径，不能只提供 Release 的 `bin`。
 
 ### 运行当前 Qt 版
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Windows（MSVC）：在继承了 MSVC 开发者环境的 MSYS2 shell 里，从 3rd/ffmpeg 源码现编静态 FFmpeg，
-# 产出到 3rd/ffmpeg-build/{lib,include}（库名 avformat.lib 等，供 CMake 用 MSVC 链接）。
+# 默认分别产出 Release /MD 到 3rd/ffmpeg-build、Debug /MDd 到其 debug/ 子目录。
+# 可用 TTPLAYER_FFMPEG_CONFIG=Debug|Release 只构建一档；库名为 avformat.lib 等。
 # 与 MinGW/mac/linux 同一份组件清单（scripts/ffmpeg_components.sh）。
 #
 # 前置条件：
@@ -16,9 +17,22 @@ cd "$SCRIPT_DIR/.."
 ROOT=$(pwd)
 source "$SCRIPT_DIR/ffmpeg_components.sh"
 
+if [[ -z "${TTPLAYER_FFMPEG_CONFIG:-}" ]]; then
+    for config in Release Debug; do
+        TTPLAYER_FFMPEG_CONFIG="$config" bash "$SCRIPT_DIR/build_ffmpeg_msvc.sh" "$@"
+    done
+    exit 0
+fi
+
 SRC="$ROOT/3rd/ffmpeg"
 PREFIX="$ROOT/3rd/ffmpeg-build"
 ZLIB_ROOT="${TTPLAYER_VCPKG_ROOT:?设置 TTPLAYER_VCPKG_ROOT 指向 vcpkg 的 installed/x64-windows}"
+CONFIG="$TTPLAYER_FFMPEG_CONFIG"
+case "$CONFIG" in
+    Release) CRT=-MD; ZLIB_LIBDIR="$ZLIB_ROOT/lib"; ZLIB_BINDIR="$ZLIB_ROOT/bin" ;;
+    Debug) CRT=-MDd; PREFIX+="/debug"; ZLIB_LIBDIR="$ZLIB_ROOT/debug/lib"; ZLIB_BINDIR="$ZLIB_ROOT/debug/bin" ;;
+    *) echo "错误：TTPLAYER_FFMPEG_CONFIG 必须为 Debug 或 Release" >&2; exit 1 ;;
+esac
 
 if [[ ! -f "$SRC/configure" ]]; then
     echo "错误：3rd/ffmpeg 不存在或未初始化子模块" >&2
@@ -28,17 +42,26 @@ fi
 require_frozen_ffmpeg "$SRC"
 COMMIT=$(git -C "$SRC" rev-parse HEAD)
 ZLIB_NATIVE=$(cygpath -m "$ZLIB_ROOT")
-export PKG_CONFIG_LIBDIR="$(cygpath -u "$ZLIB_ROOT/lib/pkgconfig")"
+ZLIB_NATIVE_LIBDIR=$(cygpath -m "$ZLIB_LIBDIR")
+PKG_FLAGS="--define-variable=prefix=$ZLIB_NATIVE --define-variable=libdir=$ZLIB_NATIVE_LIBDIR --define-variable=includedir=$ZLIB_NATIVE/include"
+export PKG_CONFIG_LIBDIR="$(cygpath -u "$ZLIB_LIBDIR/pkgconfig")"
 export PKG_CONFIG_PATH="$PKG_CONFIG_LIBDIR"
+export PATH="$(cygpath -u "$ZLIB_BINDIR"):$PATH"
+if [[ "$CONFIG" == Debug && -n "${VCToolsRedistDir:-}" ]]; then
+    DEBUG_CRT="$(cygpath -u "$VCToolsRedistDir")/debug_nonredist/x64/Microsoft.VC143.DebugCRT"
+    if [[ -d "$DEBUG_CRT" ]]; then
+        export PATH="$DEBUG_CRT:$PATH"
+    fi
+fi
 if ! command -v pkgconf >/dev/null; then
     echo "错误：MSYS2 需要 pkgconf（pacman -S pkgconf）来读取 vcpkg 的 zlib.pc" >&2
     exit 1
 fi
-pkgconf --define-variable=prefix="$ZLIB_NATIVE" --exists zlib
-echo "zlib $(pkgconf --modversion zlib): $(pkgconf --define-variable=prefix="$ZLIB_NATIVE" --libs zlib)"
+pkgconf $PKG_FLAGS --exists zlib
+echo "$CONFIG ($CRT): zlib $(pkgconf --modversion zlib): $(pkgconf $PKG_FLAGS --libs zlib)"
 SCRIPT_HASH=$(sha256sum "$SCRIPT_DIR/build_ffmpeg_msvc.sh" | awk '{print $1}')
 COMP_HASH=$(sha256sum "$SCRIPT_DIR/ffmpeg_components.sh" | awk '{print $1}')
-CONFIG_KEY="$COMMIT|$SCRIPT_HASH|$COMP_HASH|$(uname -m)|msvc|$(cygpath -m "$ZLIB_ROOT")"
+CONFIG_KEY="$COMMIT|$SCRIPT_HASH|$COMP_HASH|$(uname -m)|msvc=$CONFIG|$ZLIB_NATIVE"
 
 # MSVC 的库名没有 lib 前缀、后缀是 .lib
 if [[ "${1:-}" != "--force" ]] && ffmpeg_is_built "$PREFIX" "$CONFIG_KEY" "$COMMIT" "" lib; then
@@ -55,7 +78,8 @@ mkdir -p "$BDIR"
 # vcpkg 的 zlib 1.4 使用 libz.lib，不能依赖 FFmpeg 的 zlib.lib 兜底名。
 ( cd "$BDIR" && "$SRC/configure" --toolchain=msvc --arch=x86_64 --target-os=win64 \
     --pkg-config=pkgconf \
-    --pkg-config-flags="--define-variable=prefix=$ZLIB_NATIVE" \
+    --pkg-config-flags="$PKG_FLAGS" \
+    --extra-cflags="$CRT" \
     --prefix="$PREFIX" \
     --enable-static --disable-shared \
     --disable-doc --disable-programs --disable-debug \

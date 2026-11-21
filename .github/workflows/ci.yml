@@ -124,11 +124,24 @@ jobs:
           # 同一个 build-ci 目录分别构建 Debug / Release，各自跑全量自检与 CTest；
           # 最后只把 Release 安装成 build/dist 供 artifact 留存。
           cmake -S . -B build-ci -G "Visual Studio 17 2022" -A x64
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $dependencyPath = $env:PATH
+          $debugCrt = Join-Path $env:VCToolsRedistDir "debug_nonredist/x64/Microsoft.VC143.DebugCRT"
           foreach ($config in @("Debug", "Release")) {
+            $env:PATH = if ($config -eq "Debug") { "$env:TTPLAYER_VCPKG_ROOT/debug/bin;$debugCrt;$env:WindowsSdkVerBinPath/x64;$dependencyPath" } else { $dependencyPath }
             cmake --build build-ci --config $config -j 4
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
             $env:TTPLAYER_BIN="build-ci/$config/ttplayer.exe"
             $env:TTPLAYER_PROBE="build-ci/selftest-$config"
+            $env:QT_QPA_PLATFORM="offscreen"
+            $env:TTPLAYER_SILENT_OUTPUT="1"
+            $env:TTPLAYER_QT_STATE="$env:RUNNER_TEMP/ci-version-$config/state.json"
+            & $env:TTPLAYER_BIN --version
+            if ($LASTEXITCODE) {
+              $startupExit = $LASTEXITCODE
+              dumpbin /DEPENDENTS $env:TTPLAYER_BIN
+              exit $startupExit
+            }
             python scripts/selftest.py all
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
             ctest --test-dir build-ci -C $config --output-on-failure
@@ -145,4 +158,5 @@ jobs:
           path: |
             build-ci/selftest-*
             3rd/ffmpeg-build/.obj-msvc/ffbuild/config.log
+            3rd/ffmpeg-build/debug/.obj-msvc/ffbuild/config.log
             build/dist

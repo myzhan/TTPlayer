@@ -92,8 +92,15 @@ set(CLIBARCHIVE_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/src/clibarchive/include)
 # FFmpeg 静态库（scripts/build_ffmpeg*.sh 的产物，三平台各自现编）
 # 可用 -DFFMPEG_ROOT 覆盖；CI 里各平台把现编产物落到同一 3rd/ffmpeg-build 布局。
 set(FFMPEG_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/3rd/ffmpeg-build CACHE PATH "prebuilt static FFmpeg root")
+set(FFMPEG_LINK_LIBRARIES)
 foreach(_component avformat avcodec swresample avutil)
   find_library(FFMPEG_${_component} NAMES ${_component} PATHS "${FFMPEG_ROOT}/lib" NO_DEFAULT_PATH REQUIRED)
+  if(MSVC)
+    # Debug 必须匹配 /MDd，不能拿 Release 的 CRT 静态对象与 Qt Debug 混链。
+    list(APPEND FFMPEG_LINK_LIBRARIES "$<IF:$<CONFIG:Debug>,${FFMPEG_ROOT}/debug/lib/${_component}.lib,${FFMPEG_${_component}}>")
+  else()
+    list(APPEND FFMPEG_LINK_LIBRARIES "${FFMPEG_${_component}}")
+  endif()
 endforeach()
 
 qt_add_executable(ttplayer
@@ -159,7 +166,7 @@ target_link_libraries(ttplayer PRIVATE
   Qt6::Widgets Qt6::Gui Qt6::Core Qt6::Network Qt6::Core5Compat Qt6::Concurrent Qt6::Sql
   ${ARCHIVE_LIBRARY}
   # 静态链接顺序按依赖
-  ${FFMPEG_avformat} ${FFMPEG_avcodec} ${FFMPEG_swresample} ${FFMPEG_avutil}
+  ${FFMPEG_LINK_LIBRARIES}
 )
 if(SDL2_LIBRARY)
   target_link_libraries(ttplayer PRIVATE ${SDL2_LIBRARY})
