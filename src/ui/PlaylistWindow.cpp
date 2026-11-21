@@ -502,6 +502,14 @@ void PlaylistWindow::focusSearch() {
     m_search->selectAll();
 }
 
+void PlaylistWindow::probeSearch(const QString &text) {
+    focusSearch();
+    m_debounce->stop();
+    m_search->setText(text); // textChanged 会重启防抖，这里立即应用并停掉它
+    m_debounce->stop();
+    applySearch();
+}
+
 void PlaylistWindow::clearSearch() {
     m_debounce->stop();
     m_formats.clear();

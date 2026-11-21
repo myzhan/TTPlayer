@@ -9,6 +9,7 @@
 
 - Debug、Release 都必须 0 error / 0 warning。CMake 已开启 GCC/Clang 的 Wall/Wextra/Wpedantic 和 MSVC 的 W4。
 - 全量自检（双构型 `selftest.sh all`）必须 0 FAIL，但它只在提交后 CI 与发布前跑；本地改动只跑 `affected` 或点名 suite，相关档必须 0 FAIL。报告实际 PASS / SKIP 数与环境。不得用增加重复断言的数量冒充覆盖对齐。
+- 验证必须按影响面精准挑档：自检跑 `./scripts/selftest.sh affected` 或点名 suite，linter 跑 `python3 scripts/lint.py all`（只查改动）；不因无关改动顺手跑全量 `selftest.sh all` 与 `lint.py all --all`，全量留给 CI 与发布前。报告实际跑过的档与 PASS / SKIP 数。
 - 自检、截图、打包探针必须隔离用户存档（`TTPLAYER_QT_STATE` 指到临时目录，`state.db` 随同目录隔离），真实用户档前后逐字节一致；不得用旧快照覆盖用户期间的修改。
 - 没有明确指示，不 commit、不 push、不打 tag、不发布 Release。
 - 音频素材只现场生成到测试目录；不把大音频、构建缓存、打包产物入仓。
@@ -133,6 +134,7 @@ python3 scripts/package.py               # 只生成本地 build/dist，不发�
 - 挑档存疑时用 `TTPLAYER_DRYRUN=1` 看清单，或用 `TTPLAYER_AFFECTED_FILES` 直接传路径复核；不要用全量兜底。
 - 跨层改动（持久化格式、输出链、线程生命周期）要把相关 suite 一并点名，仍不跑 `all`。
 - 全量只留两处：提交后 CI（`.github/workflows/ci.yml` 的 Full selftest，Linux/Windows 双构型）与发布前的双构型全量 + 打包版冒烟；改输出链额外跑打包版全量与 ASan/UBSan。
+- linter 同理：`python3 scripts/lint.py all` 只看改动行与改动文件；`--all` 整仓只在 CI、发布前或明确要整仓清零时跑，不因无关改动重扫全仓。
 - 本地验收报告写实际跑过的档与 PASS / SKIP，不拿全量 PASS 数当本地交付证据。
 
 统一实现是 `scripts/selftest.py`，可在 Windows 直接用 Python 调用。

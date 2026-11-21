@@ -13,6 +13,7 @@
 #include "media/PlaylistM3U.h"
 #include "models/RadioPresets.h"
 #include "models/RadioStations.h"
+#include "models/Track.h"
 #include "models/TrackFilter.h"
 #include "models/UserPlaylist.h"
 #include "platform/MediaSession.h"
@@ -1704,9 +1705,10 @@ int main(int argc, char *argv[]) {
 
     // 无头截图：TTPLAYER_QT_SHOT=<png 路径> 时渲染主窗口存图后退出
     // （配 QT_QPA_PLATFORM=offscreen，不依赖真实屏幕，用于目视验证皮肤）。
+    // 留 800ms 让频谱分析器热身：200ms 抓到的还是未平滑的刚起步帧，每次形状都不一样。
     const QByteArray shotPath = qgetenv("TTPLAYER_QT_SHOT");
     if (!shotPath.isEmpty()) {
-        QTimer::singleShot(200, [&window, shotPath, &app] {
+        QTimer::singleShot(800, [&window, shotPath, &app] {
             const bool ok = window.grab().save(QString::fromLocal8Bit(shotPath));
             QTextStream out(stdout);
             out << "SHOT " << (ok ? "ok " : "fail ") << shotPath << "\n";
@@ -1777,6 +1779,56 @@ int main(int argc, char *argv[]) {
             const bool ok = plw->grab().save(QString::fromLocal8Bit(plShot));
             QTextStream out(stdout);
             out << "SHOT_PLAYLIST " << (ok ? "ok " : "fail ") << plShot << "\n";
+            out.flush();
+            app.quit();
+        });
+    }
+
+    // 搜索页截图：先建列表窗，再走真实搜索通路（关键字 → 命中表 + 来源标签）。
+    const QByteArray searchShot = qgetenv("TTPLAYER_QT_SHOT_SEARCH");
+    if (!searchShot.isEmpty()) {
+        auto *plw = new PlaylistWindow(&controller, &window.collections());
+        plw->show();
+        QTimer::singleShot(300, [plw, searchShot, &app] {
+            plw->probeSearch(QStringLiteral("夜航"));
+            // 清空键是文本变非空后才可见的子控件：留一拍让它拿到几何再抓图。
+            QTimer::singleShot(100, [plw, searchShot, &app] {
+                const bool ok = plw->grab().save(QString::fromLocal8Bit(searchShot));
+                QTextStream out(stdout);
+                out << "SHOT_SEARCH " << (ok ? "ok " : "fail ") << searchShot << "\n";
+                out.flush();
+                app.quit();
+            });
+        });
+    }
+
+    // 网络电台页截图：造两台示例直播 + 一个自建分类，再切到电台页（真实投影）。
+    const QByteArray radioShot = qgetenv("TTPLAYER_QT_SHOT_RADIO");
+    if (!radioShot.isEmpty()) {
+        auto *plw = new PlaylistWindow(&controller, &window.collections());
+        plw->show();
+        QTimer::singleShot(300, [plw, &window, radioShot, &app] {
+            Collections &col = window.collections();
+            col.setAllTracks({}); // 台页只演示示例台，不混出厂内置台
+            QStringList keys;
+            const auto addStation = [&col, &keys](const QString &name, const QString &address) {
+                Track track = Track::fromRadio(QUrl(address));
+                track.setTitle(name);
+                col.registerTracks({track});
+                col.radios().setAlias(track.identityKey(), name);
+                keys << track.identityKey();
+            };
+            addStation(QStringLiteral("海港音乐台"), QStringLiteral("https://radio.example.com/harbor"));
+            addStation(QStringLiteral("夜间古典"), QStringLiteral("https://radio.example.com/nocturne"));
+            QString category;
+            col.radios().createCategory(QStringLiteral("音乐台"), &category, nullptr);
+            col.radios().moveRadios(keys, category, nullptr);
+            col.refreshRadioTitles();
+            plw->refreshGroups(); // 新分类先上左栏，再切页
+            plw->probeShowView(Collections::kRadioViewId);
+            const bool ok = plw->grab().save(QString::fromLocal8Bit(radioShot));
+            QTextStream out(stdout);
+            out << "SHOT_RADIO " << (ok ? "ok " : "fail ") << radioShot << "\n";
             out.flush();
             app.quit();
         });

@@ -35,6 +35,10 @@ public:
     /// 展开并聚焦搜索框（Cmd+F 走这里）
     void focusSearch();
 
+    // 无头截图探针：切页与按关键字搜索都走真实通路（左栏高亮、命中表、计数一起变）。
+    void probeShowView(const QString &viewId) { showPage(viewId); }
+    void probeSearch(const QString &text);
+
 signals:
     /// 收藏 / 歌单内容变了，外层据此重建索引 + 落盘
     void collectionsChanged();
