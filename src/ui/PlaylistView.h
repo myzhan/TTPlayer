@@ -60,9 +60,9 @@ signals:
     void editRequested(const Track &track);
     void radioAddressRequested(const Track &track);
     void radioRetryRequested(const Track &track);
-    void activateRow(int row);                    // 双击
-    void removeRequested(const QList<int> &rows); // Delete 快捷键移除选区。
-    void toggleFavoriteRequested(const QString &key);                       // 行内爱心只切换单个身份。
+    void activateRow(int row);                        // 双击
+    void removeRequested(const QList<int> &rows);     // Delete 快捷键移除选区。
+    void toggleFavoriteRequested(const QString &key); // 行内爱心只切换单个身份。
     void radioAliasRequested(const QList<int> &rows); // 右键电台行「重命名台名…」（上层弹框取名）
     void radioMoveCategoryRequested(const QList<int> &rows,
                                     const QString &catId); // 移入分类（catId=未分类 id 则摘归属）

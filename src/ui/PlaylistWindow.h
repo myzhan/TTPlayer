@@ -68,11 +68,11 @@ private:
     void syncGroupSelection(const QString &viewId); // 只把左栏高亮对齐，不递归触发切页
     void removeRows(const QList<int> &rows);        // 快捷键从当前页移走选中行。
     void removeTracks(const QString &view, const QList<Track> &picked, bool searchHits = false);
-    void reorderCurrentView(int target);     // 拖拽：把选区整块移到 target 行前（仅存序页生效）
-    void applySearch();                      // 关键字空=还原当前页；非空=换成命中表
-    void clearSearch();                      // 收放大镜 + 清关键字 + 还原当前页
-    QString selectedViewId() const;          // 左栏当前选中页的 viewId（无=全部页）
-    void updateInfo();                       // 「共 N 首 · HH:MM:SS」计数
+    void reorderCurrentView(int target); // 拖拽：把选区整块移到 target 行前（仅存序页生效）
+    void applySearch();                  // 关键字空=还原当前页；非空=换成命中表
+    void clearSearch();                  // 收放大镜 + 清关键字 + 还原当前页
+    QString selectedViewId() const;      // 左栏当前选中页的 viewId（无=全部页）
+    void updateInfo();                   // 「共 N 首 · HH:MM:SS」计数
     void sortView(int key, const QString &viewId = {}); // 0-3 升序、4-7 降序、-1 还原。
     // 左栏菜单绑定目标 viewId 与右侧歌曲身份快照，不在打开菜单时切页。
     void buildSidebarMenu(QMenu &menu, const QString &viewId);

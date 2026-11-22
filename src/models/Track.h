@@ -27,8 +27,8 @@ struct TrackData {
     double sampleRate = 0; // Hz
     int channels = 0;
     int bitRateKbps = 0;
-    QString formatName;    // 从实际数据格式读出的编码名，不拿扩展名猜
-    QString decodeProblem; // 人话原因；空 = 能解
+    QString formatName;     // 从实际数据格式读出的编码名，不拿扩展名猜
+    QString decodeProblem;  // 人话原因；空 = 能解
     QString embeddedLyrics; // 解码元数据中的歌词，仅会话缓存，不写入存档
     bool missingOnDisk = false;
 

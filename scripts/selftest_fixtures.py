@@ -191,6 +191,6 @@ def generate(folder: Path, matrix: bool, lyrics: bool = False):
 
 
 if __name__ == "__main__":
-    generate(Path(sys.argv[1]), True)
+    generate(Path(sys.argv[1]), True, lyrics=True)
     for reason in json.loads((Path(sys.argv[1]) / "fixture-skips.json").read_text()):
         print("FIXTURE SKIP", reason)
