@@ -14,6 +14,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -276,7 +277,7 @@ def _verify_windows(dist):
             raise RuntimeError(f"版本输出不符：{version.stdout!r} {version.stderr!r}")
         print(version.stdout.strip())
         verify_windows_metadata(exe)
-        with tempfile.TemporaryFile(mode="w+") as log:
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as log:
             process = subprocess.Popen([exe], cwd=temporary, env=env, stdout=log, stderr=log)
             try:
                 deadline = time.monotonic() + 30
@@ -338,6 +339,10 @@ def make_icns(app, png, temporary):
 
 
 def main():
+    if platform.system() == "Windows":
+        # CI 重定向时默认编码可能是 cp1252，中文路径与元数据统一用 UTF-8 输出。
+        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--verify-windows", type=Path, metavar="DIST",
                         help="仅验证已安装的 Windows 分发目录，不重新构建")
