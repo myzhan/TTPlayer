@@ -19,7 +19,7 @@ class PlaylistView : public QAbstractScrollArea {
 public:
     explicit PlaylistView(PlayerController *controller, QWidget *parent = nullptr);
 
-    /// 传入集合层才能拼出「加入列表」子菜单（为空时右键只列播放类动作）
+    /// 集合层提供行内收藏状态与电台分类。
     void setCollections(Collections *c) { m_collections = c; }
 
     void scrollToCurrent(); // 把正在播的那行滚进视野
@@ -44,8 +44,9 @@ public:
     Scene scene() const;
     void restoreScene(const Scene &scene);
     void setSearching(bool active) { m_searching = active; }
-    /// 搜索或格式筛选生效中：此时显示的不是整页原貌，右键里的整页动作（排序 / 清空）先不给
+    /// 搜索或格式筛选生效中：左栏据此隐藏当前页的排序与清空。
     void setFilterActive(bool active) { m_filterActive = active; }
+    bool filterActive() const { return m_filterActive; }
 
     /// 空页时表中央的提示（来自 Collections::emptyHintFor）；空串=不画
     void setEmptyHint(const QString &hint) {
@@ -61,16 +62,7 @@ signals:
     void radioAddressRequested(const Track &track);
     void radioRetryRequested(const Track &track);
     void activateRow(int row);                    // 双击
-    void removeRequested(const QList<int> &rows); // 右键「从列表移除」（可多选）
-    // 工具条已收进右键：页级的添加 / 列表两个子菜单由上层执行或现填
-    void addFilesRequested();
-    void addFolderRequested();
-    void addRadioRequested();
-    void sortRequested(int key); // 0-3 升序、4-7 降序、-1 还原
-    void clearListRequested();   // 「列表 / 清空当前列表」
-    /// 「列表」子菜单：本视图先填排序/模式等动作，上层按当前页追加列表管理动作
-    void playlistMenuRequested(QMenu *submenu);
-    void addToListRequested(const QList<int> &rows, const QString &listId); // @fav 或自建列表 id
+    void removeRequested(const QList<int> &rows); // Delete 快捷键移除选区。
     void toggleFavoriteRequested(const QString &key);                       // 行内爱心只切换单个身份。
     void radioAliasRequested(const QList<int> &rows); // 右键电台行「重命名台名…」（上层弹框取名）
     void radioMoveCategoryRequested(const QList<int> &rows,
@@ -93,7 +85,7 @@ private:
     friend class RegressionTests; // 探针直接调用 buildContextMenu 核对菜单树
     bool m_searching = false;
     bool m_filterActive = false;
-    /// 按当前环境拼右键菜单：row=-1 表示空白处（只给页级动作）；动作一律走 triggered 连接
+    /// 歌曲右键菜单：row=-1 表示空白处，不生成菜单；动作一律走 triggered 连接
     void buildContextMenu(QMenu &menu, int row);
     void reload();
     void updateScrollRange();

@@ -108,11 +108,10 @@ PlaylistWindow::PlaylistWindow(PlayerController *controller, Collections *collec
     topRow->addWidget(m_info);
     right->addLayout(topRow);
 
-    // 入口统一走列表右键：行上给曲目/电台动作，行上与空白处都给页级的
-    // 添加/列表两个子菜单；列表管理与排序、播放模式共用一个子菜单。
+    // 左栏管理列表，右栏仅提供文件与电台操作。
 
     m_view = new PlaylistView(controller, this);
-    m_view->setCollections(collections); // 右键需要拼「加入列表」子菜单
+    m_view->setCollections(collections); // 行内收藏与电台分类共用集合层。
     right->addWidget(m_view, 1);
     connect(m_view, &PlaylistView::propertiesRequested, this, &PlaylistWindow::propertiesRequested);
     connect(m_view, &PlaylistView::convertRequested, this, &PlaylistWindow::convertRequested);
@@ -165,116 +164,25 @@ PlaylistWindow::PlaylistWindow(PlayerController *controller, Collections *collec
         showPage(m_groups->rowData(row).toString());
     });
 
-    // 列表操作（新建/重命名/删除/导入/导出）已收进「列表」下拉，见 buildListMenu()。
-
-    // 左栏条目与空白处均可新建列表；电台页/分类页继续提供原有分类操作。
+    // 右键只绑定目标身份，不切换浏览页或丢掉右侧歌曲选区。
     m_groups->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_groups, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
-        const int r = m_groups->rowAt(pos);
-        const QString viewId = r >= 0 ? m_groups->rowData(r).toString() : QString();
-        const bool isRadio = (viewId == Collections::kRadioViewId);
-        const bool isCat = Collections::isRadioCatView(viewId);
+        const int row = m_groups->rowAt(pos);
+        const QString viewId = row >= 0 ? m_groups->rowData(row).toString() : QString();
         SkinMenu menu(this);
-        connect(menu.addAction(QStringLiteral("新建列表…")), &QAction::triggered, this,
-                &PlaylistWindow::createPlaylist);
-        if (!isRadio && !isCat) {
-            menu.exec(m_groups->mapToGlobal(pos));
-            return;
-        }
-        menu.addSeparator();
-        const QString catId = isCat ? Collections::radioCatIdOf(viewId) : QString();
-        const bool realCat = isCat && catId != RadioStations::uncategorizedID;
-        QAction *newCat = menu.addAction(QStringLiteral("新建电台分类…"));
-        QAction *renameCat = nullptr, *delCat = nullptr;
-        if (realCat) {
-            const QString name = m_collections->radios().nameOf(catId);
-            renameCat = menu.addAction(QStringLiteral("重命名分类「%1」…").arg(name));
-            delCat = menu.addAction(QStringLiteral("删除分类「%1」…").arg(name));
-        }
-        QAction *chosen = menu.exec(m_groups->mapToGlobal(pos));
-        if (!chosen) return;
-        if (chosen == newCat) {
-            bool ok = false;
-            const QString name = QInputDialog::getText(this, QStringLiteral("新建电台分类"), QStringLiteral("分类名称"),
-                                                       QLineEdit::Normal, QString(), &ok);
-            if (!ok) return;
-            QString madeId, note;
-            if (!m_collections->radios().createCategory(name, &madeId, &note)) return;
-            if (!note.isEmpty()) QMessageBox::information(this, QStringLiteral("新建电台分类"), note);
-            showPage(Collections::radioCatViewId(madeId)); // 建完就看这一页
-            refreshGroups();
-            emit collectionsChanged();
-        } else if (renameCat && chosen == renameCat) {
-            bool ok = false;
-            const QString name = QInputDialog::getText(this, QStringLiteral("重命名分类"), QStringLiteral("新名称"),
-                                                       QLineEdit::Normal, m_collections->radios().nameOf(catId), &ok);
-            if (!ok) return;
-            const QString err = m_collections->radios().renameCategory(catId, name);
-            if (!err.isEmpty()) {
-                QMessageBox::warning(this, QStringLiteral("重命名分类"), err);
-                return;
-            }
-            if (m_collections->viewId() == viewId) showPage(viewId);
-            refreshGroups();
-            emit collectionsChanged();
-        } else if (delCat && chosen == delCat) {
-            const int n = m_collections->radioCountIn(catId);
-            const auto ret =
-                QMessageBox::question(this, QStringLiteral("删除分类"),
-                                      QStringLiteral("确定删除分类「%1」？%2 个台会回到未分类（地址与台名都不动）。")
-                                          .arg(m_collections->radios().nameOf(catId))
-                                          .arg(n));
-            if (ret != QMessageBox::Yes) return;
-            int moved = 0;
-            if (!m_collections->radios().deleteCategory(catId, &moved)) return;
-            if (m_collections->viewId() == viewId) // 正在看这一页→先落到未分类，不能停在一张已删的页上
-                showPage(Collections::radioCatViewId(RadioStations::uncategorizedID));
-            refreshGroups();
-            emit collectionsChanged();
-        }
+        buildSidebarMenu(menu, viewId);
+        menu.exec(m_groups->mapToGlobal(pos));
     });
 
     // 控制器换页 / 元数据晚到 → 只刷计数（列表内容 Collections 已在切页时喂好）
     connect(m_controller, &PlayerController::listChanged, this, &PlaylistWindow::updateInfo);
 
-    // 右键页级入口：添加 / 列表（定位/排序/模式/清空及定义级动作）
-    connect(m_view, &PlaylistView::addFilesRequested, this, &PlaylistWindow::addRequested);
-    connect(m_view, &PlaylistView::addFolderRequested, this, &PlaylistWindow::addFolderRequested);
-    connect(m_view, &PlaylistView::addRadioRequested, this, &PlaylistWindow::radioRequested);
-    connect(m_view, &PlaylistView::sortRequested, this, [this](int key) { sortView(key); });
-    // 右键「列表」子菜单：视图建菜单，本窗按当前页追加定义级动作
-    connect(m_view, &PlaylistView::playlistMenuRequested, this, &PlaylistWindow::buildListMenu);
-    // 右键「列表 / 清空当前列表」（视图已按当前页藏掉不能清的情形，这里再守一道）
-    connect(m_view, &PlaylistView::clearListRequested, this, [this] {
-        if (m_beforeSearch || m_collections->viewId() == Collections::kLibraryViewId) return;
-        QList<int> rows;
-        for (int i = 0; i < m_controller->tracks().size(); ++i)
-            rows << i;
-        removeRows(rows);
-    });
-
-    // 右键「从列表移除」（可多选）
+    // Delete 快捷键仍按当前页语义移除选区。
     connect(m_view, &PlaylistView::removeRequested, this, &PlaylistWindow::removeRows);
 
     // 拖拽重排当前页
     connect(m_view, &PlaylistView::reorderRequested, this, &PlaylistWindow::reorderCurrentView);
 
-    // 右键集合类：加入指定页（@fav 或自建列表），已在页内不重复加（addKeys/toggle 自带去重）
-    connect(m_view, &PlaylistView::addToListRequested, this, [this](const QList<int> &rows, const QString &listId) {
-        const QList<Track> cur = m_controller->tracks();
-        QStringList keys;
-        for (const int row : rows)
-            if (row >= 0 && row < cur.size()) keys.append(cur[row].identityKey());
-        if (keys.isEmpty()) return;
-        if (listId == Collections::kFavViewId) {
-            for (const QString &k : std::as_const(keys))
-                if (!m_collections->isFavorite(k)) m_collections->toggleFavorite(k);
-        } else {
-            m_collections->playlists().addKeys(keys, listId);
-        }
-        if (m_collections->viewId() == listId && !m_searchOpen) showPage(listId);
-        emit collectionsChanged();
-    });
     connect(m_view, &PlaylistView::toggleFavoriteRequested, this, [this](const QString &key) {
         if (key.isEmpty()) return;
         m_collections->toggleFavorite(key);
@@ -330,43 +238,47 @@ PlaylistWindow::PlaylistWindow(PlayerController *controller, Collections *collec
 }
 
 void PlaylistWindow::removeRows(const QList<int> &rows) {
-    const QList<Track> cur = m_controller->tracks(); // 移除前的快照，按 key 删不受行号影响
-    const QString view = m_collections->viewId();
+    const QList<Track> cur = m_controller->tracks();
+    QList<Track> picked;
+    for (const int row : rows)
+        if (row >= 0 && row < cur.size()) picked << cur[row];
+    removeTracks(m_collections->viewId(), picked, m_beforeSearch.has_value());
+}
+
+// 菜单持有曲目身份快照，期间换页或重排不会把旧行号误用到另一首歌。
+void PlaylistWindow::removeTracks(const QString &view, const QList<Track> &picked, bool searchHits) {
     // 媒体库页是扫描的只读投影：删不动，先说清楚该去哪里收
-    if (!m_beforeSearch && view == Collections::kLibraryViewId) {
+    if (!searchHits && view == Collections::kLibraryViewId) {
         QMessageBox::information(
             this, QStringLiteral("媒体库"),
             QStringLiteral("媒体库是扫描出来的只读投影：想少收几首请在菜单「媒体库」里移除对应目录。"));
         return;
     }
-    if (m_beforeSearch) {
+    if (searchHits) {
         QSet<QString> keys;
         QList<Track> hits;
-        for (int row : rows)
-            if (row >= 0 && row < cur.size() && !keys.contains(cur[row].identityKey())) {
-                keys.insert(cur[row].identityKey());
-                hits << cur[row];
+        for (const Track &track : picked)
+            if (!keys.contains(track.identityKey())) {
+                keys.insert(track.identityKey());
+                hits << track;
             }
         if (keys.isEmpty()) return;
         m_collections->removeSearchHits(keys);
         m_controller->dropTracks(keys);
         for (const Track &track : hits)
             emit trackRemoved(track);
-        applySearch();
+        refreshFavorites();
         emit collectionsChanged();
         return;
     }
     QList<Track> removed;
     QSet<QString> seen;
-    for (const int row : rows) {
-        if (row < 0 || row >= cur.size()) continue;
-        const Track &t = cur[row];
+    for (const Track &t : picked) {
         if (seen.contains(t.identityKey())) continue;
         seen.insert(t.identityKey());
         if (m_collections->removeTrackFromView(view, t.identityKey())) removed.append(t);
     }
     if (removed.isEmpty()) return;
-    showPage(view); // 退出搜索态 + 重喂该页（行号随之失效，不拿旧 row 再动）
     if (view == Collections::kAllViewId || view == Collections::kRadioViewId || Collections::isRadioCatView(view)) {
         QSet<QString> keys;
         for (const Track &track : std::as_const(removed)) {
@@ -375,7 +287,8 @@ void PlaylistWindow::removeRows(const QList<int> &rows) {
         }
         m_controller->dropTracks(keys);
     }
-    // Only real deletions decline presets; cancelling a favorite or history entry does not.    // 外层记内置电台黑名单（必须在 collectionsChanged 之前）
+    // 只有真实删除才记录电台黑名单；刷新当前浏览页，不强制切换到右键目标。
+    refreshFavorites();
     emit collectionsChanged(); // 外层 invalidateIndex + saveState
 }
 
@@ -537,24 +450,29 @@ void PlaylistWindow::updateInfo() {
         m_info->setText(QStringLiteral("命中 %1 首").arg(n));
         return;
     }
-    // 参考图口径：共 N 首 · MM:SS（累加非电台时长，电台直播不计入）
+    // 共 N 首 · HH:MM:SS：累加非电台时长，小时不按 24 小时截断。
     double total = 0;
     for (const Track &t : tracks)
         if (!t.isRadio() && t.duration() > 0) total += t.duration();
-    const int s = int(std::lround(total));
-    m_info->setText(QStringLiteral("共 %1 首 · %2:%3").arg(n).arg(s / 60).arg(s % 60, 2, 10, QLatin1Char('0')));
+    const qint64 s = std::llround(total);
+    m_info->setText(QStringLiteral("共 %1 首 · %2:%3:%4")
+                        .arg(n)
+                        .arg(s / 3600, 2, 10, QLatin1Char('0'))
+                        .arg(s / 60 % 60, 2, 10, QLatin1Char('0'))
+                        .arg(s % 60, 2, 10, QLatin1Char('0')));
 }
 
-// 当前页排序写回成员次序；搜索态不排序，key>=4 代表降序。
-void PlaylistWindow::sortView(int key) {
-    if (m_beforeSearch) return;
+// 按目标身份写回成员次序；不把当前页的筛选结果当作整页，key>=4 代表降序。
+void PlaylistWindow::sortView(int key, const QString &viewId) {
+    const QString id = viewId.isEmpty() ? m_collections->viewId() : viewId;
+    if (id == m_collections->viewId() && m_view->filterActive()) return;
     const bool descending = key >= 4;
     if (descending) key -= 4;
     if (key < 0) {
-        showPage(m_collections->viewId());
+        if (id == m_collections->viewId()) showPage(id);
         return;
     }
-    QList<Track> tracks = m_controller->tracks();
+    QList<Track> tracks = m_collections->tracksOf(id);
     std::stable_sort(tracks.begin(), tracks.end(), [key](const Track &a, const Track &b) {
         switch (key) {
         case 0:
@@ -574,14 +492,165 @@ void PlaylistWindow::sortView(int key) {
     QStringList order;
     for (const Track &track : tracks)
         order << track.identityKey();
-    if (m_collections->reorderView(m_collections->viewId(), order)) {
-        m_controller->setTracks(tracks);
+    if (m_collections->reorderView(id, order)) {
+        if (id == m_collections->viewId()) m_controller->setTracks(tracks);
         emit collectionsChanged();
     }
     updateInfo();
 }
 
-// 侧栏与曲目列表共用新建流程，创建成功后刷新并选中新列表。
+// 左栏菜单：页级动作绑定右键目标，曲目动作绑定右侧选区的稳定身份。
+void PlaylistWindow::buildSidebarMenu(QMenu &menu, const QString &id) {
+    const QString source = m_collections->viewId();
+    const bool current = id == source;
+    const bool filtered = current && m_view->filterActive();
+    const bool custom = m_collections->playlists().contains(id);
+    const bool library = id == Collections::kLibraryViewId;
+    const QList<Track> target = m_collections->tracksOf(id);
+    const QList<Track> displayed = m_controller->tracks();
+    QList<Track> picked;
+    QStringList keys;
+    for (const int row : m_view->selectedRows()) {
+        if (row < 0 || row >= displayed.size()) continue;
+        picked << displayed[row];
+        keys << displayed[row].identityKey();
+    }
+    if (!keys.isEmpty()) {
+        QMenu *lists = nullptr;
+        for (const UserPlaylist &pl : m_collections->playlists().items()) {
+            const QStringList members = m_collections->playlists().keysOf(pl.id);
+            const QSet<QString> inList(members.cbegin(), members.cend());
+            if (std::all_of(keys.cbegin(), keys.cend(), [&inList](const QString &key) { return inList.contains(key); }))
+                continue;
+            if (!lists) lists = SkinMenu::addSubmenu(menu, QStringLiteral("加入列表"));
+            connect(lists->addAction(pl.name), &QAction::triggered, this, [this, keys, listId = pl.id] {
+                if (m_collections->playlists().addKeys(keys, listId) == 0) return;
+                refreshFavorites();
+                emit collectionsChanged();
+            });
+        }
+        QList<Track> removable;
+        QSet<QString> members;
+        for (const Track &track : target)
+            members.insert(track.identityKey());
+        for (const Track &track : picked)
+            if (filtered || members.contains(track.identityKey())) removable << track;
+        if (!id.isEmpty() && (!library || filtered) && !removable.isEmpty())
+            connect(menu.addAction(QStringLiteral("从列表移除")), &QAction::triggered, this,
+                    [this, id, removable, filtered] { removeTracks(id, removable, filtered); });
+    }
+    if (!menu.isEmpty()) menu.addSeparator();
+    QMenu *add = SkinMenu::addSubmenu(menu, QStringLiteral("添加"));
+    connect(add->addAction(QStringLiteral("添加文件…")), &QAction::triggered, this, [this, id, custom] {
+        if (!custom) {
+            emit addRequested();
+            return;
+        }
+        const QStringList files = QFileDialog::getOpenFileNames(this, QStringLiteral("添加音频文件"), QDir::homePath(),
+                                                                Importer::fileDialogFilter());
+        if (!files.isEmpty()) addPathsToCurrentPlaylist(files, id);
+    });
+    connect(add->addAction(QStringLiteral("添加文件夹…")), &QAction::triggered, this, [this, id, custom] {
+        if (!custom) {
+            emit addFolderRequested();
+            return;
+        }
+        const QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("添加文件夹"), QDir::homePath());
+        if (!dir.isEmpty()) addPathsToCurrentPlaylist({dir}, id);
+    });
+    connect(add->addAction(QStringLiteral("添加网络电台…")), &QAction::triggered, this,
+            &PlaylistWindow::radioRequested);
+
+    const Track currentTrack = m_controller->currentTrack();
+    const QString playing = currentTrack.isNull() ? QString() : currentTrack.identityKey();
+    if (!id.isEmpty() && std::any_of(target.cbegin(), target.cend(), [&playing](const Track &track) {
+            return !playing.isEmpty() && track.identityKey() == playing;
+        }))
+        connect(menu.addAction(QStringLiteral("定位当前曲")), &QAction::triggered, this, [this, id] {
+            if (m_collections->viewId() != id || m_view->filterActive()) showPage(id);
+            m_view->scrollToCurrent();
+        });
+    const bool sortable = custom || id == Collections::kAllViewId || id == Collections::kFavViewId;
+    if (sortable && !filtered && !target.isEmpty()) {
+        QMenu *sort = SkinMenu::addSubmenu(menu, QStringLiteral("排序"));
+        const QStringList names = {QStringLiteral("按标题"),     QStringLiteral("按艺术家"),
+                                   QStringLiteral("按专辑"),     QStringLiteral("按时长"),
+                                   QStringLiteral("按标题降序"), QStringLiteral("按艺术家降序"),
+                                   QStringLiteral("按专辑降序"), QStringLiteral("按时长降序")};
+        for (int key = 0; key < names.size(); ++key) {
+            connect(sort->addAction(names[key]), &QAction::triggered, this, [this, id, key] { sortView(key, id); });
+            if (key == 3) sort->addSeparator();
+        }
+        connect(sort->addAction(QStringLiteral("还原原序")), &QAction::triggered, this,
+                [this, id] { sortView(-1, id); });
+    }
+    QMenu *mode = SkinMenu::addSubmenu(menu, QStringLiteral("播放模式"));
+    const struct ModeRow {
+        const char *name;
+        PlayMode mode;
+    } modes[] = {{"顺序播放", PlayMode::Order},
+                 {"列表循环", PlayMode::ListLoop},
+                 {"单曲循环", PlayMode::SingleLoop},
+                 {"随机播放", PlayMode::Random}};
+    for (const ModeRow &row : modes) {
+        QAction *action = mode->addAction(QString::fromUtf8(row.name));
+        action->setCheckable(true);
+        action->setChecked(row.mode == m_controller->mode());
+        connect(action, &QAction::triggered, this, [this, value = row.mode] { m_controller->setMode(value); });
+    }
+    if (!id.isEmpty() && !library && !filtered && !target.isEmpty())
+        connect(menu.addAction(QStringLiteral("清空列表")), &QAction::triggered, this, [this, id] {
+            if (id == m_collections->viewId() && m_view->filterActive()) return;
+            removeTracks(id, m_collections->tracksOf(id));
+        });
+    buildListMenu(&menu, id);
+
+    if (id != Collections::kRadioViewId && !Collections::isRadioCatView(id)) return;
+    menu.addSeparator();
+    connect(menu.addAction(QStringLiteral("新建电台分类…")), &QAction::triggered, this, [this] {
+        bool ok = false;
+        const QString name = QInputDialog::getText(this, QStringLiteral("新建电台分类"), QStringLiteral("分类名称"),
+                                                   QLineEdit::Normal, QString(), &ok);
+        if (!ok) return;
+        QString madeId, note;
+        if (!m_collections->radios().createCategory(name, &madeId, &note)) return;
+        if (!note.isEmpty()) QMessageBox::information(this, QStringLiteral("新建电台分类"), note);
+        refreshGroups();
+        showPage(Collections::radioCatViewId(madeId));
+        emit collectionsChanged();
+    });
+    const QString catId = Collections::isRadioCatView(id) ? Collections::radioCatIdOf(id) : QString();
+    if (catId.isEmpty() || catId == RadioStations::uncategorizedID) return;
+    const QString name = m_collections->radios().nameOf(catId);
+    connect(menu.addAction(QStringLiteral("重命名分类「%1」…").arg(name)), &QAction::triggered, this, [this, catId] {
+        bool ok = false;
+        const QString renamed = QInputDialog::getText(this, QStringLiteral("重命名分类"), QStringLiteral("新名称"),
+                                                      QLineEdit::Normal, m_collections->radios().nameOf(catId), &ok);
+        if (!ok) return;
+        const QString err = m_collections->radios().renameCategory(catId, renamed);
+        if (!err.isEmpty()) {
+            QMessageBox::warning(this, QStringLiteral("重命名分类"), err);
+            return;
+        }
+        refreshGroups();
+        emit collectionsChanged();
+    });
+    connect(menu.addAction(QStringLiteral("删除分类「%1」…").arg(name)), &QAction::triggered, this, [this, id, catId] {
+        const auto ret =
+            QMessageBox::question(this, QStringLiteral("删除分类"),
+                                  QStringLiteral("确定删除分类「%1」？%2 个台会回到未分类（地址与台名都不动）。")
+                                      .arg(m_collections->radios().nameOf(catId))
+                                      .arg(m_collections->radioCountIn(catId)));
+        if (ret != QMessageBox::Yes) return;
+        int moved = 0;
+        if (!m_collections->radios().deleteCategory(catId, &moved)) return;
+        if (m_collections->viewId() == id) showPage(Collections::radioCatViewId(RadioStations::uncategorizedID));
+        refreshGroups();
+        emit collectionsChanged();
+    });
+}
+
+// 左栏新建流程，创建成功后刷新并选中新列表。
 void PlaylistWindow::createPlaylist() {
     bool ok = false;
     const QString name = QInputDialog::getText(this, QStringLiteral("新建列表"), QStringLiteral("列表名称"),
@@ -598,31 +667,12 @@ void PlaylistWindow::createPlaylist() {
     emit collectionsChanged();
 }
 
-// 「列表」子菜单每次右键新建，在视图动作之后追加当前页可用的定义级动作。
-// 固定页没有重命名/删除，空页没有可导出内容，非自建列表页不能往本页加歌。
-void PlaylistWindow::buildListMenu(QMenu *menu) {
+// 左栏定义级动作绑定右键目标；固定页不能重命名或删除。
+void PlaylistWindow::buildListMenu(QMenu *menu, const QString &id) {
     if (!menu) return;
     if (!menu->isEmpty()) menu->addSeparator();
-    const QString id = m_collections->viewId();
     const bool custom = m_collections->playlists().contains(id);
     connect(menu->addAction(QStringLiteral("新建列表…")), &QAction::triggered, this, &PlaylistWindow::createPlaylist);
-    if (custom) {
-        connect(menu->addAction(QStringLiteral("添加文件到当前列表…")), &QAction::triggered, this, [this] {
-            const QStringList files = QFileDialog::getOpenFileNames(
-                this, QStringLiteral("添加音频文件"), QDir::homePath(),
-                QStringLiteral(
-                    "音频与压缩包 (*.mp3 *.flac *.wav *.m4a *.aac *.ogg *.opus *.ape *.wv *.tta *.dsf "
-                    "*.dff *.cue *.zip *.7z *.rar *.tar *.gz *.tgz *.bz2 *.tbz *.xz *.txz *.zst);;"
-                    "音频文件 (*.mp3 *.flac *.wav *.m4a *.aac *.ogg *.opus *.ape *.wv *.tta *.dsf *.dff "
-                    "*.cue);;"
-                    "压缩包 (*.zip *.7z *.rar *.tar *.gz *.tgz *.bz2 *.tbz *.xz *.txz *.zst);;所有文件 (*)"));
-            addPathsToCurrentPlaylist(files);
-        });
-        connect(menu->addAction(QStringLiteral("添加文件夹到当前列表…")), &QAction::triggered, this, [this] {
-            const QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("添加文件夹"), QDir::homePath());
-            if (!dir.isEmpty()) addPathsToCurrentPlaylist({dir});
-        });
-    }
     connect(menu->addAction(QStringLiteral("导入 m3u…")), &QAction::triggered, this, [this] {
         const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("导入列表"), QDir::homePath(),
                                                           QStringLiteral("播放列表 (*.m3u *.m3u8)"));
@@ -649,7 +699,7 @@ void PlaylistWindow::buildListMenu(QMenu *menu) {
     });
     // 空页导出没有内容，直接不列（比点完弹「这一页是空的」少一步废话）
     if (!m_collections->tracksOf(id).isEmpty()) {
-        connect(menu->addAction(QStringLiteral("导出当前页为 m3u…")), &QAction::triggered, this, [this, id] {
+        connect(menu->addAction(QStringLiteral("导出为 m3u…")), &QAction::triggered, this, [this, id] {
             const QList<Track> tracks = m_collections->tracksOf(id);
             const QString name = m_collections->playlists().nameOf(id);
             const QString defName = QStringLiteral("%1.m3u8").arg(name.isEmpty() ? QStringLiteral("播放列表") : name);
@@ -663,7 +713,7 @@ void PlaylistWindow::buildListMenu(QMenu *menu) {
     }
     if (!custom) return;
     menu->addSeparator();
-    connect(menu->addAction(QStringLiteral("重命名当前列表…")), &QAction::triggered, this, [this, id] {
+    connect(menu->addAction(QStringLiteral("重命名列表…")), &QAction::triggered, this, [this, id] {
         bool ok = false;
         const QString name = QInputDialog::getText(this, QStringLiteral("重命名列表"), QStringLiteral("新名称"),
                                                    QLineEdit::Normal, m_collections->playlists().nameOf(id), &ok);
@@ -676,23 +726,23 @@ void PlaylistWindow::buildListMenu(QMenu *menu) {
         refreshGroups();
         emit collectionsChanged();
     });
-    connect(menu->addAction(QStringLiteral("删除当前列表")), &QAction::triggered, this, [this, id] {
+    connect(menu->addAction(QStringLiteral("删除列表")), &QAction::triggered, this, [this, id] {
         const auto ret =
             QMessageBox::question(this, QStringLiteral("删除列表"),
                                   QStringLiteral("确定删除列表「%1」？（只删除此列表，不动文件和其他列表）")
                                       .arg(m_collections->playlists().nameOf(id)));
         if (ret != QMessageBox::Yes) return;
         m_collections->playlists().remove(id);
+        if (m_collections->viewId() == id) showPage(Collections::kAllViewId);
         refreshGroups();
-        showPage(Collections::kAllViewId);
         emit collectionsChanged();
     });
 }
 
 // 把外部目录/音频加进当前自建列表：与主窗导入同一条 Importer 链路（目录递归、m3u/CUE
 // 展开、归档条目都在里面），读完注册进媒体库再写进此列表。读取放后台，大目录不卡 UI。
-void PlaylistWindow::addPathsToCurrentPlaylist(const QStringList &paths) {
-    const QString id = selectedViewId();
+void PlaylistWindow::addPathsToCurrentPlaylist(const QStringList &paths, const QString &viewId) {
+    const QString id = viewId.isEmpty() ? selectedViewId() : viewId;
     if (!m_collections->playlists().contains(id)) {
         QMessageBox::information(this, QStringLiteral("加入列表"),
                                  QStringLiteral("请先在左栏选中一个自建列表，或用「新建列表…」创建"));

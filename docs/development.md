@@ -107,12 +107,19 @@ lldb -- ./build/ttplayer
 sudo apt-get update
 sudo apt-get install -y build-essential nasm yasm pkg-config zlib1g-dev ffmpeg \
     qt6-base-dev qt6-5compat-dev libgl1-mesa-dev libxkbcommon-dev libdbus-1-dev
-python3 -m pip install aqtinstall
-python3 -m aqt install-qt linux desktop 6.8.3 linux_gcc_64 -m qt5compat -O "$HOME/Qt"
-export CMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/gcc_64"
+sudo apt-get install -y python3-venv
+python3 -m venv build/aqt-venv
+build/aqt-venv/bin/python -m pip install aqtinstall==3.3.0
+case "$(uname -m)" in
+    x86_64) qt_host=linux; qt_arch=linux_gcc_64; qt_dir=gcc_64 ;;
+    aarch64) qt_host=linux_arm64; qt_arch=linux_gcc_arm64; qt_dir=gcc_arm64 ;;
+    *) echo "不支持的 Linux 架构" >&2; exit 1 ;;
+esac
+build/aqt-venv/bin/python -m aqt install-qt "$qt_host" desktop 6.8.3 "$qt_arch" -m qt5compat -O "$HOME/Qt"
+export CMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/$qt_dir"
 ```
 
-系统 Qt 只用来提供 GL / xkb / dbus 等依赖库；实际链接的是 6.8.3。
+系统 Qt 只用来提供 GL / xkb / dbus 等依赖库；实际链接的是官方 6.8.3。arm64 原生构建使用 Ubuntu 24.04+，官方 Qt arm64 包要求 glibc 2.39+，不能放入 Ubuntu 22.04 容器后声称兼容 glibc 2.35。
 
 ### 编译
 
@@ -306,8 +313,12 @@ python3 scripts/package.py
 
 - macOS：`build/dist/ttplayer.app`，脚本会重签名；packaging 资源在 `packaging/`。
 - Linux / Windows：安装到 `build/dist`，生成对应可执行与桌面文件。
-- 发布用的 Linux AppImage 不在这里生成，而是由 `.github/workflows/release.yml` 在 ubuntu:22.04 容器里用
-  linuxdeploy + linuxdeploy-plugin-qt 现打（Qt 库与插件一起打包，glibc/GL/X11/DBus 仍由系统提供）。
+- 发布用的 Linux AppImage 不在这里生成，而是由 `.github/workflows/release.yml` 的双架构矩阵现打：
+  x86_64 使用 `ubuntu-24.04` runner + `ubuntu:22.04` 容器（glibc 2.35+），arm64 使用
+  `ubuntu-24.04-arm` runner + `ubuntu:24.04` 容器（glibc 2.39+）。linuxdeploy、Qt 插件和
+  appimagetool 按 x86_64 / aarch64 下载原生工具，产物命名为 `TTPlayer-<版本>-linux-x86_64.AppImage`
+  与 `TTPlayer-<版本>-linux-arm64.AppImage`。Qt 库与插件内置，glibc/GL/X11/DBus 仍由系统提供；
+  两档都检查包内 ELF 架构、glibc 符号门槛和 offscreen / xcb 启动，新 arm64 档另跑双构型全量自检。
   本机没有 Linux 环境时，只能靠 workflow_dispatch 试跑验证，不要用 macOS 产物代推结论。
 - 打包脚本只生成本地产物，不发布、不打 tag。
 - 更新 README 截图前，先按 [截图说明](screenshots/README.md) 隔离存档并核对内容。

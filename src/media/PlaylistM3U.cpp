@@ -107,7 +107,8 @@ struct Reader {
         visited.insert(canonical);
         const QString text = readText(canonical);
         if (text.isEmpty()) {
-            r.fail();
+            r.fail(canonical, QFileInfo(canonical).isReadable() ? QStringLiteral("列表文件为空或读取失败")
+                                                                : QStringLiteral("列表文件不可读，请检查权限"));
             return;
         }
         const QString baseDir = QFileInfo(canonical).absolutePath();
@@ -149,6 +150,10 @@ struct Reader {
             const QString canonical = fi.canonicalFilePath();
             if (visited.contains(canonical)) return;
             visited.insert(canonical);
+            if (!fi.isReadable()) {
+                r.fail(key, QStringLiteral("目录不可读，请检查权限"));
+                return;
+            }
             QDir directory(key);
             const auto files =
                 directory.entryInfoList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks, QDir::Name);
@@ -161,31 +166,38 @@ struct Reader {
             if (fi.exists())
                 absorbPlaylist(key, r);
             else
-                r.fail();
+                r.fail(key, QStringLiteral("列表文件不存在"));
             return;
         }
         if (suffix == "cue" && fi.exists()) {
-            for (const Track &track : CueSheet::toTracks(CueSheet::parseFile(key))) {
+            const auto tracks = CueSheet::toTracks(CueSheet::parseFile(key));
+            if (tracks.isEmpty()) r.fail(key, QStringLiteral("CUE 分轨表不可读或没有有效音轨"));
+            for (const Track &track : tracks) {
                 r.keep(track.identityKey(), QFileInfo::exists(track.url().toLocalFile()));
                 r.coveredImages.insert(track.url().toLocalFile());
             }
             return;
         }
         if (Archive::looksLikeArchive(key) && fi.exists()) {
-            for (const QString &entry : Archive::listAudioEntries(key))
+            QStringList problems;
+            const QStringList entries = Archive::listAudioEntries(key, &problems);
+            for (const QString &entry : entries)
                 r.keep(Archive::entryUrl(key, entry).toString(), true);
+            r.problems.append(problems);
+            r.unreadable += int(problems.size());
             return;
         }
         if (fi.exists()) {
             if (exts.contains(suffix))
                 r.keep(key, true);
             else
-                r.fail(); // 不可播的后缀（备注/封面/别的支持不了的）留下只是假条目
+                r.fail(key, QStringLiteral("不支持的文件格式（扩展名：%1）")
+                                .arg(suffix.isEmpty() ? QStringLiteral("无") : suffix));
         } else {
             if (exts.contains(suffix))
                 r.keep(key, false); // 声明为可播但文件不在盘上：留成失效
             else
-                r.fail();
+                r.fail(key, QStringLiteral("文件不存在"));
         }
     }
 };

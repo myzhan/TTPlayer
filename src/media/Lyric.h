@@ -3,7 +3,7 @@
 // LRC 歌词解析与查找。支持一行多时间标签、
 // [mm:ss] / [mm:ss.xx] / [mm:ss:xxx]、全局 [offset:±毫秒]（正值=歌词提前，解析时
 // 已算进每行 time，显示不再二次叠加）。二分查当前行。
-// 查找优先级：同名 .lrc → 同目录归一化唯一命中（「01 - 歌名」↔「歌名」），拿不准
+// 查找优先级：可用内嵌歌词 → 同名 .lrc → 同目录归一化唯一命中（「01 - 歌名」↔「歌名」），拿不准
 // 就算没歌词（宁缺毋滥）。CUE 轨命中整盘那份（与镜像/分轨表同名）时 mirrorShift=
 // 本段起点，把「段内第几秒」对齐到整盘绝对时间轴；按轨名命中那份从 0 计时，不加。
 // 编码：剥 BOM → 严格 UTF-8（无替换字符）→ GB18030（需 Qt6 Core5Compat，可用时）→ Latin-1。
@@ -21,7 +21,9 @@ struct LyricLine {
 
 class Lyric {
 public:
-    bool isEmpty() const { return m_lines.empty(); }
+    bool isEmpty() const { return m_lines.empty() && m_plainText.isEmpty(); }
+    bool isTimed() const { return !m_lines.empty(); }
+    const QString &plainText() const { return m_plainText; }
     const std::vector<LyricLine> &lines() const { return m_lines; }
     double fileOffset() const { return m_fileOffset; }
 
@@ -37,12 +39,17 @@ public:
     int lineIndexAt(double t) const;
 
     static Lyric parse(const QString &text);
-    /// 找并加载当前曲目的歌词（同名或同目录唯一命中）；找不到返回空 Lyric。
+    /// 从 FFmpeg 标签选取歌词：支持 lyrics / lyrics-*（MP3 USLT）及常见别名，时间词优先。
+    static QString embeddedText(const QHash<QString, QString> &tags);
+    /// 解析内嵌文本；带 LRC 时间标签时同步，否则保留可阅读的纯文本，不虚构时间。
+    static Lyric parseEmbedded(const QString &text);
+    /// 内嵌优先，缺失/空白时回退同名或同目录唯一命中的外置歌词；找不到返回空 Lyric。
     /// CUE 整盘词场景会自行设好 mirrorShift，调用方不再覆写
     static Lyric loadForTrack(const Track &track);
 
 private:
     std::vector<LyricLine> m_lines;
+    QString m_plainText;
     double m_fileOffset = 0;
     double m_mirrorShift = 0;
 

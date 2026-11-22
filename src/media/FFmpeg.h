@@ -32,8 +32,8 @@ QString dsdLabel(AVCodecID codecId, int dsdBitRate);
 QSet<QString> demuxerExtensions();
 
 /// 完整可播扩展名 = demuxerExtensions() ∪ undeclaredExtensions ∪ floorExtensions。
-/// 有些 demuxer（wav/w64/au/snd/dsf）没在 AVInputFormat.extensions 里声明后缀，
-/// 枚举拿不到，目录扫描会漏掉它们，这里手动补齐。
+/// 部分 demuxer（如 ASF/WavPack/AIFF/DSF）不声明后缀，常用别名也未必完整，
+/// 在此补齐，目录扫描、归档和文件选择器使用同一白名单。
 const QSet<QString> &playableExtensions();
 
 /// 是否 DSD 解码器（输出采样率要再 /8 的那一族）

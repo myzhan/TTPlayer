@@ -201,6 +201,8 @@ bool PlayerController::loadAndPlay(const Track &track) {
 }
 
 bool PlayerController::loadAndPlay(const Track &track, std::unique_ptr<Decoder> prepared) {
+    // 异步开流期间不能把上一首的歌词显示到新曲目上。
+    m_lyric = Lyric{};
     // R08：任何新装载先作废上一条在途的电台开流（取消 + 换代 token）
     abortPendingOpen();
     // 开流是否立刻出声：restoreResume 置 false 表示「恢复现场但不响」
@@ -240,6 +242,7 @@ bool PlayerController::loadAndPlay(const Track &track, std::unique_ptr<Decoder> 
         return false;
     }
     const double position = std::exchange(m_restorePosition, 0);
+    const QString embeddedLyrics = Lyric::embeddedText(decoder->tags());
     if (!m_engine->play(std::move(decoder), track.playStart(), track.playEnd(), autoPlay, position,
                         track.isRadio() ? 1.0f : replayGainDecision(track).linear)) {
         emit playbackStateChanged();
@@ -248,6 +251,9 @@ bool PlayerController::loadAndPlay(const Track &track, std::unique_ptr<Decoder> 
     // 电台线性增益锁 1.0（live 流无标签）；本地/归档按当前曲标签与设置算
     m_engine->setReplayGainLinear(track.isRadio() ? 1.0f : replayGainDecision(track).linear);
     m_positionCache = m_engine->positionSeconds();
+    // 利用已经打开的 Decoder 标签，发布到曲目共享缓存；不在歌词窗额外开流。
+    Track loaded = track;
+    loaded.setEmbeddedLyrics(embeddedLyrics);
     loadLyricForCurrent();
     if (!autoPlay) m_engine->pause();
     // 坑 #14：预取只能在当前曲已经排进节点之后发起
@@ -510,11 +516,15 @@ void PlayerController::schedulePrefetch() {
         } completion{job};
         auto decoder = openDecoderFor(next, std::shared_ptr<std::atomic<bool>>(job, &job->cancelled));
         if (job->cancelled || !decoder || !decoder->resampleTo(rate)) return;
+        const QString embeddedLyrics = Lyric::embeddedText(decoder->tags());
         QMetaObject::invokeMethod(
             this,
-            [this, job, next, queueId, token, decoder = std::move(decoder)]() mutable {
+            [this, job, next, queueId, token, embeddedLyrics, decoder = std::move(decoder)]() mutable {
                 if (job->cancelled || token != m_prefetchToken) return;
                 m_prefetchJob.reset();
+                // 接受该代预取结果后才缓存歌词，无缝转场按下一曲身份直接读取。
+                Track ready = next;
+                ready.setEmbeddedLyrics(embeddedLyrics);
                 m_engine->prepareNext(std::move(decoder), next.playStart(), next.playEnd(),
                                       replayGainDecision(next).linear, queueId);
             },
@@ -741,7 +751,7 @@ void PlayerController::loadLyricForCurrent() {
 }
 
 double PlayerController::alignedLyricTime(double segmentTime) const {
-    if (m_lyric.isEmpty()) return segmentTime;
+    if (!m_lyric.isTimed()) return segmentTime;
     return m_lyric.alignedTime(segmentTime, lyricShift());
 }
 
@@ -760,7 +770,8 @@ QString PlayerController::lyricShiftProblem() const {
     const Track t = m_queue.currentTrack();
     if (t.isNull()) return QStringLiteral("现在没有正在播的曲目，没什么可校准");
     if (t.isRadio()) return QStringLiteral("电台是直播，没有歌词可校准");
-    if (m_lyric.isEmpty()) return QStringLiteral("这一首没找到可用歌词（同名 .lrc 里没有带时间标签的句子）");
+    if (m_lyric.isEmpty()) return QStringLiteral("这一首没找到可用歌词（没有内嵌歌词或可用的外置 .lrc）");
+    if (!m_lyric.isTimed()) return QStringLiteral("这一首是纯文本歌词，没有时间标签，无法校准");
     return QString();
 }
 

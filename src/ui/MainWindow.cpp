@@ -365,7 +365,8 @@ MainWindow::MainWindow(PlayerController *controller, AudioEnginePtr engine, QWid
     openBtn->setGlyph(Skin::Glyph::Menu);
     openBtn->setFace(TTButton::Face::Glass);
     openBtn->setPreferredSize({22, 18});
-    openBtn->setToolTip(QStringLiteral("打开文件…"));
+    openBtn->setObjectName(QStringLiteral("mainSettings"));
+    openBtn->setToolTip(QStringLiteral("设置…"));
     m_pin = new TTButton(titleBar);
     m_pin->setGlyph(Skin::Glyph::Pin);
     m_pin->setFace(TTButton::Face::Glass);
@@ -494,22 +495,7 @@ MainWindow::MainWindow(PlayerController *controller, AudioEnginePtr engine, QWid
     root->addWidget(m_seek);
 
     // —— 接线 ——
-    connect(openBtn, &TTButton::clicked, this, [this, openBtn] {
-        SkinMenu menu(this);
-        QAction *openAct = menu.addAction(QStringLiteral("打开文件…"));
-        QAction *propAct = menu.addAction(QStringLiteral("媒体文件信息"));
-        propAct->setEnabled(!m_controller->currentTrack().isNull());
-        menu.addSeparator();
-        QAction *settingsAct = menu.addAction(QStringLiteral("设置…"));
-
-        QAction *chosen = menu.exec(openBtn->mapToGlobal(QPoint(0, openBtn->height())));
-        if (chosen == openAct)
-            openFiles();
-        else if (chosen == settingsAct)
-            openSettings();
-        else if (chosen == propAct)
-            openProperties(m_controller->currentTrack());
-    });
+    connect(openBtn, &TTButton::clicked, this, &MainWindow::openSettings);
     connect(hideBtn, &TTButton::clicked, this, &MainWindow::hideGroupToBackground);
     connect(closeBtn, &TTButton::clicked, qApp, &QCoreApplication::quit); // R19：× 直退进程
 
@@ -1030,7 +1016,8 @@ void MainWindow::saveState() {
     if (m_dock) s.dockFrame = m_dock->geometryString();      // 停靠组锚点左上角 + 同宽
     if (m_dock) s.panelFrames = m_dock->panelFramesString(); // 各面板几何 + 吸附/浮动态
     s.autoResumePlay = m_autoResumePlay;
-    s.listVisible = m_playlist && m_playlist->isVisible();
+    // 首次显示前列表尚未懒建，保存时不能把默认显示意图误写成隐藏。
+    s.listVisible = m_playlist ? m_playlist->isVisible() : m_listVisible;
     s.eqVisible = m_eqWindow && m_eqWindow->isVisible();
     s.replayGainMode = int(m_controller->replayGainMode());
     s.replayGainPreamp = m_controller->replayGainPreamp();
@@ -1314,18 +1301,24 @@ void MainWindow::rescanLibrary() {
     const auto cancel = std::make_shared<std::atomic<bool>>(false);
     m_scanCancel = cancel;
     m_operationStatus = QStringLiteral("正在扫描音乐文件夹…");
+    m_operationProblems.clear();
+    const uint64_t operation = ++m_operationGeneration;
     const QStringList roots = m_libraryFolders;
     const uint64_t generation = ++m_scanGeneration;
     auto *watcher = new QFutureWatcher<Importer::Result>(this);
-    connect(watcher, &QFutureWatcher<Importer::Result>::finished, this, [this, watcher, roots, generation] {
+    connect(watcher, &QFutureWatcher<Importer::Result>::finished, this, [this, watcher, roots, generation, operation] {
         const Importer::Result result = watcher->result();
         watcher->deleteLater();
         if (qEnvironmentVariableIsSet("TTPLAYER_SELFTEST"))
             qInfo("scan generation=%llu current=%llu tracks=%lld cancelled=%d", (unsigned long long)generation,
                   (unsigned long long)m_scanGeneration, (long long)result.tracks.size(), result.cancelled);
         if (generation != m_scanGeneration || result.cancelled) return;
-        m_operationStatus =
-            QStringLiteral("扫描完成：%1 首，拒收 %2 项").arg(result.tracks.size()).arg(result.problems.size());
+        if (operation == m_operationGeneration) {
+            m_operationProblems = result.problems.join(QLatin1Char('\n'));
+            m_operationStatus =
+                QStringLiteral("扫描完成：%1 首，拒收 %2 项").arg(result.tracks.size()).arg(result.problems.size());
+            if (!result.problems.isEmpty()) m_operationStatus += QStringLiteral("；明细见设置 → 媒体库");
+        }
         QList<Track> tracks = result.tracks;
         // An offline root is not a confirmed deletion. Keep its last successful snapshot.
         for (const Track &track : m_collections.tracksOf(Collections::kLibraryViewId)) {
@@ -1348,6 +1341,8 @@ void MainWindow::rescanLibrary() {
 void MainWindow::cancelLibraryScan() {
     if (m_scanCancel) m_scanCancel->store(true);
     ++m_scanGeneration;
+    ++m_operationGeneration;
+    m_operationProblems.clear();
     m_operationStatus = QStringLiteral("扫描已取消");
 }
 
@@ -1522,12 +1517,8 @@ void MainWindow::dropEvent(QDropEvent *e) {
 }
 
 void MainWindow::openFiles() {
-    const QStringList files = QFileDialog::getOpenFileNames(
-        this, QStringLiteral("打开音频"), QDir::homePath(),
-        QStringLiteral("音频与压缩包 (*.mp3 *.flac *.wav *.m4a *.aac *.ogg *.opus *.ape *.wv *.tta *.dsf *.dff *.cue "
-                       "*.zip *.7z *.rar *.tar *.gz *.tgz *.bz2 *.tbz *.xz *.txz *.zst);;"
-                       "音频文件 (*.mp3 *.flac *.wav *.m4a *.aac *.ogg *.opus *.ape *.wv *.tta *.dsf *.dff *.cue);;"
-                       "压缩包 (*.zip *.7z *.rar *.tar *.gz *.tgz *.bz2 *.tbz *.xz *.txz *.zst);;所有文件 (*)"));
+    const QStringList files =
+        QFileDialog::getOpenFileNames(this, QStringLiteral("打开音频"), QDir::homePath(), Importer::fileDialogFilter());
     if (!files.isEmpty()) loadDirOrFiles(files);
 }
 
@@ -1572,41 +1563,49 @@ void MainWindow::loadDirOrFiles(const QStringList &paths, const QHash<QString, Q
     m_importCancel = cancel;
     const uint64_t generation = ++m_importGeneration;
     m_operationStatus = QStringLiteral("正在导入…");
+    m_operationProblems.clear();
+    const uint64_t operation = ++m_operationGeneration;
     m_status->setText(m_operationStatus);
     auto *watcher = new QFutureWatcher<Importer::Result>(this);
-    connect(watcher, &QFutureWatcher<Importer::Result>::finished, this, [this, watcher, generation, radioEdits] {
-        const auto imported = watcher->result();
-        watcher->deleteLater();
-        if (generation != m_importGeneration || imported.cancelled) return;
-        m_operationStatus =
-            QStringLiteral("已导入 %1 首；拒收 %2 项").arg(imported.tracks.size()).arg(imported.problems.size());
-        const QList<Track> tracks = imported.tracks;
-        if (tracks.isEmpty()) {
-            if (!imported.problems.isEmpty()) m_status->setText(imported.problems.join(QStringLiteral("；")));
-            return;
-        }
-        for (const Track &track : tracks) {
-            if (!track.isRadio()) continue;
-            const auto edit = radioEdits.constFind(track.identityKey());
-            if (edit != radioEdits.cend())
-                m_collections.editTrack(track.identityKey(), edit->value("title").toString(),
-                                        edit->value("artist").toString(), edit->value("album").toString());
-            else if (track.title() != Track::fromRadio(track.url()).title())
-                m_collections.radios().setAlias(track.identityKey(), track.title());
-        }
-        m_collections.registerTracks(tracks);
-        m_collections.setViewId(Collections::kAllViewId);
-        if (m_playlist) m_playlist->refreshGroups();
-        const auto list = m_collections.currentTracks();
-        m_controller->setTracks(list);
-        for (int i = 0; i < list.size(); ++i)
-            if (list[i].identityKey() == tracks.first().identityKey()) {
-                m_controller->playRowAt(i);
-                break;
-            }
-        syncNowPlaying();
-        saveState();
-    });
+    connect(watcher, &QFutureWatcher<Importer::Result>::finished, this,
+            [this, watcher, generation, radioEdits, operation] {
+                const auto imported = watcher->result();
+                watcher->deleteLater();
+                if (generation != m_importGeneration || imported.cancelled) return;
+                if (operation == m_operationGeneration) {
+                    m_operationProblems = imported.problems.join(QLatin1Char('\n'));
+                    m_operationStatus = QStringLiteral("已导入 %1 首；拒收 %2 项")
+                                            .arg(imported.tracks.size())
+                                            .arg(imported.problems.size());
+                    if (!imported.problems.isEmpty()) m_operationStatus += QStringLiteral("；明细见设置 → 媒体库");
+                    m_status->setText(m_operationStatus);
+                }
+                const QList<Track> tracks = imported.tracks;
+                if (tracks.isEmpty()) {
+                    return;
+                }
+                for (const Track &track : tracks) {
+                    if (!track.isRadio()) continue;
+                    const auto edit = radioEdits.constFind(track.identityKey());
+                    if (edit != radioEdits.cend())
+                        m_collections.editTrack(track.identityKey(), edit->value("title").toString(),
+                                                edit->value("artist").toString(), edit->value("album").toString());
+                    else if (track.title() != Track::fromRadio(track.url()).title())
+                        m_collections.radios().setAlias(track.identityKey(), track.title());
+                }
+                m_collections.registerTracks(tracks);
+                m_collections.setViewId(Collections::kAllViewId);
+                if (m_playlist) m_playlist->refreshGroups();
+                const auto list = m_collections.currentTracks();
+                m_controller->setTracks(list);
+                for (int i = 0; i < list.size(); ++i)
+                    if (list[i].identityKey() == tracks.first().identityKey()) {
+                        m_controller->playRowAt(i);
+                        break;
+                    }
+                syncNowPlaying();
+                saveState();
+            });
     watcher->setFuture(QtConcurrent::run([paths, cancel] { return Importer::read(paths, true, cancel.get()); }));
 }
 

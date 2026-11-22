@@ -16,6 +16,9 @@
 #include <QMessageBox>
 #include <QTimer>
 #include <QSignalBlocker>
+#include <QPlainTextEdit>
+#include <QScrollBar>
+#include <QStyle>
 #include <algorithm>
 
 // 统一毛玻璃：设置窗不再用原生 Fusion 控件（QTabWidget/QGroupBox/QComboBox/QCheckBox/
@@ -418,12 +421,56 @@ QWidget *SettingsWindow::buildLibrary() {
     auto *status = new QLabel(sec->content());
     status->setWordWrap(true);
     f->addWidget(status);
+    v->addWidget(sec, 1);
+    v->addWidget(new QLabel(QStringLiteral("最近扫描 / 导入拒收明细（可选择复制）"), page));
+    auto *details = new QPlainTextEdit(page);
+    details->setObjectName(QStringLiteral("libraryProblems"));
+    details->setReadOnly(true);
+    details->setFrameShape(QFrame::NoFrame);
+    details->setFont(Fonts::base);
+    details->setMinimumHeight(80);
+    details->setPlaceholderText(QStringLiteral("没有拒收明细"));
+    details->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    v->addWidget(details, 1);
+    auto *bar = details->verticalScrollBar();
+    const int barWidth = bar->sizeHint().width();
+    const int minHandle = bar->style()->pixelMetric(QStyle::PM_ScrollBarSliderMin, nullptr, bar);
+    const auto updateStyle = [details, bar, barWidth, minHandle] {
+        details->setStyleSheet(QStringLiteral("QPlainTextEdit{background:transparent;color:%1;border:none;}")
+                                   .arg(Theme::inkOnGlass.name()));
+        details->setAutoFillBackground(false);
+        details->viewport()->setAutoFillBackground(false);
+        QColor handle = Theme::inkOnGlassSoft;
+        handle.setAlphaF(GlassStyle::enabled() ? GlassStyle::glassAlpha() : 1.0f);
+        bar->setStyleSheet(
+            QStringLiteral(
+                "QScrollBar:vertical{background:transparent;width:%1px;margin:0;border:none;}"
+                "QScrollBar::handle:vertical{background:rgba(%2,%3,%4,%5);border-radius:3px;min-height:%6px;}"
+                "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;background:transparent;}"
+                "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}")
+                .arg(barWidth)
+                .arg(handle.red())
+                .arg(handle.green())
+                .arg(handle.blue())
+                .arg(handle.alpha())
+                .arg(minHandle));
+        bar->setAutoFillBackground(false);
+    };
+    connect(&GlassNotifier::instance(), &GlassNotifier::changed, details, updateStyle);
+    updateStyle();
+    // 缓存正文快照，空闲轮询不会重排长报告或丢掉滚动位置、选择区。
+    status->setText(m_main->operationStatus());
+    details->setPlainText(m_main->operationProblems());
+    const auto updateReport = [this, status, details, last = m_main->operationProblems()]() mutable {
+        status->setText(m_main->operationStatus());
+        const QString report = m_main->operationProblems();
+        if (last == report) return;
+        last = report;
+        details->setPlainText(report);
+    };
     auto *timer = new QTimer(status);
     timer->setInterval(250);
-    connect(timer, &QTimer::timeout, status, [this, status] { status->setText(m_main->operationStatus()); });
+    connect(timer, &QTimer::timeout, status, updateReport);
     timer->start();
-
-    v->addWidget(sec);
-    v->addStretch();
     return page;
 }

@@ -4,11 +4,51 @@
 
 #include <QPainter>
 #include <QPainterPath>
+#include <QPlainTextEdit>
+#include <QScrollBar>
+#include <QStyle>
+#include <QVBoxLayout>
 
 LyricWindow::LyricWindow(PlayerController *controller, QWidget *parent)
     : SkinWindow(QStringLiteral("歌词"), TitleButtons::None, parent), m_controller(controller) {
     resize(480, 260 + 30); // 高度补上自绘标题条（~30）
     setMinimumSize(320, 160);
+
+    auto *layout = new QVBoxLayout(body());
+    layout->setContentsMargins(14, 10, 14, 10);
+    m_plainText = new QPlainTextEdit(body());
+    m_plainText->setObjectName(QStringLiteral("plainLyrics"));
+    m_plainText->setReadOnly(true);
+    m_plainText->setFrameShape(QFrame::NoFrame);
+    m_plainText->setFont(Fonts::base);
+    m_plainText->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    layout->addWidget(m_plainText);
+    auto *bar = m_plainText->verticalScrollBar();
+    const int barWidth = bar->sizeHint().width();
+    const int minHandle = bar->style()->pixelMetric(QStyle::PM_ScrollBarSliderMin, nullptr, bar);
+    const auto updateTextStyle = [this, bar, barWidth, minHandle] {
+        m_plainText->setStyleSheet(QStringLiteral("QPlainTextEdit{background:transparent;color:%1;border:none;}")
+                                       .arg(Theme::inkOnGlass.name()));
+        m_plainText->setAutoFillBackground(false);
+        m_plainText->viewport()->setAutoFillBackground(false);
+        QColor handle = Theme::inkOnGlassSoft;
+        handle.setAlphaF(GlassStyle::enabled() ? GlassStyle::glassAlpha() : 1.0f);
+        bar->setStyleSheet(
+            QStringLiteral(
+                "QScrollBar:vertical{background:transparent;width:%1px;margin:0;border:none;}"
+                "QScrollBar::handle:vertical{background:rgba(%2,%3,%4,%5);border-radius:3px;min-height:%6px;}"
+                "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;background:transparent;}"
+                "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:transparent;}")
+                .arg(barWidth)
+                .arg(handle.red())
+                .arg(handle.green())
+                .arg(handle.blue())
+                .arg(handle.alpha())
+                .arg(minHandle));
+        bar->setAutoFillBackground(false);
+    };
+    connect(&GlassNotifier::instance(), &GlassNotifier::changed, this, updateTextStyle);
+    updateTextStyle();
 
     connect(m_controller, &PlayerController::trackChanged, this, &LyricWindow::reload);
     connect(m_controller, &PlayerController::lyricShiftChanged, this, &LyricWindow::reload);
@@ -28,6 +68,8 @@ void LyricWindow::reload() {
     m_lyric = m_controller->currentLyric(); // 控制器统一持有当前歌词
     m_pos = m_controller->position();
     m_index = m_lyric.lineIndexAt(m_controller->alignedLyricTime(m_pos));
+    if (m_plainText->toPlainText() != m_lyric.plainText()) m_plainText->setPlainText(m_lyric.plainText());
+    m_plainText->setVisible(!m_lyric.plainText().isEmpty());
     update();
 }
 
@@ -49,6 +91,10 @@ void LyricWindow::paintBody(QPainter *p, const QRectF &r) {
         return;
     }
 
+    if (!m_lyric.isTimed()) {
+        p->restore(); // 纯文本由透明只读控件绘制、滚动与复制。
+        return;
+    }
     const auto &lines = m_lyric.lines();
     const qreal lineH = 30;
     const qreal center = area.center().y();

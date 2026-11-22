@@ -47,6 +47,7 @@ META_GET(artist, QString)
 META_GET(album, QString)
 META_GET(formatName, QString)
 META_GET(decodeProblem, QString)
+META_GET(embeddedLyrics, QString)
 
 // setter 的名字是 PascalCase，成员是 camelCase，逐个手写映射
 #define META_SET(fn, member)                                                                                           \
@@ -59,6 +60,7 @@ META_SET(Artist, artist)
 META_SET(Album, album)
 META_SET(FormatName, formatName)
 META_SET(DecodeProblem, decodeProblem)
+META_SET(EmbeddedLyrics, embeddedLyrics)
 
 double Track::duration() const {
     QMutexLocker l(&gMetaMutex);

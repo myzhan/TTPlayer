@@ -158,7 +158,7 @@ python3 scripts/package.py               # 只生成本地 build/dist，不发�
 （macOS），仍必须保留 `TTPLAYER_SILENT_OUTPUT=1`；采样发生在最终静音门之前。
 真实设备拔插、锁屏、系统媒体按键和桌面合成应另做实机检查，不把 dummy 当硬件证据。
 发布门槛：双构型全量、打包版冒烟；改输出链额外跑打包版全量与 ASan/UBSan。这一档在发布前执行，不在日常改动里执行。
-发布产物由 `.github/workflows/release.yml` 生成：推 `v*` tag 会构建 Linux x86_64 AppImage、Windows x64 zip、macOS arm64 dmg 并发布 Release；手动 workflow_dispatch 只产出 artifacts。Linux job 会校验 tag 与 `CPACK_PACKAGE_VERSION` 一致；AppImage 在 ubuntu:22.04 容器里编译以固定 glibc 2.35 门槛，Qt 6 与 Qt 插件打包在内，glibc/GL/X11/xcb/DBus 由系统提供；macOS 包为 adhoc 签名、未公证。
+发布产物由 `.github/workflows/release.yml` 生成：推 `v*` tag 会构建 Linux x86_64 / arm64 AppImage、Windows x64 zip、macOS arm64 dmg，四档全部成功才发布 Release；手动 workflow_dispatch 只产出 artifacts。Linux 两档均用原生 runner、同架构容器和官方 Qt 6.8.3：x86_64 在 ubuntu:22.04 容器编译，glibc 门槛保持 2.35；arm64 在 ubuntu:24.04 容器编译，因官方 Qt arm64 二进制要求 glibc 2.39，支持 Ubuntu 24.04+ 等满足该门槛的系统。arm64 的 aqt host / arch 是 `linux_arm64` / `linux_gcc_arm64`，目录为 `6.8.3/gcc_arm64`；系统 Python 使用 venv，不绕过 PEP 668。Linux job 校验 tag 与 `CPACK_PACKAGE_VERSION`、包内 ELF 架构及 glibc 符号门槛；新 arm64 档还跑 Debug / Release 全量自检。Qt 与插件内置，glibc/GL/X11/xcb/DBus 由系统提供；macOS 包为 adhoc 签名、未公证。
 
 ## 分层和生命周期
 
@@ -196,6 +196,7 @@ python3 scripts/package.py               # 只生成本地 build/dist，不发�
 - 频谱保持 24 fps，隐藏/不可曝光时停绘制及 analyzer；64 柱采用合并路径绘制。
 - 保持既有深色 GlassStyle：主窗/播放列表/均衡器/歌词及设置/媒体文件信息/专辑封面的壳、槽、按钮共用同一 alpha，并实时刷新；文字、图片不透明，不使用整体 setWindowOpacity。转换等其余辅助窗仍不透明。SkinMenu 单独绘制背景，alpha=min(1, glassAlpha+0.15)，玻璃关闭时为 1；文字/勾选/箭头不透明，启用项悬停或键盘选中叠 accent 0.28 高亮，全部子菜单经统一工厂创建，托盘原生菜单不变。
 - 设置为非模态单实例，重复打开只激活；属性允许多实例且关闭销毁；封面隐藏重开保留会话摆位。三者首次优先在主窗旁侧无遮挡摆位，空间不足时选择最小遮挡且标题可见的位置；吸附后随主窗移动、拖离后独立浮动，所有方位保留自身宽度。辅助成员纳入隐藏/恢复/置顶，使用安全指针与收束定时器；其几何和吸附态不写 panelFrames、不跨重启自动打开，原四面板布局版本与 pl/eq/ly 序列化不变。
+- 歌词优先使用音频内嵌文本（MP3 USLT、FFmpeg lyrics 标签及常见别名），缺失/空白时再查外置 `.lrc`；内嵌 LRC 保持同步与 CUE 整盘偏移，纯文本只读可滚动、不虚构时间且不参与校准。复用后台播放/预取的 Decoder 标签，歌词仅会话缓存，不写源文件或存档；未被 FFmpeg 解析的 SYLT 帧不算已支持。
 - 收藏以列表时长左侧矢量爱心按 identityKey 单项切换，不放右键菜单；不改变选区/Shift 锚点，不触发播放或拖拽，刷新保留搜索和滚动现场。
 - 封面最多解码到 256 px，显示小档 112 px，缓存预算 8 MiB；热路径不重新开音频取图片字节。
 - README 面向用户，构建、自检、目录结构只写本文与 docs。

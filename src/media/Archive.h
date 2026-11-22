@@ -18,8 +18,8 @@ namespace Archive {
 /// 按扩展名粗判是否归档容器（真正能否解由 libarchive 嗅探兜底）
 bool looksLikeArchive(const QString &path);
 
-/// 列出归档里的可播音频条目名（跳过加密条目与目录）。失败返回空。
-QStringList listAudioEntries(const QString &archivePath);
+/// 列出归档里的可播音频条目名（跳过加密条目与目录）；可选记录文件/条目及拒收原因。
+QStringList listAudioEntries(const QString &archivePath, QStringList *problems = nullptr);
 
 /// 构造条目 URL：file://<archivePath>#archive-entry=<percentEncoded entryName>
 QUrl entryUrl(const QString &archivePath, const QString &entryName);

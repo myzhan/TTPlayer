@@ -48,8 +48,8 @@ def dsd_samples(target):
     (target / "dsd.dff").write_bytes(b"FRM8" + struct.pack(">Q", len(payload)) + payload)
 
 
-def generate(folder: Path, matrix: bool):
-    """folder 下生成曲库 / 封面 / CUE / 歌词 / 归档；matrix=True 时再补编码矩阵。"""
+def generate(folder: Path, matrix: bool, lyrics: bool = False):
+    """folder 下生成曲库；按需补编码矩阵与内嵌歌词素材。"""
     folder.mkdir(parents=True, exist_ok=True)
     for name, seconds, hz in [("demo01.wav", 12, 880), ("demo02.wav", 10, 440)]:
         with wave.open(str(folder / name), "wb") as output:
@@ -93,6 +93,39 @@ def generate(folder: Path, matrix: bool):
 
     if not encode(folder / "cover.flac", "flac", extra=["-t", "12"]):
         raise RuntimeError("cannot generate FLAC")
+    if lyrics:
+        target = folder / "embedded"
+        target.mkdir(exist_ok=True)
+        if not encode(target / "bare.mp3", "libmp3lame", "mp3", extra=["-t", "4", "-id3v2_version", "0"]):
+            raise RuntimeError("cannot generate embedded lyrics MP3")
+        audio = (target / "bare.mp3").read_bytes()
+
+        def synchsafe(size):
+            return bytes((size >> shift) & 0x7f for shift in (21, 14, 7, 0))
+
+        def uslt(name, text, version, utf16):
+            # 直接写标准 USLT 帧，避免把 FFmpeg 的 TXXX=lyrics 误当作 USLT 验证。
+            if utf16:
+                payload = b"\x01eng\xff\xfe\0\0" + text.encode("utf-16")
+            else:
+                payload = b"\x03eng\0" + text.encode("utf-8")
+            size = len(payload)
+            frame = b"USLT" + (synchsafe(size) if version == 4 else struct.pack(">I", size)) + b"\0\0" + payload
+            (target / name).write_bytes(b"ID3" + bytes([version, 0, 0]) + synchsafe(len(frame)) + frame + audio)
+
+        timed = "[offset:100]\n[00:00.50]内嵌第一句\n[00:01.00]内嵌第二句\n"
+        plain = "\n".join(f"纯文本歌词第 {i} 行" for i in range(1, 81))
+        uslt("timed.mp3", timed, 3, True)
+        uslt("plain.mp3", plain, 4, False)
+        uslt("empty.mp3", " \r\n ", 4, False)
+        for name in ("timed", "plain", "empty", "bare"):
+            (target / (name + ".lrc")).write_text("[00:00.25]外置歌词\n", encoding="utf-8")
+        for name, codec in (("tag.flac", "flac"), ("tag.m4a", "aac"), ("tag.ogg", "libopus")):
+            if not encode(target / name, codec, extra=["-metadata", "lyrics=" + timed]):
+                raise RuntimeError("cannot generate embedded lyrics fixture: " + name)
+        with zipfile.ZipFile(target / "lyrics.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.write(target / "timed.mp3", "disc/timed.mp3")
+
     if not matrix:
         return
 
@@ -118,8 +151,6 @@ def generate(folder: Path, matrix: bool):
                        check=True, stdout=subprocess.DEVNULL)
     else:
         skipped.append("7z and encrypted ZIP: generator unavailable")
-    (folder / "fixture-skips.json").write_text(json.dumps(skipped))
-
     variants = [("mp3.mp3", "libmp3lame", "mp3"), ("aac.aac", "aac", "adts"), ("flac.flac", "flac", "flac"),
                 ("alac.m4a", "alac", "ipod"), ("aac.m4a", "aac", "ipod"), ("vorbis.ogg", "vorbis", "ogg"),
                 ("opus.ogg", "libopus", "ogg"),
@@ -129,6 +160,9 @@ def generate(folder: Path, matrix: bool):
                 ("s32.aiff", "pcm_s32be", "aiff"), ("alaw.wav", "pcm_alaw", "wav"), ("mulaw.wav", "pcm_mulaw", "wav"),
                 ("ima.aifc", "adpcm_ima_qt", "aiff"), ("pcm.caf", "pcm_s16le", "caf"), ("pcm.w64", "pcm_s16le", "w64"),
                 ("tta.tta", "tta", None), ("wavpack.wv", "wavpack", None), ("wma.wma", "wmav2", "asf"),
+                ("layer2.mp2", "mp2", "mp2"), ("core.dts", "dca", "dts"),
+                ("dolby.ac3", "ac3", "ac3"), ("dolby.eac3", "eac3", "eac3"),
+                ("lossless.mlp", "mlp", "mlp"), ("lossless.thd", "truehd", "truehd"),
                 ("surround.wav", "pcm_s24le", "wav"), ("hires.wav", "pcm_s24le", "wav")]
     for name, codec, container in variants:
         if name == "surround.wav":
@@ -137,10 +171,23 @@ def generate(folder: Path, matrix: bool):
             extra = ["-ar", "96000"]
         else:
             extra = []
-        if name == "vorbis.ogg":
+        if codec in {"vorbis", "dca", "mlp", "truehd"}:
             extra += ["-strict", "-2"]
+        if codec in {"dca", "mlp", "truehd"}:
+            extra += ["-ar", "48000"]
         if not encode(target / name, codec, container, extra):
             raise RuntimeError("required fixture encoder unavailable: " + name)
+
+    # 系统 CLI 不一定带 AMR 编码器；失败产物不留在真实解码矩阵里。
+    amr = target / "speech.amr"
+    if not encode(amr, "libopencore_amrnb", "amr", ["-ar", "8000", "-ac", "1", "-t", "2"]):
+        amr.unlink(missing_ok=True)
+        skipped.append("AMR-NB: fixture encoder unavailable")
+    # FFmpeg 没有这些编码器：只验注册能力，不冒充真实文件解码覆盖。
+    for name in ("WMA Pro", "WMA Lossless", "WMA Voice", "DTS-HD", "Musepack SV7", "Musepack SV8",
+                 "TAK", "Shorten", "MP1", "AMR-WB"):
+        skipped.append(name + ": fixture encoder unavailable; registration only")
+    (folder / "fixture-skips.json").write_text(json.dumps(skipped))
 
 
 if __name__ == "__main__":

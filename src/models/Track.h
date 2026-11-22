@@ -29,6 +29,7 @@ struct TrackData {
     int bitRateKbps = 0;
     QString formatName;    // 从实际数据格式读出的编码名，不拿扩展名猜
     QString decodeProblem; // 人话原因；空 = 能解
+    QString embeddedLyrics; // 解码元数据中的歌词，仅会话缓存，不写入存档
     bool missingOnDisk = false;
 
     // CUE 分轨来源（>=0 时生效）：一份镜像可对应多条曲目
@@ -66,6 +67,8 @@ public:
     int bitRateKbps() const;
     QString formatName() const;
     QString decodeProblem() const;
+    QString embeddedLyrics() const;
+    void setEmbeddedLyrics(const QString &v);
     void setTitle(const QString &v);
     void setArtist(const QString &v);
     void setAlbum(const QString &v);

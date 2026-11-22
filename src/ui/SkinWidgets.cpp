@@ -79,7 +79,7 @@ void SkinMenu::paintEvent(QPaintEvent *event) {
         p.setCompositionMode(QPainter::CompositionMode_Source);
         p.fillRect(event->rect(), Qt::transparent);
         p.setCompositionMode(QPainter::CompositionMode_SourceOver);
-        Painter::drawBody(&p, QRectF(rect()), Theme::windowTop, Theme::windowBottom, backgroundAlpha(), 0,
+        Painter::drawBody(&p, QRectF(rect()), Theme::windowTop, Theme::windowBottom, backgroundAlpha(), m_cornerRadius,
                           Theme::skinEdge, false);
     }
     QMenu::paintEvent(event);
@@ -596,6 +596,11 @@ void SkinListView::paintEvent(QPaintEvent *) {
 }
 
 void SkinListView::mousePressEvent(QMouseEvent *e) {
+    // 右键只打开指向条目的菜单，不能先切页使右侧歌曲选区丢失。
+    if (e->button() != Qt::LeftButton) {
+        QWidget::mousePressEvent(e);
+        return;
+    }
     const int r = rowAt(e->position());
     if (r >= 0) {
         setCurrentRow(r);

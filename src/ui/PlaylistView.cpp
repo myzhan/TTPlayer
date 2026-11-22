@@ -466,10 +466,7 @@ void PlaylistView::wheelEvent(QWheelEvent *event) {
     verticalScrollBar()->setValue(verticalScrollBar()->value() + delta);
 }
 
-// 右键菜单：选中行上给曲目 / 电台 / 移除，页级入口（添加 / 列表）
-// 行上与空白处都给。当前页或当前行做不到的动作直接不生成（不给灰项），判定只看
-// 集合层与视图自己的状态。本视图只弹菜单与发信号，真正动集合 / 落盘由上层
-// （PlaylistWindow）做。
+// 歌曲区域右键只提供文件、属性、转换与电台操作；列表操作统一在左栏。
 void PlaylistView::contextMenuEvent(QContextMenuEvent *event) {
     const int row = rowAtPos(event->pos());
     const bool onRow = row >= 0 && row < m_tracks.size();
@@ -485,7 +482,7 @@ void PlaylistView::contextMenuEvent(QContextMenuEvent *event) {
     }
     SkinMenu menu(this);
     buildContextMenu(menu, onRow ? row : -1);
-    menu.exec(event->globalPos());
+    if (!menu.isEmpty()) menu.exec(event->globalPos());
 }
 
 // 菜单树构造：动作一律用 triggered 连接，exec 只负责显示。探针可直接调用本函数核对分组
@@ -493,12 +490,6 @@ void PlaylistView::contextMenuEvent(QContextMenuEvent *event) {
 void PlaylistView::buildContextMenu(QMenu &menu, int row) {
     const bool onRow = row >= 0 && row < m_tracks.size();
     const QList<int> rows = onRow ? selectedRows() : QList<int>();
-    const QString pageId = m_collections ? m_collections->viewId() : Collections::kAllViewId;
-    // 只有自建列表页有「定义」可改；媒体库是扫描出来的只读投影；筛选态下列表不是整页原貌，
-    // 整页动作先不给。
-    const bool customPage = m_collections && m_collections->playlists().contains(pageId);
-    const bool libraryPage = pageId == Collections::kLibraryViewId;
-    const bool sortablePage = customPage || pageId == Collections::kAllViewId || pageId == Collections::kFavViewId;
     QList<Track> picked;
     picked.reserve(rows.size());
     for (int r : rows)
@@ -507,33 +498,11 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
     if (onRow) {
         const Track t = m_tracks[row];
 
-        // —— 列表：整段选区都已在该列表里的不再列 ——
-        if (m_collections) {
-            QMenu *lists = nullptr;
-            for (const UserPlaylist &pl : m_collections->playlists().items()) {
-                const QStringList keys = m_collections->playlists().keysOf(pl.id);
-                const QSet<QString> inList(keys.cbegin(), keys.cend());
-                const bool alreadyThere = std::all_of(picked.cbegin(), picked.cend(), [&inList](const Track &track) {
-                    return inList.contains(track.identityKey());
-                });
-                if (alreadyThere) continue;
-                if (!lists) lists = SkinMenu::addSubmenu(menu, QStringLiteral("加入列表"));
-                const QString listId = pl.id;
-                connect(lists->addAction(pl.name), &QAction::triggered, this,
-                        [this, rows, listId] { emit addToListRequested(rows, listId); });
-            }
-        }
-
-        // —— 显示信息 / 移除 / 文件 ——
-        if (!menu.isEmpty()) menu.addSeparator();
+        // —— 显示信息 / 文件 ——
         // 只编辑右键指向的电台；本地、CUE 与归档曲目的显示信息沿用原始元数据。
         if (t.isRadio())
             connect(menu.addAction(QStringLiteral("编辑显示信息…")), &QAction::triggered, this,
                     [this, t] { emit editRequested(t); });
-        // 媒体库是只读投影；筛选态下删的是命中页，仍可删。入口紧邻「文件」上方。
-        if (m_collections && (m_filterActive || !libraryPage))
-            connect(menu.addAction(QStringLiteral("从列表移除")), &QAction::triggered, this,
-                    [this, rows] { emit removeRequested(rows); });
         QMenu *file = SkinMenu::addSubmenu(menu, QStringLiteral("文件"));
         // 电台只提供属性；磁盘操作只对本地实体有意义。
         if (!t.isRadio()) {
@@ -586,66 +555,6 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
             }
         }
     }
-
-    // —— 页级动作：添加 / 列表 ——
-    if (onRow) menu.addSeparator();
-
-    QMenu *add = SkinMenu::addSubmenu(menu, QStringLiteral("添加"));
-    connect(add->addAction(QStringLiteral("添加文件…")), &QAction::triggered, this,
-            [this] { emit addFilesRequested(); });
-    connect(add->addAction(QStringLiteral("添加文件夹…")), &QAction::triggered, this,
-            [this] { emit addFolderRequested(); });
-    connect(add->addAction(QStringLiteral("添加网络电台…")), &QAction::triggered, this,
-            [this] { emit addRadioRequested(); });
-
-    QMenu *listMenu = SkinMenu::addSubmenu(menu, QStringLiteral("列表"));
-    // 没在播 / 不在本页时「定位当前曲」无处可去
-    if (m_currentRow >= 0)
-        connect(listMenu->addAction(QStringLiteral("定位当前曲")), &QAction::triggered, this,
-                &PlaylistView::scrollToCurrent);
-    // 排序写的是这一页的存储序：派生页（媒体库/电台/最近）没有序可写，筛选态也不能写
-    if (sortablePage && !m_filterActive && !m_tracks.isEmpty()) {
-        QMenu *sort = SkinMenu::addSubmenu(*listMenu, QStringLiteral("排序"));
-        const struct SortRow {
-            const char *name;
-            int key;
-        } sortRows[] = {
-            {"按标题", 0},     {"按艺术家", 1},     {"按专辑", 2},     {"按时长", 3},
-            {"按标题降序", 4}, {"按艺术家降序", 5}, {"按专辑降序", 6}, {"按时长降序", 7},
-        };
-        for (const SortRow &r : sortRows) {
-            const int key = r.key;
-            connect(sort->addAction(QString::fromUtf8(r.name)), &QAction::triggered, this,
-                    [this, key] { emit sortRequested(key); });
-            if (key == 3) sort->addSeparator();
-        }
-        connect(sort->addAction(QStringLiteral("还原原序")), &QAction::triggered, this,
-                [this] { emit sortRequested(-1); });
-    }
-    QMenu *mode = SkinMenu::addSubmenu(*listMenu, QStringLiteral("播放模式"));
-    const struct ModeRow {
-        const char *name;
-        PlayMode mode;
-    } modeRows[] = {
-        {"顺序播放", PlayMode::Order},
-        {"列表循环", PlayMode::ListLoop},
-        {"单曲循环", PlayMode::SingleLoop},
-        {"随机播放", PlayMode::Random},
-    };
-    for (const ModeRow &r : modeRows) {
-        QAction *act = mode->addAction(QString::fromUtf8(r.name));
-        act->setCheckable(true);
-        act->setChecked(r.mode == m_controller->mode());
-        const PlayMode pickedMode = r.mode;
-        connect(act, &QAction::triggered, this, [this, pickedMode] { m_controller->setMode(pickedMode); });
-    }
-    // 空页没什么可清，媒体库只读，筛选态下清空会把命中之外的也带走
-    if (m_collections && !m_filterActive && !libraryPage && !m_tracks.isEmpty())
-        connect(listMenu->addAction(QStringLiteral("清空当前列表")), &QAction::triggered, this,
-                [this] { emit clearListRequested(); });
-
-    // 新建 / 导入 / 导出 / 重命名 / 删除由上层按当前页追加，共用「列表」子菜单。
-    emit playlistMenuRequested(listMenu);
 }
 
 void PlaylistView::scrollToCurrent() {

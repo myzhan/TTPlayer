@@ -11,15 +11,21 @@
 
 class MainWindow;
 class QSystemTrayIcon;
+class QMenu;
 
 class TrayController : public QObject {
     Q_OBJECT
 public:
     TrayController(MainWindow *window, PlayerController *controller, QObject *parent = nullptr);
+    ~TrayController() override;
 
     bool available() const;
 
 private:
+    friend class RegressionTests;
+    QMenu *buildMenu(bool themed);
+    void showContextMenu(const QPoint &position);
+    QMenu *m_menu = nullptr; // 析构时先解除托盘关联，再销毁菜单。
     QPointer<MainWindow> m_window;
     PlayerController *m_controller;
     QSystemTrayIcon *m_tray = nullptr;

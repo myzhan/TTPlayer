@@ -182,7 +182,8 @@ def main(argv):
         fixtures = Path(isolation) / "fixtures"
         # 只有这几档需要编码矩阵；其余用最小的确定性素材即可。
         # ARCHIVE 也算：7z 与加密 ZIP 只在 matrix 档生成，否则单跑该档会静默少测两档。
-        generate(fixtures, bool({"FORMAT", "GAPLESS", "DECODER", "ARCHIVE"} & set(suites)))
+        generate(fixtures, bool({"FORMAT", "GAPLESS", "DECODER", "ARCHIVE"} & set(suites)),
+                 lyrics=bool({"LYRIC", "SHIFT"} & set(suites)))
         fixture_skips = fixtures / "fixture-skips.json"
         if fixture_skips.exists():
             for reason in json.loads(fixture_skips.read_text()):

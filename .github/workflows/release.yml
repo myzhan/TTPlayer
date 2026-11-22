@@ -18,14 +18,40 @@ concurrency:
 
 jobs:
   linux:
-    # 产物：TTPlayer-<ver>-linux-x86_64.AppImage（Qt 6 与 Qt 插件、SDL3/libarchive/zlib/liblzma 已内置；
-    # glibc、OpenGL、X11/xcb、DBus 仍由系统提供）。
-    # 编译放在 ubuntu:22.04 容器里，把 AppImage 的 glibc 门槛固定在 2.35（Ubuntu 22.04 / Debian 12 /
-    # Fedora 36 起）；runner 标签本身用当前受支持的 24.04，不必依赖已进入弃用期的 ubuntu-22.04。
-    name: Linux x86_64
-    runs-on: ubuntu-24.04
-    container: ubuntu:22.04
+    # 产物：TTPlayer-<ver>-linux-<arch>.AppImage，Qt 与静态第三方库随包内置。
+    # x86_64 保持 Ubuntu 22.04 / glibc 2.35；官方 Qt arm64 基于 Ubuntu 24.04 / glibc 2.39。
+    # 两档都在原生 runner 的同架构容器里构建，不使用交叉编译或 QEMU。
+    name: Linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            container: ubuntu:22.04
+            appimage_arch: x86_64
+            qt_host: linux
+            qt_arch: linux_gcc_64
+            qt_dir: gcc_64
+            glibc: '2.35'
+            elf_machine: Advanced Micro Devices X86-64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            container: ubuntu:24.04
+            appimage_arch: aarch64
+            qt_host: linux_arm64
+            qt_arch: linux_gcc_arm64
+            qt_dir: gcc_arm64
+            glibc: '2.39'
+            elf_machine: AArch64
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
     timeout-minutes: 90
+    env:
+      PACKAGE_ARCH: ${{ matrix.arch }}
+      APPIMAGE_ARCH: ${{ matrix.appimage_arch }}
+      GLIBC_BASELINE: ${{ matrix.glibc }}
+      ELF_MACHINE: ${{ matrix.elf_machine }}
     defaults:
       run:
         shell: bash
@@ -50,19 +76,29 @@ jobs:
           apt-get install -y --no-install-recommends \
             build-essential cmake nasm yasm pkg-config zlib1g-dev libicu-dev \
             qt6-base-dev \
-            python3 python3-pip \
+            python3 python3-pip python3-venv \
             wget file patchelf \
             libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
             libxcb-xinerama0 libxcb-xkb1 libxcb-sync1 libxcb-xfixes0 libxcb-util1 \
             xvfb xauth
+          test "$(uname -m)" = "$APPIMAGE_ARCH"
+          if [[ "$PACKAGE_ARCH" == arm64 ]]; then
+            # 新架构在发布前跑双构型全量；CLI 只生成自检素材，不进入发布包。
+            apt-get install -y --no-install-recommends ffmpeg p7zip-full
+          fi
       - name: Linux Qt 6.8.3
+        env:
+          QT_HOST: ${{ matrix.qt_host }}
+          QT_ARCH: ${{ matrix.qt_arch }}
+          QT_DIR: ${{ matrix.qt_dir }}
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install aqtinstall
-          python3 -m aqt install-qt linux desktop 6.8.3 linux_gcc_64 -m qt5compat -O "$RUNNER_TEMP/Qt"
-          echo "CMAKE_PREFIX_PATH=$RUNNER_TEMP/Qt/6.8.3/gcc_64" >> "$GITHUB_ENV"
-          echo "QT_ROOT=$RUNNER_TEMP/Qt/6.8.3/gcc_64" >> "$GITHUB_ENV"
+          # Ubuntu 24.04 的系统 Python 受 PEP 668 保护，两档统一使用隔离环境。
+          python3 -m venv "$RUNNER_TEMP/aqt"
+          "$RUNNER_TEMP/aqt/bin/python" -m pip install aqtinstall==3.3.0
+          "$RUNNER_TEMP/aqt/bin/python" -m aqt install-qt "$QT_HOST" desktop 6.8.3 "$QT_ARCH" -m qt5compat -O "$RUNNER_TEMP/Qt"
+          echo "CMAKE_PREFIX_PATH=$RUNNER_TEMP/Qt/6.8.3/$QT_DIR" >> "$GITHUB_ENV"
+          echo "QT_ROOT=$RUNNER_TEMP/Qt/6.8.3/$QT_DIR" >> "$GITHUB_ENV"
       - name: FFmpeg (frozen 9.0)
         run: |
           echo "frozen FFmpeg source: $(cat 3rd/ffmpeg/RELEASE) @ $(git -C 3rd/ffmpeg rev-parse --short HEAD)"
@@ -83,6 +119,19 @@ jobs:
         run: |
           cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release
           cmake --build build/release -j 4
+      - name: ARM64 full selftest (Debug / Release)
+        if: matrix.arch == 'arm64'
+        run: |
+          for config in Debug Release; do
+            binary=build/release/ttplayer
+            if [[ "$config" == Debug ]]; then
+              cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+              cmake --build build -j 4
+              binary=build/ttplayer
+            fi
+            TTPLAYER_BIN="$binary" TTPLAYER_PROBE="build/selftest-arm64-${config,,}" \
+              python3 scripts/selftest.py all "${config,,}"
+          done
       - name: Install into AppDir
         # Qt 的 Linux 部署脚本会把 Qt 库与 RPATH 写进 usr/lib；Qt 插件由后面的 linuxdeploy-plugin-qt 补齐。
         run: |
@@ -96,11 +145,11 @@ jobs:
           mkdir -p "$tools"
           # 三个工具都取 continuous 版；打包后的冒烟与依赖检查会在 CI 里立刻暴露上游变动。
           wget -q -O "$tools/linuxdeploy" \
-            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+            "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-$APPIMAGE_ARCH.AppImage"
           wget -q -O "$tools/linuxdeploy-plugin-qt" \
-            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+            "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-$APPIMAGE_ARCH.AppImage"
           wget -q -O "$tools/appimagetool" \
-            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$APPIMAGE_ARCH.AppImage"
           chmod +x "$tools"/*
           export PATH="$tools:$PATH"
           # 容器里没有 FUSE：linuxdeploy、qt 插件与 appimagetool 自身都是 AppImage，统一解包运行。
@@ -114,12 +163,12 @@ jobs:
             --desktop-file packaging/ttplayer.desktop \
             --icon-file build/AppDir/usr/share/icons/hicolor/256x256/apps/ttplayer.png \
             --plugin qt
-          ARCH=x86_64 appimagetool build/AppDir "TTPlayer-$VERSION-linux-x86_64.AppImage"
+          ARCH="$APPIMAGE_ARCH" appimagetool build/AppDir "TTPlayer-$VERSION-linux-$PACKAGE_ARCH.AppImage"
       - name: Smoke test AppImage
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          appimage="TTPlayer-$VERSION-linux-x86_64.AppImage"
+          appimage="TTPlayer-$VERSION-linux-$PACKAGE_ARCH.AppImage"
           export APPIMAGE_EXTRACT_AND_RUN=1
           export TTPLAYER_QT_STATE="$RUNNER_TEMP/state.json"
           export TTPLAYER_SILENT_OUTPUT=1
@@ -128,7 +177,7 @@ jobs:
           echo "$out"
           # workflow_dispatch 的版本是 dev，不跟 CPACK 版本比，只校验入口确实起来了。
           case "$out" in
-            "TTPlayer "*" Qt "*" x86_64") ;;
+            "TTPlayer "*" Qt "*" $PACKAGE_ARCH") ;;
             *) echo "版本输出不符: $out" >&2; exit 1 ;;
           esac
           # 2) xvfb：显式使用 xcb 平台插件，证明桌面路径的依赖也齐。
@@ -137,7 +186,7 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          appimage="TTPlayer-$VERSION-linux-x86_64.AppImage"
+          appimage="TTPlayer-$VERSION-linux-$PACKAGE_ARCH.AppImage"
           "./$appimage" --appimage-extract >/dev/null
           # 平台插件必须真的打进来：xcb 是桌面默认，offscreen 给自检与无头运行。
           for plugin in xcb offscreen; do
@@ -155,6 +204,15 @@ jobs:
             squashfs-root/usr/lib/libQt6*.so.6)
           missing=0
           for f in "${required[@]}"; do
+            # 文件名不能充当架构证据；核对主程序、Qt 库及平台插件的 ELF 头。
+            readelf -h "$f" | grep -F "Machine:" | grep -Fq "$ELF_MACHINE" \
+              || { echo "ELF 架构不符: $f" >&2; exit 1; }
+            required_glibc=$(readelf --version-info "$f" \
+              | sed -n 's/.*Name: GLIBC_\([0-9.]*\).*/\1/p' | sort -V | tail -1)
+            if [[ -n "$required_glibc" && "$(printf '%s\n' "$GLIBC_BASELINE" "$required_glibc" | sort -V | tail -1)" != "$GLIBC_BASELINE" ]]; then
+              echo "glibc 门槛超出 $GLIBC_BASELINE: $f 需要 $required_glibc" >&2
+              exit 1
+            fi
             if ldd "$f" 2>/dev/null | grep -q 'not found'; then
               echo "依赖缺失: $f" >&2
               ldd "$f" | grep 'not found' >&2
@@ -172,8 +230,8 @@ jobs:
       - name: Upload Linux package
         uses: actions/upload-artifact@v4
         with:
-          name: linux-x86_64
-          path: TTPlayer-*-linux-x86_64.AppImage
+          name: linux-${{ matrix.arch }}
+          path: TTPlayer-*-linux-${{ matrix.arch }}.AppImage
           if-no-files-found: error
 
   windows:
@@ -302,7 +360,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    # 只在推 v* tag 时运行；三个平台都成功才会创建 Release。workflow_dispatch 不发布。
+    # 只在推 v* tag 时运行；Linux 两档与 Windows/macOS 全部成功才创建 Release。workflow_dispatch 不发布。
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [linux, windows, macos]
@@ -327,10 +385,10 @@ jobs:
             ## 安装
 
             - **Windows**：解压到可写目录（不要放 Program Files），运行 `bin/ttplayer.exe`。VC 运行时已随包附带，无需另行安装；用户数据保存在 exe 同目录。
-            - **Linux**：下载 `.AppImage`，`chmod +x` 后直接运行，无需安装。Qt 6 与 Qt 插件已打包在内；系统只需提供 glibc 2.35 及以上的 OpenGL、X11/xcb、DBus 运行库（Ubuntu 22.04+、Debian 12+、Fedora 36+ 均满足）。
+            - **Linux**：按处理器选择 `linux-x86_64.AppImage` 或 `linux-arm64.AppImage`，`chmod +x` 后直接运行。x86_64 要求 glibc 2.35+（如 Ubuntu 22.04+）；arm64 要求 glibc 2.39+（如 Ubuntu 24.04+）。Qt 6 与 Qt 插件已内置，OpenGL、X11/xcb、DBus 运行库仍由系统提供。
             - **macOS**：打开 dmg，把 ttplayer.app 拖进 Applications。包为 adhoc 签名、未公证，首次启动请右键「打开」。
 
-            附件：`TTPlayer-<版本>-linux-x86_64.AppImage`、`TTPlayer-<版本>-windows-x64.zip`、`TTPlayer-<版本>-macos-arm64.dmg`。
+            附件：`TTPlayer-<版本>-linux-x86_64.AppImage`、`TTPlayer-<版本>-linux-arm64.AppImage`、`TTPlayer-<版本>-windows-x64.zip`、`TTPlayer-<版本>-macos-arm64.dmg`。
 
             本版本使用 FFmpeg 9.0 静态链接。
           files: |

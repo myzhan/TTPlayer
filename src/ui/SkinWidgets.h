@@ -28,9 +28,16 @@ public:
     explicit SkinMenu(QWidget *parent = nullptr);
     static SkinMenu *addSubmenu(QMenu &parent, const QString &title);
     float backgroundAlpha() const;
+    void setCornerRadius(qreal radius) {
+        m_cornerRadius = qMax(qreal(0), radius);
+        update();
+    }
 
 protected:
     void paintEvent(QPaintEvent *) override;
+
+private:
+    qreal m_cornerRadius = 0; // 普通菜单保持原外观，Windows 托盘单独启用圆角。
 };
 
 // —— 分节容器（替 QGroupBox）：小标题 + 右侧发丝线，内容装进 contentLayout ——

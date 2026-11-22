@@ -449,12 +449,12 @@ QList<QPair<QString, QString>> Collections::viewList() const {
 QString Collections::emptyHintFor(const QString &viewId) {
     if (viewId == kAllViewId) return QString(); // [默认] 保持原版，空着什么都不画
     if (viewId == kLibraryViewId) return QStringLiteral("菜单「媒体库」→ 添加音乐目录，扫到的歌就在这一页");
-    if (viewId == kRadioViewId) return QStringLiteral("工具条「电台」键添加地址，或拖入带 http 行的 m3u");
+    if (viewId == kRadioViewId) return QStringLiteral("左栏右键 → 添加 → 添加网络电台，或拖入带 http 行的 m3u");
     if (viewId == kRecentRadioViewId) return QStringLiteral("还没有听过的台");
     if (viewId == kRecentViewId) return QStringLiteral("还没有播放记录");
-    if (viewId == kFavViewId) return QStringLiteral("右键曲目 → 加入收藏，或按 ⌘D");
+    if (viewId == kFavViewId) return QStringLiteral("点击曲目时长左侧的爱心收藏，或按 ⌘D");
     if (isRadioCatView(viewId)) return QStringLiteral("在电台页右键台 → 移入分类，归到这一类的台就在这一页");
-    return QStringLiteral("右键曲目 → 加入列表，或右键这里 → 列表 → 导入 m3u"); // 自建列表
+    return QStringLiteral("选中歌曲后在左栏右键 → 加入列表，或左栏右键 → 添加 / 导入 m3u"); // 自建列表
 }
 
 QList<SearchPage> Collections::buildPages() const {

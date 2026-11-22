@@ -48,6 +48,7 @@ public:
     void flushState() { saveState(); } // 退出前落盘（aboutToQuit 用）
     QString relocateLibraryRoot(const QString &oldRoot, const QString &newRoot);
     QString operationStatus() const { return m_operationStatus; }
+    QString operationProblems() const { return m_operationProblems; }
     void loadPaths(const QStringList &paths) { loadDirOrFiles(paths); } // 含 CUE 展开
 
     Collections &collections() { return m_collections; } // 播放列表窗共享的集合层
@@ -110,7 +111,8 @@ private:
     std::shared_ptr<std::atomic<bool>> m_restoreCancel;
     std::shared_ptr<std::atomic<bool>> m_watchCancel;
     uint64_t m_watchGeneration = 0;
-    QString m_persistenceProblem, m_operationStatus;
+    QString m_persistenceProblem, m_operationStatus, m_operationProblems;
+    uint64_t m_operationGeneration = 0; // 扫描与导入共享最近报告，晚结果不能覆盖新操作。
     std::shared_ptr<std::atomic<bool>> m_importCancel;
     uint64_t m_importGeneration = 0;
     bool m_sceneReady = false, m_savedEQVisible = false;

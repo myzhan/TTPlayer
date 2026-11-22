@@ -39,6 +39,8 @@ struct Imported {
     QStringList keys;
     QStringList missing;
     int unreadable = 0;
+    QStringList problems; // 每项保留完整文件路径与拒收原因，不只累计数量。
+    QSet<QString> rejected;
     QSet<QString> seen;
     QSet<QString> coveredImages;
     QHash<QString, QString> names;
@@ -49,7 +51,12 @@ struct Imported {
         keys.append(key);
         if (!exists) missing.append(key);
     }
-    void fail() { ++unreadable; }
+    void fail(const QString &path, const QString &reason) {
+        if (rejected.contains(path)) return;
+        rejected.insert(path);
+        problems << path + QStringLiteral("：") + reason;
+        ++unreadable;
+    }
 };
 
 /// 读一个 m3u/m3u8 当成一张歌单；文件连文本都读不出来返回 false

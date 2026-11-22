@@ -157,7 +157,7 @@ private:
     void beginContextAndPlay(int row);
     void applyReplayGainForCurrent(); // 设置变更后重算当前曲增益
 
-    void loadLyricForCurrent(); // 换曲时重解同名 .lrc
+    void loadLyricForCurrent(); // 换曲时优先读内嵌缓存，无则找外置 .lrc
     void schedulePrefetch();    // 无缝：在当前曲已排进设备后预取下一曲解码器
     static std::unique_ptr<Decoder>
     openDecoderFor(const Track &track, std::shared_ptr<std::atomic<bool>> cancel = {}); // 文件/归档/电台统一开流

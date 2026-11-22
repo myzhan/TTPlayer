@@ -79,6 +79,16 @@ static const QHash<QString, QString> &nameOverrides() {
         {"tta", "TTA"},
         {"wmav1", "WMA"},
         {"wmav2", "WMA"},
+        {"wmapro", "WMA Pro"},
+        {"wmalossless", "WMA Lossless"},
+        {"wmavoice", "WMA Voice"},
+        {"dts", "DTS"},
+        {"musepack7", "Musepack SV7"},
+        {"musepack8", "Musepack SV8"},
+        {"tak", "TAK"},
+        {"shorten", "Shorten"},
+        {"amr_nb", "AMR-NB"},
+        {"amr_wb", "AMR-WB"},
         {"dsd_lsbf", "DSD"},
         {"dsd_msbf", "DSD"},
         {"dsd_lsbf_planar", "DSD"},
@@ -109,6 +119,18 @@ QString codecName(AVCodecID id, int profile, const QString &container) {
             return QStringLiteral("AAC-LD");
         case AV_PROFILE_AAC_ELD:
             return QStringLiteral("AAC-ELD");
+        default:
+            break;
+        }
+    }
+    if (id == AV_CODEC_ID_DTS) {
+        switch (profile) {
+        case AV_PROFILE_DTS_HD_HRA:
+            return QStringLiteral("DTS-HD HRA");
+        case AV_PROFILE_DTS_HD_MA:
+            return QStringLiteral("DTS-HD MA");
+        case AV_PROFILE_DTS_EXPRESS:
+            return QStringLiteral("DTS Express");
         default:
             break;
         }
@@ -168,8 +190,9 @@ const QSet<QString> &playableExtensions() {
     // 枚举一次就够（demuxer 表进程生命周期内不变），兼做 floor/undeclared 补齐
     static const QSet<QString> set = [] {
         QSet<QString> s = demuxerExtensions();
-        // FFmpeg 认得、但 demuxer 未在 AVInputFormat.extensions 声明后缀的容器
-        const QStringList undeclared{"dsf", "au", "snd", "w64"};
+        // 部分 demuxer 不声明后缀；另补常用别名，扫描与文件选择器共用。
+        const QStringList undeclared{"dsf",  "dff", "au",   "snd", "w64", "wma", "asf", "wmv", "wv",  "ape",
+                                     "aifc", "afc", "opus", "oga", "mp1", "mpp", "mp+", "amr", "awb", "truehd"};
         // 保底白名单：本项目从第一天就支持的格式（运行时查询失败时仍可用）
         const QStringList floor{"mp3", "m4a", "mp4", "aac", "flac", "wav", "aiff", "aif", "caf"};
         for (const QString &e : undeclared)

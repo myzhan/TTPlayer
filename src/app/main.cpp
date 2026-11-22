@@ -1038,6 +1038,24 @@ static int runLyricProbe(QTextStream &out) {
         check("lookup_mid", l.lineIndexAt(12.0) == 1);
     }
 
+    // 内嵌词：USLT 的多语言键、大小写/别名、纯文本与时间词的确定性选择。
+    const QString timedText = QStringLiteral("[offset:100]\n[00:01.00]内嵌中文\n");
+    const QHash<QString, QString> embeddedTags{
+        {"LYRICS", " "}, {"lyrics-eng", "Plain"}, {"lyrics-zho", timedText}, {"comment", "Not lyrics"}};
+    check("embedded_timed_tag_preferred", Lyric::embeddedText(embeddedTags) == timedText);
+    check("embedded_alias_tag", Lyric::embeddedText({{"UNSYNCED_LYRICS", "Alias"}}) == "Alias");
+    check("embedded_non_lyric_metadata_ignored", Lyric::embeddedText({{"comment", "Not lyrics"}}).isEmpty());
+    check("embedded_multilingual_selection_stable",
+          Lyric::embeddedText({{"lyrics-zho", "Chinese"}, {"lyrics-eng", "English"}}) == "English");
+    const Lyric plain = Lyric::parseEmbedded(QString(QChar(0xFEFF)) + QStringLiteral("第一句\r\n第二句") + QChar(0));
+    check("embedded_plain_unicode",
+          !plain.isEmpty() && !plain.isTimed() && plain.plainText() == QStringLiteral("第一句\n第二句"));
+    check("embedded_plain_no_fake_timestamps", plain.lines().empty() && plain.lineIndexAt(100) == -1);
+    check("embedded_empty_headers_rejected", Lyric::parseEmbedded("[ar:Test]\n[offset:100]\n ").isEmpty());
+    const Lyric embeddedTimed = Lyric::parseEmbedded(timedText);
+    check("embedded_lrc_offset", embeddedTimed.isTimed() && std::abs(embeddedTimed.fileOffset() - 0.1) < 1e-9 &&
+                                     std::abs(embeddedTimed.lines().front().time - 0.9) < 1e-9);
+
     QTemporaryDir dir;
     const QString d = dir.path();
 
@@ -1073,6 +1091,26 @@ static int runLyricProbe(QTextStream &out) {
     const Track u = Track(QUrl::fromLocalFile(d + "/utf.flac"));
     const Lyric ul = Lyric::loadForTrack(u);
     check("utf8_chinese", !ul.isEmpty() && ul.lines()[0].text == QStringLiteral("你好世界"));
+    Track embedded(u.url());
+    embedded.setEmbeddedLyrics(timedText);
+    const Lyric selectedEmbedded = Lyric::loadForTrack(embedded);
+    check("embedded_before_external_lrc",
+          selectedEmbedded.isTimed() && selectedEmbedded.lines().front().text == QStringLiteral("内嵌中文"));
+    embedded.setEmbeddedLyrics(QStringLiteral("内嵌纯文本"));
+    check("embedded_plain_before_external_timed",
+          Lyric::loadForTrack(embedded).plainText() == QStringLiteral("内嵌纯文本"));
+    embedded.setEmbeddedLyrics("[ar:Test]\n[offset:100]\n ");
+    const Lyric fallback = Lyric::loadForTrack(embedded);
+    check("embedded_empty_falls_back",
+          fallback.isTimed() && fallback.lines().front().text == QStringLiteral("你好世界"));
+    Track embeddedCue = cueSeg;
+    embeddedCue.setEmbeddedLyrics("[02:00.00]Embedded CUE");
+    const Lyric cueLyric = Lyric::loadForTrack(embeddedCue);
+    check("embedded_cue_album_time",
+          cueLyric.isTimed() && cueLyric.mirrorShift() == 120 && cueLyric.lineIndexAt(cueLyric.alignedTime(0, 0)) == 0);
+    Track live = Track::fromRadio(QUrl("http://example.com/lyrics"));
+    live.setEmbeddedLyrics(timedText);
+    check("embedded_live_not_file_lyrics", Lyric::loadForTrack(live).isEmpty());
 
 #ifdef TTPLAYER_HAVE_TEXTCODEC
     // GB18030/GBK 中文：用 codec 编出 GBK 字节，loadForTrack 应解回正确中文
@@ -1837,7 +1875,7 @@ int main(int argc, char *argv[]) {
         });
     }
 
-    // 歌词窗单独截图（需传入带同名 .lrc 的音频）。
+    // 歌词窗单独截图（需传入带内嵌歌词或外置 .lrc 的音频）。
     const QByteArray lyricShot = qgetenv("TTPLAYER_QT_SHOT_LYRIC");
     if (!lyricShot.isEmpty()) {
         auto *lw = new LyricWindow(&controller);
@@ -1869,6 +1907,7 @@ int main(int argc, char *argv[]) {
     const QByteArray searchShot = qgetenv("TTPLAYER_QT_SHOT_SEARCH");
     if (!searchShot.isEmpty()) {
         auto *plw = new PlaylistWindow(&controller, &window.collections());
+        plw->resize(640, plw->height()); // 截图时展开曲名与来源，正常窗口默认尺寸不变。
         plw->show();
         QTimer::singleShot(300, [plw, searchShot, &app] {
             plw->probeSearch(QStringLiteral("夜航"));

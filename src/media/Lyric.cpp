@@ -81,6 +81,46 @@ Lyric Lyric::parse(const QString &text) {
     return result;
 }
 
+Lyric Lyric::parseEmbedded(const QString &text) {
+    QString clean = text;
+    clean.remove(QChar(0));
+    if (clean.startsWith(QChar(0xFEFF))) clean.remove(0, 1);
+    clean.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+    clean.replace(QLatin1Char('\r'), QLatin1Char('\n'));
+    clean = clean.trimmed();
+    Lyric result = parse(clean);
+    if (result.isTimed()) return result;
+    // 只有 LRC 头信息而没有正文不算歌词，不能挡住外置文件回退。
+    static const QRegularExpression header(QStringLiteral("^\\[(?:ar|ti|al|by|offset|length|re|ve):.*\\]$"),
+                                           QRegularExpression::CaseInsensitiveOption);
+    QStringList lines;
+    for (const QString &line : clean.split(QLatin1Char('\n')))
+        if (!header.match(line.trimmed()).hasMatch()) lines << line;
+    result.m_plainText = lines.join(QLatin1Char('\n')).trimmed();
+    return result;
+}
+
+QString Lyric::embeddedText(const QHash<QString, QString> &tags) {
+    // QHash 遍历序不稳定；多语言/多标签取值必须确定，带时间的版本优先于纯文本。
+    QStringList keys = tags.keys();
+    std::sort(keys.begin(), keys.end());
+    QString plain;
+    for (const QString &name : keys) {
+        QString key = name.toLower();
+        key.remove(QLatin1Char('_'));
+        key.remove(QLatin1Char(' '));
+        if (key != QLatin1String("lyrics") && !key.startsWith(QLatin1String("lyrics-")) &&
+            key != QLatin1String("unsyncedlyrics") && key != QLatin1String("syncedlyrics") &&
+            key != QLatin1String("wm/lyrics"))
+            continue;
+        const QString text = tags.value(name);
+        const Lyric lyric = parseEmbedded(text);
+        if (lyric.isTimed()) return text;
+        if (!lyric.isEmpty() && plain.isEmpty()) plain = text;
+    }
+    return plain;
+}
+
 QString Lyric::normalized(const QString &name) {
     static const QRegularExpression trackPrefix(QStringLiteral("^\\d{1,3}\\s*[-._ ]\\s*"));
     QString s = name.toLower();
@@ -178,7 +218,13 @@ Lyric Lyric::parseFile(const QString &path) {
 }
 
 Lyric Lyric::loadForTrack(const Track &track) {
-    if (track.isNull()) return {};
+    if (track.isNull() || track.isRadio()) return {};
+    Lyric embedded = parseEmbedded(track.embeddedLyrics());
+    if (!embedded.isEmpty()) {
+        // 内嵌词属于音频容器，CUE 共用镜像时同样按整盘时间轴对齐。
+        if (embedded.isTimed() && track.isCueSegment()) embedded.setMirrorShift(track.playStart());
+        return embedded;
+    }
     const QUrl &url = track.url();
     if (!url.isLocalFile()) return {};
     const QString image = url.toLocalFile();

@@ -82,28 +82,55 @@ bool parseEntryUrl(const QUrl &url, QString &archivePath, QString &entryName) {
     return !archivePath.isEmpty() && !entryName.isEmpty();
 }
 
-QStringList listAudioEntries(const QString &archivePath) {
+QStringList listAudioEntries(const QString &archivePath, QStringList *problems) {
     QStringList out;
+    const auto reject = [problems, &archivePath](const QString &reason, const QString &entry = QString()) {
+        if (problems)
+            problems->append((entry.isEmpty() ? archivePath : archivePath + QStringLiteral(" → ") + entry) +
+                             QStringLiteral("：") + reason);
+    };
     const QSet<QString> &exts = ff::playableExtensions();
     struct archive *a = archive_read_new();
-    if (!a) return out;
+    if (!a) {
+        reject(QStringLiteral("无法创建归档读取器"));
+        return out;
+    }
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
     if (openArchive(a, archivePath) != ARCHIVE_OK) {
+        const char *error = archive_error_string(a);
+        reject(QStringLiteral("归档打开失败：%1").arg(error ? QString::fromUtf8(error) : QStringLiteral("未知错误")));
         archive_read_free(a);
         return out;
     }
+    const qsizetype problemsBefore = problems ? problems->size() : 0;
     struct archive_entry *entry = nullptr;
-    while (nextEntry(a, &entry)) {
+    while (true) {
+        entry = nullptr;
+        const int status = archive_read_next_header(a, &entry);
+        if (status == ARCHIVE_EOF) break;
+        if (!entry || (status != ARCHIVE_OK && status != ARCHIVE_WARN)) {
+            const char *error = archive_error_string(a);
+            reject(
+                QStringLiteral("归档读取失败：%1").arg(error ? QString::fromUtf8(error) : QStringLiteral("未知错误")));
+            break;
+        }
         const QString name = archiveEntryName(entry);
         const la_int64_t sz = archive_entry_size(entry);
         const bool enc = archive_entry_is_encrypted(entry) != 0;
-        if (!name.isEmpty() && sz >= 0) {
-            if (!enc && exts.contains(suffixOf(name))) out.append(name);
+        if (!name.isEmpty() && exts.contains(suffixOf(name))) {
+            if (enc)
+                reject(QStringLiteral("加密归档条目不支持"), name);
+            else if (sz < 0)
+                reject(QStringLiteral("归档条目大小无效"), name);
+            else
+                out.append(name);
         }
         // 不解数据，直接跳到下一条目
         archive_read_data_skip(a);
     }
+    if (out.isEmpty() && (!problems || problems->size() == problemsBefore))
+        reject(QStringLiteral("归档中没有可播放的音频条目"));
     archive_read_close(a);
     archive_read_free(a);
     return out;

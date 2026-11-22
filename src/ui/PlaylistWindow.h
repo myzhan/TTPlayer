@@ -2,7 +2,7 @@
 
 // 播放列表窗（F04/F05 完整版）：左栏多页浏览器（收藏 + 各自建列表 + 全部）+
 // 右栏「歌曲列表」——顶部标题行（标题 + 固定放大镜 + 可展开搜索框 + 计数），
-// 下面是全自绘 PlaylistView；收藏用行内爱心，添加/电台/删除/排序/模式/列表在右键里。
+// 下面是全自绘 PlaylistView；收藏用行内爱心，列表操作统一在左栏右键，歌曲右键仅文件/电台。
 //
 // 分工：集合层 Collections 是各页内容的真相，
 // 搜索命中只是临时把控制器列表换成命中表（pitfall #13）——清空关键字即从
@@ -67,20 +67,21 @@ private:
     friend class RegressionTests;
     void showPage(const QString &viewId);           // 切页：退出搜索 + 控制器换成该页曲目
     void syncGroupSelection(const QString &viewId); // 只把左栏高亮对齐，不递归触发切页
-    void removeRows(const QList<int> &rows); // 从当前页移走选中行（可多选，不动其它页 / 磁盘）
+    void removeRows(const QList<int> &rows);        // 快捷键从当前页移走选中行。
+    void removeTracks(const QString &view, const QList<Track> &picked, bool searchHits = false);
     void reorderCurrentView(int target);     // 拖拽：把选区整块移到 target 行前（仅存序页生效）
     void applySearch();                      // 关键字空=还原当前页；非空=换成命中表
     void clearSearch();                      // 收放大镜 + 清关键字 + 还原当前页
     QString selectedViewId() const;          // 左栏当前选中页的 viewId（无=全部页）
-    void updateInfo();                       // 「共 N 首 · MM:SS」计数
-    void sortView(int key);                  // 当前页显示排序：0=标题 1=艺术家 2=专辑 3=时长 -1=还原
-    // 右键「列表」子菜单：每次新建后追加当前页可用的定义级动作
-    // （新建/导入/导出/重命名/删除、往本列表加歌），保留视图已有动作。
-    void buildListMenu(QMenu *menu);
-    void createPlaylist(); // 侧栏与曲目列表共用新建弹窗、校验和切页流程。
+    void updateInfo();                       // 「共 N 首 · HH:MM:SS」计数
+    void sortView(int key, const QString &viewId = {}); // 0-3 升序、4-7 降序、-1 还原。
+    // 左栏菜单绑定目标 viewId 与右侧歌曲身份快照，不在打开菜单时切页。
+    void buildSidebarMenu(QMenu &menu, const QString &viewId);
+    void buildListMenu(QMenu *menu, const QString &viewId);
+    void createPlaylist(); // 左栏新建弹窗、校验和切页流程。
     // 把外部目录/音频加进当前自建列表：后台走 Importer（目录递归、m3u/CUE 展开），
     // 读完注册进媒体库再写列表。非自建列表页给出提示。
-    void addPathsToCurrentPlaylist(const QStringList &paths);
+    void addPathsToCurrentPlaylist(const QStringList &paths, const QString &viewId = {});
     // 注册 + 写入列表的同步核心（拖放/对话框/探针共用），返回真正新增的条数。
     int addTracksToPlaylist(const QList<Track> &tracks, const QString &playlistId);
 
