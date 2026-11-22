@@ -9,6 +9,7 @@
 // 能用它们；encoderName 显式钉死具体实现，不靠 codec id 碰运气。
 
 #include "AudioEncoder.h"
+#include "models/Track.h"
 
 #include <QList>
 #include <QString>
@@ -42,11 +43,20 @@ namespace AudioConvert {
 const QList<ConvertFormat> &formats();
 const ConvertFormat *formatById(const QString &id);
 
+/// 转换入口只收仍存在的本地文件（含 CUE 分轨），电台与归档条目不支持。
+bool canConvert(const Track &track);
+/// 普通文件转换整首，CUE 分轨沿用播放区间。
+EncodeRange inputRange(const Track &track);
+
 /// 输出文件名：沿用源文件主名换后缀（"a.flac" → "a.m4a"）。
 QString outputName(const QString &inputPath, const QString &extension);
 
 /// 输出路径：目标目录为空时用源目录；同名已存在则依次加 " (2)"、" (3)"，绝不覆盖源文件。
 QString uniqueOutputPath(const QString &inputPath, const QString &dir, const QString &extension);
+
+/// CUE 输出名附带轨号（"a - 01.flac"），同镜像各轨独立命名；不使用标题中的路径字符。
+QString outputName(const Track &track, const QString &extension);
+QString uniqueOutputPath(const Track &track, const QString &dir, const QString &extension);
 
 /// 把 UI 参数翻译成编码器目标（格式不支持的项目自动忽略）。
 EncodeTarget targetFor(const ConvertParams &params);

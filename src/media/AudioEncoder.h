@@ -30,6 +30,12 @@ struct EncodeTarget {
     double gainDb = 0.0;       // 音量调整（重采样时乘增益），0 = 原样
 };
 
+/// 源音频区间（秒）；终点不包含在内，负终点表示读到实际 EOF。
+struct EncodeRange {
+    double start = 0;
+    double end = -1;
+};
+
 class AudioEncoder {
 public:
     struct Result {
@@ -42,7 +48,8 @@ public:
     using Progress = std::function<void(double ratio)>;
 
     /// 同步转码 input → output；cancel 置位后在帧边界尽快收手（并删掉半截输出）。
-    /// 调用方负责放到后台线程，并保证 output 的父目录已存在。
+    /// 调用方负责放到后台线程，并保证 output 的父目录已存在且不会覆盖已有文件。
+    /// range 按源采样率截取，输出时间轴从 0 开始；省略时转换整首。
     static Result convert(const QString &input, const QString &output, const EncodeTarget &target,
-                          const Progress &progress, const std::atomic<bool> &cancel);
+                          const Progress &progress, const std::atomic<bool> &cancel, const EncodeRange &range = {});
 };

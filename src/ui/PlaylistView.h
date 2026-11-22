@@ -57,7 +57,6 @@ public:
 signals:
     void propertiesRequested(const Track &track);
     void convertRequested(const QList<Track> &tracks); // 右键「转换为其他格式…」（可多选）
-    void relocateRequested(const Track &track);
     void editRequested(const Track &track);
     void radioAddressRequested(const Track &track);
     void radioRetryRequested(const Track &track);

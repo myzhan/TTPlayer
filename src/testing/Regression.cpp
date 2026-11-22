@@ -65,6 +65,7 @@
 #include <chrono>
 #include <algorithm>
 #include <cstdio>
+#include <limits>
 #include <vector>
 #ifdef Q_OS_WIN
 #include <QAbstractNativeEventFilter>
@@ -680,6 +681,176 @@ public:
         const AudioEncoder::Result badResult = AudioEncoder::convert(junkSrc, junkOut, flacTarget, {}, never);
         check("convert_invalid_source_fails",
               !badResult.ok && !badResult.error.isEmpty() && !QFileInfo::exists(junkOut));
+
+        // —— 真实 CUE：非零首轨、75 fps 边界、中轨与末轨；逐样本核对而非仅看容器时长 ——
+        const auto cueTracks = [&](const QString &fileName, const QString &sheetName) {
+            return CueSheet::toTracks(CueSheet::parse(
+                QStringLiteral("FILE \"%1\" WAVE\nTRACK 01 AUDIO\nINDEX 01 00:00:03\n"
+                               "TRACK 02 AUDIO\nTITLE \"../不安全/标题\"\nINDEX 00 00:00:25\nINDEX 01 00:00:31\n"
+                               "TRACK 03 AUDIO\nINDEX 01 00:01:07\n")
+                    .arg(fileName),
+                QUrl::fromLocalFile(dir.path() + '/' + sheetName)));
+        };
+        const QList<Track> segments = cueTracks(QStringLiteral("ramp.wav"), QStringLiteral("ramp.cue"));
+        const QList<Track> compressedSegments = cueTracks(QFileInfo(flacOut).fileName(), QStringLiteral("flac.cue"));
+        check("convert_cue_fixture", segments.size() == 3 && compressedSegments.size() == 3);
+        const auto matchesRange = [&](const QString &output, const EncodeRange &range) {
+            auto back = Decoder::openFile(output);
+            auto source = Decoder::openFile(srcPath);
+            const int first = int(std::llround(range.start * 44100));
+            const int end = range.end >= 0 ? int(std::llround(range.end * 44100)) : 88200;
+            const int count = end - first;
+            if (!back || !source || back->sampleRate() != 44100 || back->channelCount() != 2 || count <= 0)
+                return false;
+            std::vector<float> left(count + 1), right(count + 1), expectedL(count), expectedR(count);
+            const int got = back->read(left.data(), right.data(), count + 1, 0);
+            if (got != count || source->read(expectedL.data(), expectedR.data(), count, first) != count) return false;
+            for (int i = 0; i < count; ++i)
+                if (std::abs(left[i] - expectedL[i]) > 0.00004f || std::abs(right[i] - expectedR[i]) > 0.00004f)
+                    return false;
+            return true;
+        };
+        if (segments.size() == 3 && compressedSegments.size() == 3) {
+            const Track &middle = segments[1];
+            check("convert_cue_names_independent",
+                  AudioConvert::outputName(segments[0], "wav") == "ramp - 01.wav" &&
+                      AudioConvert::outputName(middle, "wav") == "ramp - 02.wav" &&
+                      QFileInfo(AudioConvert::uniqueOutputPath(middle, QString(), "wav")).absolutePath() ==
+                          QFileInfo(srcPath).absolutePath());
+            Track archived(Archive::entryUrl(srcPath, "disc/audio.wav"));
+            check("convert_cue_eligibility",
+                  AudioConvert::canConvert(middle) && !AudioConvert::canConvert(archived) &&
+                      !AudioConvert::canConvert(Track{}) &&
+                      !AudioConvert::canConvert(Track::fromRadio(QUrl("https://example.com/live"))) &&
+                      !AudioConvert::canConvert(Track(QUrl::fromLocalFile(dir.path()))));
+            for (const QList<Track> &tracks : {segments, compressedSegments}) {
+                for (const Track &track : tracks) {
+                    for (const QString &format : {QStringLiteral("wav"), QStringLiteral("flac")}) {
+                        ConvertParams params;
+                        params.formatId = format;
+                        const QString output = AudioConvert::uniqueOutputPath(track, dir.path(), format);
+                        double previous = 0;
+                        bool progressOk = true;
+                        const EncodeRange range = AudioConvert::inputRange(track);
+                        const auto result = AudioEncoder::convert(
+                            track.url().toLocalFile(), output, AudioConvert::targetFor(params),
+                            [&](double ratio) {
+                                progressOk &= ratio >= previous && ratio <= 1 && ratio >= 0;
+                                if (previous == 0) progressOk &= ratio < 0.3;
+                                previous = ratio;
+                            },
+                            never, range);
+                        const QString label = QStringLiteral("convert_cue_%1_%2_%3_samples")
+                                                  .arg(track.url().toLocalFile().endsWith(".wav") ? "wav" : "flac")
+                                                  .arg(track.cueNumber())
+                                                  .arg(format);
+                        check(qUtf8Printable(label), result.ok && matchesRange(output, range));
+                        check(qUtf8Printable(label + "_progress"), progressOk && previous == 1);
+                    }
+                }
+            }
+            check("convert_cue_existing_output_preserved",
+                  AudioConvert::uniqueOutputPath(middle, dir.path(), "wav").endsWith("ramp - 02 (3).wav"));
+
+            const auto multiFile = CueSheet::toTracks(
+                CueSheet::parse(QStringLiteral("FILE \"ramp.wav\" WAVE\nTRACK 04 AUDIO\nINDEX 01 00:01:00\n"
+                                               "FILE \"%1\" WAVE\nTRACK 05 AUDIO\nINDEX 01 00:00:03\n")
+                                    .arg(QFileInfo(flacOut).fileName()),
+                                QUrl::fromLocalFile(dir.path() + "/multi.cue")));
+            bool separateFiles = multiFile.size() == 2;
+            for (const Track &track : multiFile) {
+                const QString output = AudioConvert::uniqueOutputPath(track, dir.path(), "wav");
+                const EncodeRange fileRange = AudioConvert::inputRange(track);
+                const auto result = AudioEncoder::convert(track.url().toLocalFile(), output,
+                                                          AudioConvert::targetFor(wavParams), {}, never, fileRange);
+                separateFiles &= fileRange.end == -1 && result.ok && matchesRange(output, fileRange);
+            }
+            check("convert_cue_multiple_file_boundaries", separateFiles);
+
+            const EncodeRange range = AudioConvert::inputRange(middle);
+            ConvertParams resampled = wavParams;
+            resampled.sampleRate = 48000;
+            const QString resampleOut = dir.path() + "/cue-48000.wav";
+            const auto resampleResult =
+                AudioEncoder::convert(srcPath, resampleOut, AudioConvert::targetFor(resampled), {}, never, range);
+            auto resampleBack = Decoder::openFile(resampleOut);
+            check("convert_cue_resample_length", resampleResult.ok && resampleBack &&
+                                                     resampleBack->sampleRate() == 48000 &&
+                                                     resampleBack->countProducedFrames() == 32640);
+            float l[128], r[128];
+            const int got = resampleBack ? resampleBack->read(l, r, 128, 16000) : 0;
+            const double expected = (range.start + 16000.0 / 48000) / 2 * 20000 / 32768;
+            check("convert_cue_resample_offset", got == 128 && std::abs(l[0] - expected) < 0.001);
+            const QString lossyOut = dir.path() + "/cue-aac.m4a";
+            const auto lossyResult = AudioEncoder::convert(srcPath, lossyOut, lossy, {}, never, range);
+            auto lossyBack = Decoder::openFile(lossyOut);
+            check("convert_cue_lossy_not_whole_disc",
+                  lossyResult.ok && lossyBack && qAbs(lossyBack->countProducedFrames() - 32640) < 2048);
+
+            // 转换已读入样本后取消；重复验证末块及普通块边界均不留下半截文件。
+            bool cancelledCleanly = true;
+            for (int n = 0; n < 30; ++n) {
+                std::atomic<bool> stop{false};
+                const QString output = dir.path() + "/cue-cancel.flac";
+                const auto result = AudioEncoder::convert(
+                    srcPath, output, flacTarget,
+                    [&](double ratio) {
+                        if (ratio >= (n % 2 == 0 ? 0.1 : 1.0)) stop.store(true);
+                    },
+                    stop, range);
+                cancelledCleanly &= result.cancelled && !result.ok && !QFileInfo::exists(output);
+            }
+            check("convert_cue_inflight_cancel_30", cancelledCleanly);
+
+            // 窗口真实后台批量通路：同一镜像三条身份不能合并成一条整盘任务。
+            const QString batchDir = dir.path() + "/batch";
+            QDir().mkpath(batchDir);
+            ConvertWindow win(segments);
+            const auto combos = win.findChildren<SkinComboBox *>();
+            if (!combos.isEmpty())
+                for (int i = 0; i < combos.first()->count(); ++i)
+                    if (combos.first()->itemData(i).toString() == "wav") combos.first()->setCurrentIndex(i);
+            const auto edits = win.findChildren<SkinLineEdit *>();
+            if (!edits.isEmpty()) edits.first()->setText(batchDir);
+            bool finished = false;
+            int done = -1, errors = -1;
+            bool stopped = true;
+            QStringList started;
+            QObject::connect(&win, &ConvertWindow::jobStarted, &win,
+                             [&](int, const QString &name) { started << name; });
+            QObject::connect(&win, &ConvertWindow::batchFinished, &win, [&](int ok, int bad, bool wasCancelled) {
+                done = ok;
+                errors = bad;
+                stopped = wasCancelled;
+                finished = true;
+            });
+            win.start();
+            QElapsedTimer timer;
+            timer.start();
+            while (!finished && timer.elapsed() < 20000) {
+                QCoreApplication::processEvents();
+                QThread::msleep(1);
+            }
+            bool batchSamples = finished && done == 3 && errors == 0 && !stopped;
+            for (const Track &track : segments)
+                batchSamples &= matchesRange(QDir(batchDir).filePath(AudioConvert::outputName(track, "wav")),
+                                             AudioConvert::inputRange(track));
+            check("convert_cue_window_batch_samples",
+                  batchSamples && started == QStringList{"ramp - 01.wav", "ramp - 02.wav", "ramp - 03.wav"});
+        }
+        bool invalidRangesFail = true;
+        for (const EncodeRange &range :
+             {EncodeRange{-1, 1}, EncodeRange{1, 1}, EncodeRange{1, 0.5}, EncodeRange{0, 0.000001}, EncodeRange{3, -1},
+              EncodeRange{1, 3}, EncodeRange{std::numeric_limits<double>::quiet_NaN(), -1},
+              EncodeRange{0, std::numeric_limits<double>::infinity()}, EncodeRange{1e30, -1}}) {
+            const QString output = dir.path() + "/invalid-range.wav";
+            const auto result =
+                AudioEncoder::convert(srcPath, output, AudioConvert::targetFor(wavParams), {}, never, range);
+            invalidRangesFail &= !result.ok && !result.error.isEmpty() && !QFileInfo::exists(output);
+        }
+        check("convert_cue_invalid_ranges_fail", invalidRangesFail);
+        QFile original(srcPath);
+        check("convert_cue_source_unchanged", original.open(QIODevice::ReadOnly) && original.readAll() == wave(2));
 
         // —— 窗口层：能构造，且下拉项与格式表同源 ——
         {
@@ -2442,7 +2613,7 @@ public:
                     panel.m_view->selectAt(1, Qt::NoModifier);
                     const QStringList rowMissing = menuPathsFor(1);
                     check("menu_hides_convert_for_missing_file",
-                          rowMissing.contains("文件/重新定位文件…") && !rowMissing.contains("文件/转换为其他格式…"));
+                          rowMissing.contains("文件/属性") && !rowMissing.contains("文件/转换为其他格式…"));
 
                     panel.m_view->selectAt(2, Qt::NoModifier);
                     const QStringList rowRadio = menuPathsFor(2);
@@ -2469,6 +2640,53 @@ public:
                     check("menu_radio_edit_and_properties_dispatch", !findMenuAction(mixedLocal, "编辑显示信息…") &&
                                                                          editedKey == radio.identityKey() &&
                                                                          propertyKey == radio.identityKey());
+
+                    // CUE 单轨与同源批量都应提供转换，并携带原始分轨身份和边界。
+                    const QUrl sheet = QUrl::fromLocalFile(dir.path() + "/menu.cue");
+                    Track cueOne = Track::fromCueSegment(local.url(), 1, sheet, 0.04, 0.4);
+                    Track cueTwo = Track::fromCueSegment(local.url(), 2, sheet, 0.4, -1);
+                    Track archived(Archive::entryUrl(path, "disc/audio.wav"));
+                    mcol.setAllTracks({local, cueOne, cueTwo, archived, radio, missing});
+                    mctl.setTracks(mcol.currentTracks());
+                    panel.m_view->selectAt(1, Qt::NoModifier);
+                    check("menu_cue_single_convert", menuPathsFor(1).contains("文件/转换为其他格式…"));
+                    panel.m_view->selectAt(2, Qt::ControlModifier);
+                    QMenu cueMenu;
+                    panel.m_view->buildContextMenu(cueMenu, 1);
+                    QList<Track> converted;
+                    const auto conversionConnection =
+                        QObject::connect(panel.m_view, &PlaylistView::convertRequested, &panel,
+                                         [&](const QList<Track> &tracks) { converted = tracks; });
+                    QAction *convert = findMenuAction(cueMenu, "转换为其他格式…");
+                    if (convert) convert->trigger();
+                    check("menu_cue_batch_preserves_identity",
+                          converted.size() == 2 && converted[0].identityKey() == cueOne.identityKey() &&
+                              converted[1].identityKey() == cueTwo.identityKey() && converted[0].playStart() == 0.04 &&
+                              converted[0].playEnd() == 0.4 && converted[1].playEnd() == -1);
+                    QObject::disconnect(conversionConnection);
+                    panel.m_view->selectAt(0, Qt::ControlModifier);
+                    check("menu_cue_and_local_convert", menuPathsFor(1).contains("文件/转换为其他格式…"));
+                    bool mixedRejected = true;
+                    for (int badRow : {3, 4, 5}) {
+                        panel.m_view->selectAt(1, Qt::NoModifier);
+                        panel.m_view->selectAt(badRow, Qt::ControlModifier);
+                        mixedRejected &= !menuPathsFor(1).contains("文件/转换为其他格式…");
+                    }
+                    check("menu_cue_mixed_unsupported_rejected", mixedRejected);
+                    // 本地、CUE、归档、电台、缺失文件及混合选区均不再提供单曲重定位。
+                    bool relocationRemoved = true;
+                    for (int row = 0; row < 6; ++row) {
+                        panel.m_view->selectAt(row, Qt::NoModifier);
+                        relocationRemoved &= !menuPathsFor(row).contains("文件/重新定位文件…");
+                    }
+                    panel.m_view->selectAllRows();
+                    relocationRemoved &= !menuPathsFor(0).contains("文件/重新定位文件…");
+                    check("menu_file_relocation_removed",
+                          relocationRemoved &&
+                              panel.m_view->metaObject()->indexOfSignal("relocateRequested(Track)") < 0 &&
+                              panel.metaObject()->indexOfSignal("relocateRequested(Track)") < 0);
+                    mcol.setAllTracks({local, missing, radio});
+                    mctl.setTracks(mcol.currentTracks());
 
                     // 媒体库是扫描只读投影：删行/清空都不列
                     mcol.setLibraryKeys({local.identityKey(), radio.identityKey()});

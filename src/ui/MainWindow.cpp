@@ -20,7 +20,6 @@
 #include <QFutureWatcher>
 #include "models/RadioPresets.h"
 #include "models/ReplayGain.h"
-#include "media/Archive.h"
 #include "Painter.h"
 #include "Theme.h"
 #include "SkinParts.h"
@@ -754,21 +753,6 @@ void MainWindow::togglePlaylistPanel() {
                 m_controller->isPlaying() && m_controller->currentTrack().identityKey() == track.identityKey();
             replace(track, Track::fromRadio(url));
             if (playing) m_controller->retryRadio();
-        });
-        connect(m_playlist, &PlaylistWindow::relocateRequested, this, [this, replace](const Track &track) {
-            const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("重新定位文件"));
-            if (path.isEmpty()) return;
-            Track replacement(QUrl::fromLocalFile(path));
-            if (track.isCueSegment())
-                replacement = Collections::resolveToken(path + QStringLiteral("#track=%1").arg(track.cueNumber()));
-            else {
-                QString archive, entry;
-                if (Archive::parseEntryUrl(track.url(), archive, entry))
-                    replacement = Track(Archive::entryUrl(path, entry));
-            }
-            Importer::probe(replacement);
-            if (!replacement.decodeProblem().isEmpty()) return;
-            replace(track, replacement);
         });
         if (m_dock) m_dock->registerPanel(SkinDock::Playlist, m_playlist);
     }

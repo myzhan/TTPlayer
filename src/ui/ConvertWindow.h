@@ -6,7 +6,7 @@
 // 解码复用 Decoder，编码用 FFmpeg 自带 AAC / ALAC / FLAC / PCM 编码器。
 // 本窗负责挑格式与音频参数（码率 / 压缩档 / 采样率 / 声道 / 音量）、选输出目录、
 // 在后台线程按首顺序转换并显示总进度；取消/关窗会收掉工作线程。
-// 输出名沿用源文件主名，同名已存在自动加序号——绝不覆盖原文件。
+// 输出名沿用源文件主名，CUE 分轨附带轨号，同名已存在自动加序号——绝不覆盖原文件。
 
 #include "media/AudioConvert.h"
 #include "models/Track.h"
@@ -29,7 +29,7 @@ class TTButton;
 class ConvertWindow : public SkinWindow {
     Q_OBJECT
 public:
-    /// tracks 里不可转的（电台 / CUE 分轨 / 归档条目 / 文件已不在）会被滤掉
+    /// tracks 里不可转的（电台 / 归档条目 / 文件已不在）会被滤掉；本地 CUE 按轨截取
     explicit ConvertWindow(const QList<Track> &tracks, QWidget *parent = nullptr);
     ~ConvertWindow() override;
 
@@ -57,7 +57,7 @@ private:
     void setStatus(const QString &text, bool error = false);
     void setOverall(double ratio);
 
-    QList<Track> m_jobs;    // 真正要转的本地文件（顺序即转换顺序）
+    QList<Track> m_jobs;    // 本地整首或 CUE 分轨（顺序即转换顺序）
     ConvertParams m_params; // 开转前在 UI 线程快照，工作线程只读这份
     QString m_outDir;
     bool m_running = false;

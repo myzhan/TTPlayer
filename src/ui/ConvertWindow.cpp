@@ -34,14 +34,9 @@ ConvertWindow::ConvertWindow(const QList<Track> &tracks, QWidget *parent)
     // 辅助窗不跟随半透明：参数行压在播放列表上时不串底。
     setGlassTransparencyFollows(false);
 
-    // 只留真正能转的：本地文件、不是电台 / CUE 分轨 / 归档条目、文件还在。
-    for (const Track &t : tracks) {
-        const QUrl &url = t.url();
-        if (t.isNull() || t.isRadio() || t.isCueSegment()) continue;
-        if (!url.isLocalFile() || !url.fragment().isEmpty()) continue;
-        if (!QFileInfo::exists(url.toLocalFile())) continue;
-        m_jobs.append(t);
-    }
+    // 本地 CUE 分轨保留独立身份与起止区间，与菜单共用转换资格判定。
+    for (const Track &t : tracks)
+        if (AudioConvert::canConvert(t)) m_jobs.append(t);
 
     auto *root = new QVBoxLayout(body());
     root->setContentsMargins(12, 10, 12, 10);
@@ -50,7 +45,7 @@ ConvertWindow::ConvertWindow(const QList<Track> &tracks, QWidget *parent)
     // 顶部：要转谁
     QString head;
     if (m_jobs.isEmpty()) {
-        head = QStringLiteral("没有可转换的曲目（电台 / CUE 分轨 / 归档条目不支持转换）");
+        head = QStringLiteral("没有可转换的曲目（电台 / 归档条目 / 不存在的文件不支持转换）");
     } else if (m_jobs.size() == 1) {
         const Track &t = m_jobs.first();
         const QString name = t.title().isEmpty() ? t.fileName() : t.title();
@@ -144,7 +139,8 @@ ConvertWindow::ConvertWindow(const QList<Track> &tracks, QWidget *parent)
     m_browse->setPreferredSize({64, 24});
     outLayout->addWidget(m_browse, 0, 2);
     outLayout->setColumnStretch(1, 1);
-    outLayout->addWidget(hintLabel(this, QStringLiteral("同名文件已存在时自动加序号，不覆盖原文件")), 1, 0, 1, 3);
+    outLayout->addWidget(hintLabel(this, QStringLiteral("CUE 按轨号独立输出；同名自动加序号，不覆盖原文件")), 1, 0, 1,
+                         3);
     root->addWidget(outSection);
 
     // —— 进度 + 状态 ——
@@ -282,15 +278,17 @@ void ConvertWindow::runBatch() {
             emit batchFinished(done, 0, true);
             return;
         }
-        const QString in = m_jobs[i].url().toLocalFile();
-        const QString out = AudioConvert::uniqueOutputPath(in, m_outDir, fmt->extension);
-        const QString name = QFileInfo(in).fileName();
+        const Track &track = m_jobs[i];
+        const QString in = track.url().toLocalFile();
+        const QString out = AudioConvert::uniqueOutputPath(track, m_outDir, fmt->extension);
+        const QString name = QFileInfo(out).fileName();
         emit jobStarted(i, name);
 
         const double base = double(i) / double(total);
         const double span = 1.0 / double(total);
         const AudioEncoder::Result r = AudioEncoder::convert(
-            in, out, target, [this, base, span](double ratio) { emit jobProgress(base + span * ratio); }, m_cancel);
+            in, out, target, [this, base, span](double ratio) { emit jobProgress(base + span * ratio); }, m_cancel,
+            AudioConvert::inputRange(track));
 
         if (r.cancelled) {
             emit batchFinished(done, 0, true);

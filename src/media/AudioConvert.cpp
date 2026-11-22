@@ -23,6 +23,19 @@ const QList<ConvertFormat> kFormats{
     {QStringLiteral("wav"), QStringLiteral("WAV"), QStringLiteral("wav"), AV_CODEC_ID_PCM_S16LE, true, false, 0, 0},
 };
 
+QString uniquePath(const QString &base, const QDir &outDir, const QString &extension) {
+    QString candidate = outDir.filePath(base + QLatin1Char('.') + extension);
+    for (int n = 2; QFileInfo::exists(candidate); ++n)
+        candidate = outDir.filePath(QStringLiteral("%1 (%2).%3").arg(base).arg(n).arg(extension));
+    return candidate;
+}
+
+QString outputBase(const Track &track) {
+    const QString base = QFileInfo(track.url().toLocalFile()).completeBaseName();
+    return track.isCueSegment() ? QStringLiteral("%1 - %2").arg(base).arg(track.cueNumber(), 2, 10, QLatin1Char('0'))
+                                : base;
+}
+
 } // namespace
 
 namespace AudioConvert {
@@ -37,6 +50,16 @@ const ConvertFormat *formatById(const QString &id) {
     return nullptr;
 }
 
+bool canConvert(const Track &track) {
+    if (track.isNull() || track.isRadio()) return false;
+    const QUrl &url = track.url();
+    return url.isLocalFile() && url.fragment().isEmpty() && QFileInfo(url.toLocalFile()).isFile();
+}
+
+EncodeRange inputRange(const Track &track) {
+    return !track.isNull() && track.isCueSegment() ? EncodeRange{track.playStart(), track.playEnd()} : EncodeRange{};
+}
+
 QString outputName(const QString &inputPath, const QString &extension) {
     return QFileInfo(inputPath).completeBaseName() + QLatin1Char('.') + extension;
 }
@@ -44,12 +67,17 @@ QString outputName(const QString &inputPath, const QString &extension) {
 QString uniqueOutputPath(const QString &inputPath, const QString &dir, const QString &extension) {
     const QFileInfo src(inputPath);
     const QDir outDir(dir.isEmpty() ? src.absolutePath() : dir);
-    const QString base = src.completeBaseName();
+    return uniquePath(src.completeBaseName(), outDir, extension);
+}
 
-    QString candidate = outDir.filePath(base + QLatin1Char('.') + extension);
-    for (int n = 2; QFileInfo::exists(candidate); ++n)
-        candidate = outDir.filePath(QStringLiteral("%1 (%2).%3").arg(base).arg(n).arg(extension));
-    return candidate;
+QString outputName(const Track &track, const QString &extension) {
+    return outputBase(track) + QLatin1Char('.') + extension;
+}
+
+QString uniqueOutputPath(const Track &track, const QString &dir, const QString &extension) {
+    const QFileInfo src(track.url().toLocalFile());
+    const QDir outDir(dir.isEmpty() ? src.absolutePath() : dir);
+    return uniquePath(outputBase(track), outDir, extension);
 }
 
 EncodeTarget targetFor(const ConvertParams &params) {

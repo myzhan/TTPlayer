@@ -15,6 +15,7 @@ extern "C" {
 #include <cerrno>
 #include <cmath>
 #include <memory>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -50,7 +51,8 @@ struct Output {
 };
 
 AudioEncoder::Result encode(const QString &input, const QString &output, const EncodeTarget &target,
-                            const AudioEncoder::Progress &progress, const std::atomic<bool> &cancel) {
+                            const AudioEncoder::Progress &progress, const std::atomic<bool> &cancel,
+                            const EncodeRange &range) {
     AudioEncoder::Result result;
     auto fail = [&result](const QString &what, int code) {
         result.ok = false;
@@ -65,6 +67,20 @@ AudioEncoder::Result encode(const QString &input, const QString &output, const E
     std::unique_ptr<Decoder> dec = Decoder::openFile(input);
     if (!dec) return fail(QStringLiteral("打开源文件失败"), AVERROR_INVALIDDATA);
     if (dec->sampleRate() <= 0) return fail(QStringLiteral("源文件采样率不可用"), AVERROR_INVALIDDATA);
+
+    // 用源采样率统一换算边界，不能用输出率或容器估计时长来截断 CUE 末轨。
+    const int inRate = int(dec->sampleRate());
+    if (!std::isfinite(range.start) || !std::isfinite(range.end) || range.start < 0 ||
+        (range.end >= 0 && range.end <= range.start))
+        return fail(QStringLiteral("分轨区间无效"), AVERROR(EINVAL));
+    const double startFrame = range.start * inRate;
+    const double endFrame = range.end >= 0 ? range.end * inRate : -1;
+    const double frameLimit = double(std::numeric_limits<int64_t>::max());
+    if (!std::isfinite(startFrame) || !std::isfinite(endFrame) || startFrame >= frameLimit || endFrame >= frameLimit)
+        return fail(QStringLiteral("分轨区间超出可用范围"), AVERROR(EINVAL));
+    const int64_t first = std::llround(startFrame);
+    const int64_t end = endFrame >= 0 ? std::llround(endFrame) : -1;
+    if (end >= 0 && end <= first) return fail(QStringLiteral("分轨区间没有音频帧"), AVERROR(EINVAL));
 
     Output out;
     int rc = avformat_alloc_output_context2(&out.fmt, nullptr, nullptr, output.toUtf8().constData());
@@ -197,9 +213,8 @@ AudioEncoder::Result encode(const QString &input, const QString &output, const E
 
     std::vector<float> left(static_cast<size_t>(cap));
     std::vector<float> right(static_cast<size_t>(cap));
-    const int inRate = int(dec->sampleRate());
-    const int64_t total = std::max<int64_t>(1, dec->totalFrames());
-    int64_t inPos = 0, pts = 0;
+    const int64_t total = std::max<int64_t>(1, (end >= 0 ? end : dec->totalFrames()) - first);
+    int64_t inPos = first, pts = 0;
 
     // 编码器要求固定帧长（AAC 必须 1024）：swr 产出先攒进 frame，攒满 cap 才发一帧。
     // 末尾不足一帧的样本作为末帧（可短）发出。
@@ -239,17 +254,25 @@ AudioEncoder::Result encode(const QString &input, const QString &output, const E
             result.cancelled = true;
             return result;
         }
-        // 按速率折算每轮要读多少输入帧，保证一次 swr_convert 的产出不会超过 cap。
+        if (end >= 0 && inPos >= end) break;
+        // 按速率折算输入帧，并在读入前限制终点，避免末块夹带下一轨音频。
         int need = int(av_rescale(cap, inRate, rate));
         need = std::clamp(need, 1, cap);
+        if (end >= 0) need = int(std::min<int64_t>(need, end - inPos));
         const int got = dec->read(left.data(), right.data(), need, inPos);
         if (got <= 0) break;
         inPos += got;
         const uint8_t *in[2] = {reinterpret_cast<const uint8_t *>(left.data()),
                                 reinterpret_cast<const uint8_t *>(right.data())};
         if (!pump(in, got)) return result;
-        if (progress) progress(std::clamp(double(inPos) / double(total), 0.0, 1.0));
+        if (progress) progress(std::clamp(double(inPos - first) / double(total), 0.0, 1.0));
     }
+    if (cancel.load()) {
+        result.cancelled = true;
+        return result;
+    }
+    if (inPos == first || (end >= 0 && inPos < end))
+        return fail(QStringLiteral("源文件没有完整的分轨音频区间"), AVERROR_INVALIDDATA);
 
     // 冲掉重采样器积压与未满一帧的尾巴
     if (!pump(nullptr, 0)) return result;
@@ -268,9 +291,10 @@ AudioEncoder::Result encode(const QString &input, const QString &output, const E
 } // namespace
 
 AudioEncoder::Result AudioEncoder::convert(const QString &input, const QString &output, const EncodeTarget &target,
-                                           const Progress &progress, const std::atomic<bool> &cancel) {
+                                           const Progress &progress, const std::atomic<bool> &cancel,
+                                           const EncodeRange &range) {
     ff::ensureInit();
-    Result result = encode(input, output, target, progress, cancel);
+    Result result = encode(input, output, target, progress, cancel, range);
     // 失败/取消会留下半截文件：删掉，别让人以为转成功了。
     if (!result.ok) QFile::remove(output);
     return result;

@@ -116,7 +116,6 @@ PlaylistWindow::PlaylistWindow(PlayerController *controller, Collections *collec
     connect(m_view, &PlaylistView::propertiesRequested, this, &PlaylistWindow::propertiesRequested);
     connect(m_view, &PlaylistView::convertRequested, this, &PlaylistWindow::convertRequested);
     connect(m_view, &PlaylistView::editRequested, this, &PlaylistWindow::editRequested);
-    connect(m_view, &PlaylistView::relocateRequested, this, &PlaylistWindow::relocateRequested);
     connect(m_view, &PlaylistView::radioAddressRequested, this, &PlaylistWindow::radioAddressRequested);
     connect(m_view, &PlaylistView::radioRetryRequested, this, [this](const Track &track) {
         if (m_controller->currentTrack().isNull() ||

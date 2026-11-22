@@ -7,6 +7,7 @@
 #include "SkinWidgets.h"
 #include "library/Collections.h"
 #include "models/UserPlaylist.h"
+#include "media/AudioConvert.h"
 
 #include <QPainter>
 #include <QFontMetricsF>
@@ -39,15 +40,6 @@ QFont durationFont(const Track &track) {
     QFont font = track.isRadio() ? Fonts::small : Fonts::numericSmall;
     font.setStyleStrategy(QFont::PreferMatch);
     return font;
-}
-
-// 能否转格式：只收本机文件。电台没实体、CUE 分轨转出来会变成整张镜像、
-// 归档条目是压缩包内的一截（转换只认普通路径）。
-bool convertible(const Track &t) {
-    if (t.isNull() || t.isRadio() || t.isCueSegment()) return false;
-    const QUrl &url = t.url();
-    if (!url.isLocalFile() || !url.fragment().isEmpty()) return false;
-    return QFileInfo::exists(url.toLocalFile());
 }
 
 } // namespace
@@ -509,13 +501,11 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
             connect(file->addAction(QStringLiteral("在文件管理器中打开目录")), &QAction::triggered, this, [t] {
                 QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(t.url().toLocalFile()).absolutePath()));
             });
-            connect(file->addAction(QStringLiteral("重新定位文件…")), &QAction::triggered, this,
-                    [this, t] { emit relocateRequested(t); });
-            // 多选里只要有一条不能转（电台 / CUE 分轨 / 归档条目 / 文件不在）就整项不给，
+            // 多选里只要有一条不能转（电台 / 归档条目 / 文件不在）就整项不给，
             // 不偷偷只转一部分。
             bool allConvertible = !picked.isEmpty();
             for (const Track &track : std::as_const(picked))
-                allConvertible = allConvertible && convertible(track);
+                allConvertible = allConvertible && AudioConvert::canConvert(track);
             if (allConvertible)
                 connect(file->addAction(QStringLiteral("转换为其他格式…")), &QAction::triggered, this,
                         [this, picked] { emit convertRequested(picked); });
