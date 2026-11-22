@@ -3,8 +3,8 @@
 // 无边框自绘皮肤窗基类：与主窗同一套观感（圆角玻璃壳 + 顶部浅色标题条 +
 // 最小化/关闭按钮 + 边缘缩放），三平台一致——不挂各 OS 原生标题栏，避免 mac/win/linux
 // 标题栏外观、位置、配色各异。列表/均衡器/歌词保留标题拖动，窗控统一由主面板负责。
-// 默认跟随「半透明玻璃」设置；设置/属性/封面这类辅助窗在构造里关掉，
-// 壳与标题条画成完全不透明，叠在主面板上时文字不会被下层透上来干扰。
+// 主面板与设置/属性/封面跟随「半透明玻璃」设置；只调整壳与标题背景，前景不透明。
+// 转换等其余辅助窗在构造里关闭跟随，壳与标题条保持完全不透明。
 //
 // 用法：
 //   - 布局型面板：把内容控件装进 body()（QLayout::addWidget 会自动把这些控件
@@ -28,8 +28,8 @@ public:
     enum class TitleButtons { None, Close, MinimizeAndClose };
     explicit SkinWindow(const QString &title, TitleButtons buttons, QWidget *parent = nullptr);
 
-    // 是否跟随「半透明玻璃」设置。默认 true：主窗、播放列表、均衡器、歌词四个主面板
-    // 与桌面合成；辅助窗设为 false 后壳/标题条/槽一律按 alpha=1 绘制。
+    // 是否跟随「半透明玻璃」设置。默认 true：主面板和设置/属性/封面与桌面合成；
+    // 转换等辅助窗设为 false 后壳/标题条/槽一律按 alpha=1 绘制。
     void setGlassTransparencyFollows(bool on);
     bool glassTransparencyFollows() const { return m_followGlass; }
     // 本窗壳与槽当前使用的 alpha：跟随时取全局玻璃值，否则恒为 1.0。

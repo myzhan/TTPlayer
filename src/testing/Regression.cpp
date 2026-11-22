@@ -14,6 +14,7 @@
 #include "ui/PropertyWindow.h"
 #include "ui/ConvertWindow.h"
 #include "ui/SettingsWindow.h"
+#include "ui/SkinDock.h"
 #include "ui/SpectrumView.h"
 #include "ui/Theme.h"
 #include "ui/TransportBar.h"
@@ -30,9 +31,12 @@
 #include <QLineEdit>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QInputDialog>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QTimer>
 #include <QMenu>
+#include <QContextMenuEvent>
 #include <QDropEvent>
 #include <QDragEnterEvent>
 #include <QMimeData>
@@ -51,6 +55,7 @@
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QTemporaryDir>
+#include <QScreen>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QThread>
@@ -97,12 +102,25 @@ private:
     QByteArray m_previous;
 };
 
+// 只计真实事件循环触发的重绘，不用 grab/render 掩盖漏掉的全窗更新。
+class ShellPaintObserver final : public QObject {
+public:
+    int paints = 0;
+
+protected:
+    bool eventFilter(QObject *, QEvent *event) override {
+        if (event->type() == QEvent::Paint) ++paints;
+        return false;
+    }
+};
+
 // 纯文本基准也走 QWidget：FreeType 对 QWidget / QImage 请求的字形缓存格式不同，
 // 直接在 QImage 上画字会把栅格化差异误报成遮挡。同屏父对象同时保证点字号 DPI 一致。
 class VolumeReadoutReference final : public QWidget {
 public:
-    VolumeReadoutReference(QWidget *source, const QRectF &rect, const QString &text, const QColor &color)
-        : QWidget(source), m_rect(rect), m_text(text), m_color(color) {
+    VolumeReadoutReference(QWidget *source, const QRectF &rect, const QString &text, const QColor &color,
+                           int alignment = Qt::AlignVCenter | Qt::AlignRight)
+        : QWidget(source), m_rect(rect), m_text(text), m_color(color), m_alignment(alignment) {
         resize(source->size());
     }
 
@@ -112,13 +130,14 @@ protected:
         painter.setRenderHint(QPainter::Antialiasing, true);
         painter.setFont(font());
         painter.setPen(m_color);
-        painter.drawText(m_rect, Qt::AlignVCenter | Qt::AlignRight, m_text);
+        painter.drawText(m_rect, m_alignment, m_text);
     }
 
 private:
     QRectF m_rect;
     QString m_text;
     QColor m_color;
+    int m_alignment;
 };
 
 #ifdef Q_OS_WIN
@@ -1175,7 +1194,17 @@ public:
             check("list_empty_name_rejected", !lists.create("  ", &one));
             check("list_create", lists.create("Road", &one));
             check("list_duplicate_name_distinguished",
-                  lists.create("Road", &two, &note) && one != two && lists.nameOf(one) != lists.nameOf(two));
+                  lists.create("Road", &two, &note) && one != two && lists.nameOf(one) != lists.nameOf(two) &&
+                      note == QStringLiteral("已经有叫「Road」的列表，新列表命名为「%1」").arg(lists.nameOf(two)));
+            check("list_rename_errors_use_list_name",
+                  lists.rename("missing", "Name") == QStringLiteral("这个列表已经不在了") &&
+                      lists.rename(one, "  ") == QStringLiteral("列表名不能是空的") && lists.nameOf(one) == "Road");
+            UserPlaylists restoredNames;
+            restoredNames.restore({UserPlaylist("saved", QStringLiteral("我的歌单"), {a.identityKey()})});
+            check("list_user_name_and_identity_preserved",
+                  restoredNames.nameOf("saved") == QStringLiteral("我的歌单") &&
+                      restoredNames.snapshot().first().id == "saved" &&
+                      restoredNames.keysOf("saved") == QStringList{a.identityKey()});
             check("list_dedup", lists.addKeys({a.identityKey(), b.identityKey(), a.identityKey()}, one) == 2);
             check("list_invalid_reorder_atomic",
                   !lists.reorder(one, {a.identityKey()}) && lists.keysOf(one).size() == 2);
@@ -1561,6 +1590,164 @@ public:
                                                             "sans-serif"});
 #endif
                 {
+                    Collections sidebar;
+                    const Track station = Track::fromRadio(QUrl("http://example.com/sidebar"));
+                    sidebar.setAllTracks({a, station});
+                    sidebar.recordRadioPlay(station.identityKey());
+                    QString listId, categoryId;
+                    // 列表与分类故意同名，验证排序和选中恢复只依赖稳定身份。
+                    sidebar.playlists().create(QStringLiteral("通勤"), &listId);
+                    sidebar.radios().createCategory(QStringLiteral("通勤"), &categoryId, nullptr);
+                    QString problem;
+                    sidebar.radios().moveRadios({station.identityKey()}, categoryId, &problem);
+                    PlayerController sidebarCtl(engine);
+                    sidebarCtl.setTracks(sidebar.currentTracks());
+                    PlaylistWindow sidebarPanel(&sidebarCtl, &sidebar);
+                    QStringList visibleIds;
+                    for (int row = 0; row < sidebarPanel.m_groups->count(); ++row)
+                        visibleIds << sidebarPanel.m_groups->rowData(row).toString();
+                    const QString categoryView = Collections::radioCatViewId(categoryId);
+                    check("UI_sidebar_radio_entries_last",
+                          visibleIds ==
+                              QStringList({Collections::kAllViewId, Collections::kLibraryViewId,
+                                           Collections::kRecentViewId, Collections::kFavViewId, listId,
+                                           Collections::kRadioViewId, Collections::kRecentRadioViewId,
+                                           Collections::radioCatViewId(RadioStations::uncategorizedID), categoryView}));
+                    sidebarPanel.probeShowView(categoryView);
+                    const int oldRow = sidebarPanel.m_groups->currentRow();
+                    QString addedList;
+                    sidebar.playlists().create(QStringLiteral("新增列表"), &addedList);
+                    sidebarPanel.refreshGroups();
+                    check("UI_sidebar_refresh_keeps_radio_identity",
+                          sidebarPanel.m_groups->currentRow() == oldRow + 1 &&
+                              sidebarPanel.m_groups->rowData(sidebarPanel.m_groups->currentRow()).toString() ==
+                                  categoryView &&
+                              sidebar.viewId() == categoryView && sidebarCtl.tracks().size() == 1 &&
+                              sidebarCtl.tracks().first().identityKey() == station.identityKey());
+                    LibraryStore::Loaded state;
+                    sidebar.saveTo(state);
+                    Collections restoredSidebar;
+                    restoredSidebar.loadFrom(state);
+                    restoredSidebar.setAllTracks(sidebar.allTracks());
+                    PlayerController restoredCtl(engine);
+                    restoredCtl.setTracks(restoredSidebar.currentTracks());
+                    PlaylistWindow restoredPanel(&restoredCtl, &restoredSidebar);
+                    check("UI_sidebar_restore_selects_radio_identity",
+                          restoredPanel.m_groups->rowData(restoredPanel.m_groups->currentRow()).toString() ==
+                                  categoryView &&
+                              restoredSidebar.viewId() == categoryView && restoredCtl.tracks().size() == 1 &&
+                              restoredCtl.tracks().first().identityKey() == station.identityKey());
+
+                    sidebarPanel.show();
+                    QCoreApplication::processEvents();
+                    int sidebarChanges = 0;
+                    QObject::connect(&sidebarPanel, &PlaylistWindow::collectionsChanged, &sidebarPanel,
+                                     [&] { ++sidebarChanges; });
+                    QStringList sidebarPaths;
+                    bool inputMatched = false;
+                    // 发送真实右键事件，并在菜单内按回车；弹窗操作与超时均由局部定时器收束。
+                    const auto contextAt = [&](const QPoint &pos, const QString &actionText = QString(),
+                                               const QString &name = QString(), bool accept = false) {
+                        sidebarPaths.clear();
+                        inputMatched = false;
+                        bool menuSeen = false;
+                        QTimer popup, input, timeout;
+                        popup.setSingleShot(true);
+                        input.setSingleShot(true);
+                        QObject::connect(&input, &QTimer::timeout, &sidebarPanel, [&] {
+                            auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+                            if (!dialog) return;
+                            inputMatched = dialog->windowTitle() == "新建列表" && dialog->labelText() == "列表名称";
+                            dialog->setTextValue(name);
+                            if (accept)
+                                dialog->accept();
+                            else
+                                dialog->reject();
+                        });
+                        QObject::connect(&popup, &QTimer::timeout, &sidebarPanel, [&] {
+                            auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+                            if (!menu) return;
+                            menuSeen = true;
+                            sidebarPaths = menuPaths(*menu);
+                            QAction *action = findMenuAction(*menu, actionText);
+                            if (!action) {
+                                menu->close();
+                                return;
+                            }
+                            input.start(0);
+                            menu->setActiveAction(action);
+                            QKeyEvent choose(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                            QApplication::sendEvent(menu, &choose);
+                        });
+                        QObject::connect(&timeout, &QTimer::timeout, &sidebarPanel, [] {
+                            if (auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget()))
+                                dialog->reject();
+                            if (QWidget *menu = QApplication::activePopupWidget()) menu->close();
+                        });
+                        const QPoint global = sidebarPanel.m_groups->mapToGlobal(pos);
+                        QMouseEvent press(QEvent::MouseButtonPress, pos, global, Qt::RightButton, Qt::RightButton,
+                                          Qt::NoModifier);
+                        QMouseEvent release(QEvent::MouseButtonRelease, pos, global, Qt::RightButton, Qt::NoButton,
+                                            Qt::NoModifier);
+                        QApplication::sendEvent(sidebarPanel.m_groups, &press);
+                        QApplication::sendEvent(sidebarPanel.m_groups, &release);
+                        popup.start(0);
+                        timeout.start(1000);
+                        QContextMenuEvent context(QContextMenuEvent::Mouse, pos, global);
+                        QApplication::sendEvent(sidebarPanel.m_groups, &context);
+                        return menuSeen;
+                    };
+                    bool everyRow = true, categoriesUnchanged = true;
+                    for (int row = 0; row < sidebarPanel.m_groups->count(); ++row) {
+                        const QString view = sidebarPanel.m_groups->rowData(row).toString();
+                        const bool opened = contextAt(QPoint(10, row * 22 + 11));
+                        everyRow &= opened && sidebarPaths.count("新建列表…") == 1;
+                        const bool categoryActions =
+                            view == Collections::kRadioViewId || Collections::isRadioCatView(view);
+                        categoriesUnchanged &= sidebarPaths.contains("新建电台分类…") == categoryActions &&
+                                               sidebarPaths.contains("重命名分类「通勤」…") == (view == categoryView) &&
+                                               sidebarPaths.contains("删除分类「通勤」…") == (view == categoryView);
+                    }
+                    const QPoint blank(10, sidebarPanel.m_groups->height() - 10);
+                    check("UI_sidebar_context_new_list_everywhere",
+                          everyRow && sidebarPanel.m_groups->rowAt(blank) < 0 && contextAt(blank) &&
+                              sidebarPaths == QStringList{"新建列表…"} && sidebar.playlists().count() == 2 &&
+                              sidebarChanges == 0);
+                    check("UI_sidebar_context_keeps_category_actions", categoriesUnchanged);
+
+                    sidebarPanel.probeShowView(Collections::kAllViewId);
+                    sidebarPanel.probeSearch("example.com");
+                    const QList<Track> searchTracks = sidebarCtl.tracks();
+                    check("UI_sidebar_create_cancel_preserves_search",
+                          contextAt(blank, "新建列表…", "取消的列表") && inputMatched &&
+                              sidebar.playlists().count() == 2 && sidebarChanges == 0 && sidebarPanel.m_beforeSearch &&
+                              sidebarPanel.m_search->text() == "example.com" &&
+                              sidebar.viewId() == Collections::kAllViewId && searchTracks.size() == 1 &&
+                              sidebarCtl.tracks().size() == 1 &&
+                              sidebarCtl.tracks().first().identityKey() == searchTracks.first().identityKey());
+                    const bool createdFromBlank = contextAt(blank, "新建列表…", "  侧栏新列表  ", true);
+                    const QString createdId = sidebar.viewId();
+                    check("UI_sidebar_create_from_blank_selects_new_list",
+                          createdFromBlank && inputMatched && sidebar.playlists().count() == 3 && sidebarChanges == 1 &&
+                              sidebar.playlists().nameOf(createdId) == "侧栏新列表" && sidebarCtl.tracks().isEmpty() &&
+                              !sidebarPanel.m_beforeSearch && !sidebarPanel.m_searchOpen &&
+                              sidebarPanel.selectedViewId() == createdId &&
+                              sidebarPanel.m_groups->rowData(6).toString() == createdId &&
+                              sidebarPanel.m_groups->rowData(7).toString() == Collections::kRadioViewId);
+                    const bool createdFromRow = contextAt(QPoint(10, 11), "新建列表…", "侧栏新列表", true);
+                    const QString secondId = sidebar.viewId();
+                    LibraryStore::Loaded createdState;
+                    sidebar.saveTo(createdState);
+                    Collections createdBack;
+                    createdBack.loadFrom(createdState);
+                    check("UI_sidebar_create_from_row_deduplicates_and_restores",
+                          createdFromRow && inputMatched && sidebar.playlists().count() == 4 && sidebarChanges == 2 &&
+                              secondId != createdId && sidebar.playlists().contains(secondId) &&
+                              sidebar.playlists().nameOf(secondId) != sidebar.playlists().nameOf(createdId) &&
+                              sidebarPanel.selectedViewId() == secondId && createdBack.viewId() == secondId &&
+                              createdBack.viewList() == sidebar.viewList());
+                }
+                {
                     // 长列表必须实际出现滚动条；检查绘制 alpha 与真实拖动，不只匹配 QSS 文本。
                     const bool wasEnabled = GlassStyle::enabled();
                     const float oldAlpha = GlassStyle::transparency();
@@ -1661,6 +1848,9 @@ public:
                                                       QUrl::fromLocalFile(dir.path() + "/favorite.cue"), 0, 1);
                     tracks[2] = Track(Archive::entryUrl(dir.path() + "/archive.zip", "song.flac"));
                     tracks[3] = Track::fromRadio(QUrl("http://example.com/favorite"));
+                    tracks[1].setMetadata(60000, 44100, 2, 1411);
+                    tracks[4].setMetadata(599, 44100, 2, 1411);
+                    tracks[5].setMetadata(5999, 44100, 2, 1411);
                     favorites.setAllTracks(tracks);
                     favoriteCtl.setTracks(favorites.currentTracks());
                     PlaylistWindow favoritePanel(&favoriteCtl, &favorites);
@@ -1684,6 +1874,36 @@ public:
                                      [&](const QString &) { ++toggled; });
                     QObject::connect(view, &PlaylistView::activateRow, view, [&](int) { ++played; });
                     QObject::connect(view, &PlaylistView::reorderRequested, view, [&](int) { ++dragged; });
+                    const QStringList durations = {"5:00", "1000:00", "...", "直播", "9:59", "99:59"};
+                    const QImage spacing = view->viewport()->grab().toImage();
+                    const qreal spacingDpr = spacing.devicePixelRatio();
+                    bool gapGeometry = true, gapPixels = true;
+                    for (int row = 0; row < durations.size(); ++row) {
+                        QFont font = row == 3 ? Fonts::small : Fonts::numericSmall;
+                        font.setStyleStrategy(QFont::PreferMatch);
+                        const qreal textLeft = view->viewport()->width() - 4 -
+                                               QFontMetricsF(font, view->viewport()).horizontalAdvance(durations[row]);
+                        const QRectF glyph = view->favoriteGlyphRect(row);
+                        const QRect hit = view->favoriteRect(row);
+                        gapGeometry &= std::abs(textLeft - glyph.right() - 2) < 0.001 &&
+                                       glyph.size() == QSizeF(14, 14) && hit.width() == 24 && hit.right() < textLeft &&
+                                       view->favoriteHit(hit.center(), row) &&
+                                       !view->favoriteHit(QPoint(int(std::ceil(textLeft)), row * 24 + 12), row);
+                        // 间隙中心必须只有行背景，避免图标描边、名称或文字侵入 2 px 空隙。
+                        const int x = qRound((textLeft - 1) * spacingDpr);
+                        for (int y = qRound(row * 24 * spacingDpr);
+                             y < qMin(spacing.height(), qRound((row + 1) * 24 * spacingDpr)); ++y)
+                            gapPixels &= spacing.pixel(x, y) == spacing.pixel(spacing.width() - 1, y);
+                    }
+                    check("UI_favorite_duration_geometry", gapGeometry);
+                    check("UI_favorite_duration_gap_pixels", gapPixels);
+                    const QString spacingReport = qEnvironmentVariable("TTPLAYER_PROBE");
+                    if (!spacingReport.isEmpty()) spacing.save(spacingReport + "/favorite-duration-spacing.png");
+                    const QPoint durationPos(int(std::ceil(view->durationTextLeft(0))) + 2, 12);
+                    mouse(QEvent::MouseButtonPress, durationPos, Qt::LeftButton);
+                    mouse(QEvent::MouseButtonRelease, durationPos, Qt::NoButton);
+                    check("UI_favorite_duration_click_not_favorite",
+                          toggled == 0 && played == 0 && dragged == 0 && view->selectedRow() == 0);
                     view->selectAt(0, Qt::NoModifier);
                     view->selectAt(2, Qt::ControlModifier);
                     view->selectAt(0, Qt::ShiftModifier);
@@ -1726,13 +1946,16 @@ public:
                         click(row);
                     check("UI_favorite_all_identity_types", favorites.favorites().size() == 4);
                     favoritePanel.showPage(Collections::kFavViewId);
+                    const QPoint removedPos = view->favoriteRect(0).center();
                     click(0);
                     const QString remaining = favoriteCtl.tracks().first().identityKey();
-                    mouse(QEvent::MouseButtonDblClick, view->favoriteRect(0).center(), Qt::LeftButton);
-                    mouse(QEvent::MouseButtonRelease, view->favoriteRect(0).center(), Qt::NoButton);
+                    const int afterRemoval = toggled;
+                    mouse(QEvent::MouseButtonDblClick, removedPos, Qt::LeftButton);
+                    mouse(QEvent::MouseButtonRelease, removedPos, Qt::NoButton);
                     check("UI_favorite_page_removes_row_double_click_safe",
                           !favorites.isFavorite(tracks[0].identityKey()) && favorites.isFavorite(remaining) &&
-                              favoriteCtl.tracks().size() == 3 && played == 0);
+                              !view->favoriteHit(removedPos, 0) && favoriteCtl.tracks().size() == 3 &&
+                              toggled == afterRemoval && played == 0);
                     favoritePanel.showPage(Collections::kAllViewId);
                     view->selectAt(4, Qt::NoModifier);
                     view->verticalScrollBar()->setValue(48);
@@ -1758,9 +1981,6 @@ public:
                     favoritePanel.clearSearch();
                     PlaylistView independent(&favoriteCtl);
                     check("UI_favorite_no_collection_no_hit", !independent.favoriteHit(QPoint(1, 1), 0));
-                    check("UI_favorite_duration_geometry",
-                          view->favoriteRect(0).width() == 24 &&
-                              view->favoriteRect(0).right() < view->viewport()->width() - 62);
                 }
                 {
                     const bool enabled = GlassStyle::enabled();
@@ -1851,13 +2071,24 @@ public:
                     missing.setTitle("Missing");
                     Track radio = Track::fromRadio(QUrl("http://example.com/live"));
                     radio.setTitle("Radio");
+                    // 集合层按电台别名还原显示名，排序素材也走真实命名规则。
+                    mcol.radios().setAlias(radio.identityKey(), "Radio");
                     mcol.setAllTracks({local, missing, radio});
                     mctl.setTracks(mcol.currentTracks());
                     PlaylistWindow panel(&mctl, &mcol);
+                    bool unifiedListMenus = true;
                     auto menuPathsFor = [&](int row) {
                         QMenu menu;
                         panel.m_view->buildContextMenu(menu, row);
-                        return menuPaths(menu);
+                        QStringList rootMenus;
+                        for (QAction *action : menu.actions())
+                            if (action->menu()) rootMenus << action->text();
+                        const QStringList paths = menuPaths(menu);
+                        unifiedListMenus &= rootMenus.count("列表") == 1 && !rootMenus.contains("歌单") &&
+                                            std::none_of(paths.cbegin(), paths.cend(), [](const QString &text) {
+                                                return text.contains(QStringLiteral("歌单"));
+                                            });
+                        return paths;
                     };
 
                     panel.m_view->selectAt(0, Qt::NoModifier);
@@ -1866,7 +2097,7 @@ public:
                           rowLocal.contains("文件/在文件管理器中打开目录") &&
                               rowLocal.contains("文件/转换为其他格式…") &&
                               rowLocal.contains("列表/播放模式/顺序播放") && rowLocal.contains("添加/添加文件…") &&
-                              rowLocal.contains("歌单/新建歌单…") && rowLocal.contains("从列表移除") &&
+                              rowLocal.contains("列表/新建列表…") && rowLocal.contains("从列表移除") &&
                               rowLocal.contains("文件/属性") && !rowLocal.contains("属性") &&
                               !rowLocal.contains("编辑显示信息…"));
                     check("menu_hides_radio_group_for_local",
@@ -1925,33 +2156,100 @@ public:
                     const QStringList rowLibrary = menuPathsFor(0);
                     check("menu_hides_readonly_page_actions", !rowLibrary.contains("从列表移除") &&
                                                                   !rowLibrary.contains("列表/清空当前列表") &&
-                                                                  !rowLibrary.contains("列表/排序/按标题"));
+                                                                  !rowLibrary.contains("列表/排序/按标题") &&
+                                                                  !rowLibrary.contains("列表/重命名当前列表…") &&
+                                                                  !rowLibrary.contains("列表/删除当前列表"));
 
-                    // 自建歌单页：定义级动作只在真有定义可改时出现；空页没有可导出的内容
+                    // 自建列表页：定义级动作只在真有定义可改时出现；空页没有可导出的内容
                     QString mine;
                     mcol.playlists().create("Mine", &mine);
                     mcol.setViewId(mine);
                     mctl.setTracks(mcol.currentTracks());
                     const QStringList blankCustom = menuPathsFor(-1);
-                    check("menu_playlist_definition_actions", blankCustom.contains("歌单/重命名当前歌单…") &&
-                                                                  blankCustom.contains("歌单/删除当前歌单") &&
-                                                                  blankCustom.contains("歌单/添加文件到当前歌单…") &&
-                                                                  !blankCustom.contains("歌单/导出当前页为 m3u…"));
+                    check("menu_playlist_definition_actions", blankCustom.contains("列表/重命名当前列表…") &&
+                                                                  blankCustom.contains("列表/删除当前列表") &&
+                                                                  blankCustom.contains("列表/添加文件到当前列表…") &&
+                                                                  blankCustom.contains("列表/添加文件夹到当前列表…") &&
+                                                                  !blankCustom.contains("列表/导出当前页为 m3u…"));
+                    check("menu_custom_empty_hint_uses_list",
+                          Collections::emptyHintFor(mine) ==
+                              QStringLiteral("右键曲目 → 加入列表，或右键这里 → 列表 → 导入 m3u"));
+                    auto cancelListDialog = [&](const QString &actionText, const QString &title,
+                                                const QString &prompt) {
+                        QMenu menu;
+                        panel.m_view->buildContextMenu(menu, -1);
+                        QAction *chosen = findMenuAction(menu, actionText);
+                        if (!chosen) return false;
+                        bool matched = false;
+                        QTimer input, timeout;
+                        input.setSingleShot(true);
+                        timeout.setSingleShot(true);
+                        QObject::connect(&input, &QTimer::timeout, &panel, [&] {
+                            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                            if (!dialog) return;
+                            if (auto *entry = qobject_cast<QInputDialog *>(dialog))
+                                matched = entry->windowTitle() == title && entry->labelText() == prompt;
+                            else if (auto *message = qobject_cast<QMessageBox *>(dialog)) {
+                                matched = message->text() == prompt;
+#ifdef Q_OS_MACOS
+                                // macOS 消息框不显示窗口标题，仍严格核对确认正文。
+                                matched &= message->windowTitle().isEmpty();
+#else
+                                matched &= message->windowTitle() == title;
+#endif
+                            }
+                            dialog->reject();
+                        });
+                        QObject::connect(&timeout, &QTimer::timeout, &panel, [] {
+                            if (auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget()))
+                                dialog->reject();
+                        });
+                        input.start(0);
+                        timeout.start(1000);
+                        chosen->trigger();
+                        return matched;
+                    };
+                    check("menu_create_list_dialog_label",
+                          cancelListDialog("新建列表…", "新建列表", "列表名称") && mcol.playlists().count() == 1);
+                    check("menu_rename_list_dialog_label",
+                          cancelListDialog("重命名当前列表…", "重命名列表", "新名称") &&
+                              mcol.playlists().nameOf(mine) == "Mine");
+                    check("menu_delete_list_dialog_label",
+                          cancelListDialog("删除当前列表", "删除列表",
+                                           "确定删除列表「Mine」？（只删除此列表，不动文件和其他列表）") &&
+                              mcol.playlists().contains(mine));
                     check("menu_blank_page_facts",
                           !blankCustom.contains("下一首播放") && !blankCustom.contains("从列表移除") &&
                               !blankCustom.contains("列表/排序/按标题") && !blankCustom.contains("列表/定位当前曲") &&
                               !blankCustom.contains("列表/清空当前列表") && blankCustom.contains("添加/添加网络电台…"));
 
-                    // 筛选态：清空/排序会连带命中之外的内容，先不列
                     mcol.setViewId(Collections::kAllViewId);
                     mctl.setTracks(mcol.currentTracks());
                     panel.m_view->selectAt(0, Qt::NoModifier);
+                    const QStringList withCustom = menuPathsFor(0);
+                    check("menu_add_to_list_label", withCustom.contains("加入列表/Mine"));
+                    QMenu controls;
+                    panel.m_view->buildContextMenu(controls, 0);
+                    QAction *random = findMenuAction(controls, "随机播放");
+                    QAction *descending = findMenuAction(controls, "按标题降序");
+                    if (random) random->trigger();
+                    if (descending) descending->trigger();
+                    check("menu_merged_mode_sort_dispatch",
+                          random && descending && mctl.mode() == PlayMode::Random && mctl.tracks().size() == 3 &&
+                              mctl.tracks().first().identityKey() == radio.identityKey() &&
+                              mcol.currentTracks().size() == 3 &&
+                              mcol.currentTracks().first().identityKey() == radio.identityKey());
+                    if (QAction *order = findMenuAction(controls, "顺序播放")) order->trigger();
+                    if (QAction *ascending = findMenuAction(controls, "按标题")) ascending->trigger();
+
+                    // 筛选态：清空/排序会连带命中之外的内容，先不列
                     panel.m_view->setFilterActive(true);
                     const QStringList filtered = menuPathsFor(0);
                     check("menu_hides_page_actions_while_filtering", !filtered.contains("列表/清空当前列表") &&
                                                                          !filtered.contains("列表/排序/按标题") &&
                                                                          filtered.contains("从列表移除"));
                     panel.m_view->setFilterActive(false);
+                    check("menu_unified_list_naming", unifiedListMenus);
 
                     // 菜单中没有收藏或待播入口；清空仍走真实 triggered。
                     QMenu favMenu;
@@ -2084,6 +2382,41 @@ public:
                 check("UI_main_visible", window.isVisible());
                 check("UI_borderless", window.windowFlags().testFlag(Qt::FramelessWindowHint));
                 check("UI_approved_compact_width", window.width() < 500 && window.minimumWidth() == 420);
+                auto *meter = window.findChild<QWidget *>(QStringLiteral("levelMeter"));
+                check("UI_level_meter_exists", meter != nullptr);
+                if (meter) {
+                    const QFont labelFont = meter->font();
+                    const QFontMetricsF metrics(labelFont, meter);
+                    check("UI_level_labels_smaller_font", labelFont.pointSize() == Fonts::numericTiny.pointSize() - 2 &&
+                                                              labelFont.families() == Fonts::numericTiny.families() &&
+                                                              labelFont.weight() == Fonts::numericTiny.weight());
+                    check("UI_level_labels_fit_unchanged_meter",
+                          meter->size() == QSize(72, 40) && metrics.height() <= 16 &&
+                              metrics.horizontalAdvance("L") <= 14 && metrics.horizontalAdvance("R") <= 14);
+                    QImage actual(meter->size(), QImage::Format_ARGB32_Premultiplied);
+                    actual.fill(Qt::transparent);
+                    meter->render(&actual, QPoint(), QRegion(), QWidget::RenderFlags{});
+                    bool completeLabels = true;
+                    const QStringList labels = {"L", "R"};
+                    for (int row = 0; row < labels.size(); ++row) {
+                        const QRectF rect(0, 3.5 + row * 17, 14, 16);
+                        VolumeReadoutReference reference(meter, rect, labels[row], Theme::inkOnGlassSoft,
+                                                         Qt::AlignCenter);
+                        reference.setFont(labelFont);
+                        QImage expected(meter->size(), QImage::Format_ARGB32_Premultiplied);
+                        expected.fill(Qt::transparent);
+                        reference.render(&expected, QPoint(), QRegion(), QWidget::RenderFlags{});
+                        const QImage glyph = expected.copy(rect.toAlignedRect());
+                        bool hasInk = false;
+                        for (int y = 0; y < glyph.height(); ++y)
+                            for (int x = 0; x < glyph.width(); ++x)
+                                hasInk |= qAlpha(glyph.pixel(x, y)) > 0;
+                        completeLabels &= hasInk && actual.copy(rect.toAlignedRect()) == glyph;
+                    }
+                    check("UI_level_labels_complete_pixels", completeLabels);
+                    const QString report = qEnvironmentVariable("TTPLAYER_PROBE");
+                    if (!report.isEmpty()) meter->grab().save(report + "/level-meter-labels.png");
+                }
                 check("UI_icon", !AppIcon::icon().isNull());
                 bool iconMatches = true;
                 for (int size : {16, 24, 32, 48, 64, 128, 256})
@@ -2366,8 +2699,7 @@ public:
                         window.m_lyric->click();
                     }
                     check("UI_main_controls_group_visibility_30", cycles);
-                    // 窗口半透明只作用于四个主面板；封面/属性/设置等辅助窗保持不透明，
-                    // 叠在主面板上时文字不会被下层透上来。
+                    // 三个指定辅助窗跟随 GlassStyle，转换保持不透明，原窗控配置不变。
                     check("UI_main_panels_follow_glass", window.m_playlist->glassTransparencyFollows() &&
                                                              eq->glassTransparencyFollows() &&
                                                              window.m_lyricWindow->glassTransparencyFollows());
@@ -2383,9 +2715,169 @@ public:
                                                                  settings.findChild<TTButton *>("panelClose") &&
                                                                  !conversion.findChild<TTButton *>("panelMinimize") &&
                                                                  conversion.findChild<TTButton *>("panelClose"));
-                    for (SkinWindow *aux : QList<SkinWindow *>{&cover, &property, &settings})
-                        check("UI_aux_windows_opaque", !aux->glassTransparencyFollows() && aux->shellAlpha() == 1.0f);
+                    const QList<SkinWindow *> auxiliaries{&cover, &property, &settings};
+                    const QStringList names{"cover", "property", "settings"};
+                    for (int i = 0; i < auxiliaries.size(); ++i) {
+                        auto *aux = auxiliaries[i];
+                        ShellPaintObserver observer;
+                        aux->installEventFilter(&observer);
+                        aux->show();
+                        QCoreApplication::processEvents();
+                        GlassStyle::setEnabled(true);
+                        GlassStyle::setTransparency(0.31f);
+                        QCoreApplication::processEvents();
+                        const int before = observer.paints;
+                        GlassStyle::setTransparency(0.63f);
+                        QCoreApplication::processEvents();
+                        QCoreApplication::processEvents();
+                        check(("UI_" + names[i] + "_glass_live_repaint").toUtf8().constData(),
+                              aux->glassTransparencyFollows() && std::abs(aux->shellAlpha() - 0.63f) < 0.001f &&
+                                  observer.paints > before && aux->windowOpacity() == 1.0);
+                        const QImage transparent = aux->grab().toImage();
+                        const QPoint sample(transparent.width() / 2,
+                                            transparent.height() - int(3 * transparent.devicePixelRatio()));
+                        const int alpha = qAlpha(transparent.pixel(sample));
+                        GlassStyle::setEnabled(false);
+                        QCoreApplication::processEvents();
+                        const QImage opaque = aux->grab().toImage();
+                        check(("UI_" + names[i] + "_glass_disabled_opaque").toUtf8().constData(),
+                              aux->shellAlpha() == 1.0f && alpha > 0 && alpha < 255 &&
+                                  qAlpha(opaque.pixel(sample)) == 255);
+                        aux->hide();
+                    }
+                    check("UI_conversion_remains_opaque",
+                          !conversion.glassTransparencyFollows() && conversion.shellAlpha() == 1.0f);
+                    GlassStyle::setEnabled(true);
+                    GlassStyle::setTransparency(0.2f);
                     check("UI_main_panel_glass_alpha", std::abs(eq->shellAlpha() - GlassStyle::glassAlpha()) < 0.001f);
+                }
+                {
+                    // 真实打开入口：菜单选择、列表属性信号与封面按钮均走统一流程。
+                    const QRect originalFrame = window.geometry();
+                    const QRect available = window.screen()->availableGeometry();
+                    QList<QPointer<QWidget>> visiblePanels;
+                    for (const auto &member : window.groupWindows()) {
+                        if (member && member != &window && member->isVisible()) {
+                            visiblePanels.append(member);
+                            member->hide();
+                        }
+                    }
+                    window.move(available.topLeft());
+                    ctl.queue().begin({a}, 0);
+                    auto menuOpen = [&](const QString &label) {
+                        bool chosen = false;
+                        QTimer timer;
+                        timer.setInterval(10);
+                        QObject::connect(&timer, &QTimer::timeout, &window, [&] {
+                            auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+                            if (!menu) return;
+                            for (QAction *action : menu->actions()) {
+                                if (action->text() != label || !action->isEnabled()) continue;
+                                timer.stop();
+                                chosen = true;
+                                menu->setActiveAction(action);
+                                QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                                QApplication::sendEvent(menu, &enter);
+                                return;
+                            }
+                            menu->close();
+                        });
+                        QTimer timeout;
+                        timeout.setSingleShot(true);
+                        QObject::connect(&timeout, &QTimer::timeout, &window, [] {
+                            if (auto *popup = QApplication::activePopupWidget()) popup->close();
+                        });
+                        timer.start();
+                        timeout.start(1000);
+                        for (TTButton *button : window.findChildren<TTButton *>())
+                            if (button->toolTip() == QStringLiteral("打开文件…")) {
+                                button->click();
+                                break;
+                            }
+                        return chosen;
+                    };
+                    check("UI_settings_menu_entry_nonmodal",
+                          menuOpen(QStringLiteral("设置…")) && window.m_settingsWindow &&
+                              window.m_settingsWindow->windowModality() == Qt::NonModal &&
+                              QApplication::activeModalWidget() == nullptr);
+                    QPointer<SettingsWindow> settings = window.m_settingsWindow;
+                    if (settings) {
+                        check("UI_settings_first_show_avoids_main",
+                              available.contains(settings->frameGeometry()) &&
+                                  !settings->frameGeometry().intersects(window.frameGeometry()));
+                        settings->move(window.pos() + QPoint(500, 320));
+                        QEventLoop loop;
+                        QTimer::singleShot(110, &loop, &QEventLoop::quit);
+                        loop.exec();
+                        const QPoint position = settings->pos();
+                        window.openSettings();
+                        check("UI_settings_reuses_instance_position",
+                              window.m_settingsWindow == settings && settings->pos() == position);
+                        auto *mode = settings->findChild<SkinComboBox *>("settingsPlayMode");
+                        ctl.setMode(PlayMode::SingleLoop);
+                        check("UI_settings_external_mode_sync",
+                              mode && mode->itemData(mode->currentIndex()).toInt() == int(PlayMode::SingleLoop));
+                    }
+                    const auto before = window.findChildren<PropertyWindow *>();
+                    const bool menuProperty = menuOpen(QStringLiteral("媒体文件信息"));
+                    window.m_playlist->propertiesRequested(a);
+                    auto properties = window.findChildren<PropertyWindow *>();
+                    check("UI_two_property_entries_multi_instance",
+                          menuProperty && properties.size() == before.size() + 2 && properties[0] != properties[1] &&
+                              properties[0]->parentWidget() == &window && properties[1]->parentWidget() == &window);
+                    for (auto *property : properties)
+                        property->close();
+                    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+                    check("UI_properties_close_destroy", window.findChildren<PropertyWindow *>().isEmpty());
+                    if (!window.m_coverWindow || !window.m_coverWindow->isVisible()) window.toggleCoverPanel();
+                    auto *cover = window.m_coverWindow;
+                    cover->move(window.pos() + QPoint(510, 450));
+                    QEventLoop loop;
+                    QTimer::singleShot(110, &loop, &QEventLoop::quit);
+                    loop.exec();
+                    const QPoint coverPosition = cover->pos();
+                    cover->close();
+                    window.toggleCoverPanel();
+                    check("UI_cover_reopen_keeps_user_position",
+                          cover == window.m_coverWindow && cover->isVisible() && cover->pos() == coverPosition);
+                    const QString frames = window.m_dock->panelFramesString();
+                    check("UI_aux_frames_not_persisted", !frames.contains("settings") && !frames.contains("cover") &&
+                                                             !frames.contains("property") &&
+                                                             frames.split(';').size() == 3);
+                    if (settings) settings->close();
+                    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+                    check("UI_settings_close_destroys_unique_instance",
+                          settings.isNull() && window.m_settingsWindow.isNull());
+                    window.setGeometry(originalFrame);
+                    for (const auto &member : visiblePanels)
+                        if (member) member->show();
+#ifdef Q_OS_WIN
+                    if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+                        window.openSettings();
+                        window.openProperties(a);
+                        QCoreApplication::processEvents();
+                        const auto group = window.groupWindows();
+                        QList<QWidget *> visible;
+                        bool owned = true;
+                        for (const auto &member : group) {
+                            if (!member || !member->isVisible()) continue;
+                            visible.append(member);
+                            if (member != &window) owned &= ownedToolWindow(member, &window);
+                        }
+                        check("UI_windows_aux_owned_single_taskbar", owned && nativeTaskbarWindowCount() == 1);
+                        PinSurfaceMonitor monitor(visible);
+                        bool stable = true;
+                        for (int cycle = 0; cycle < 30; ++cycle) {
+                            for (bool pin : {true, false}) {
+                                window.applyPinTop(pin);
+                                QCoreApplication::processEvents();
+                                stable &=
+                                    monitor.unchanged(pin) && window.probeGroupPinned() == (pin ? visible.size() : 0);
+                            }
+                        }
+                        check("UI_windows_aux_pin_30_preserves_surfaces", stable);
+                    }
+#endif
                 }
                 check("UI_spectrum_24fps", window.m_spectrum->m_timer.interval() == 1000 / 24);
                 {

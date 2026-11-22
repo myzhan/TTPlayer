@@ -36,7 +36,7 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
-        // 标题条跟随所属窗：辅助窗（设置/属性/封面）不透明时不再透出下层。
+        // 标题条跟随所属窗；转换等不跟随的窗口仍使用不透明背景。
         const auto *shell = qobject_cast<SkinWindow *>(window());
         const float a = shell ? shell->shellAlpha() : (GlassStyle::enabled() ? GlassStyle::glassAlpha() : 1.0f);
         Painter::drawBody(&p, QRectF(rect()), Theme::titleTop, Theme::titleBottom, a, 0, Theme::skinEdge, true);
@@ -74,6 +74,7 @@ SkinWindow::SkinWindow(const QString &title, TitleButtons buttons, QWidget *pare
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
 #endif
     setAttribute(Qt::WA_TranslucentBackground, true);
+    connect(&GlassNotifier::instance(), &GlassNotifier::changed, this, [this] { update(); });
     setMouseTracking(true); // 未按键也收 move，边缘光标才能提前变缩放形状
     setWindowTitle(title);
     setAcceptDrops(true);

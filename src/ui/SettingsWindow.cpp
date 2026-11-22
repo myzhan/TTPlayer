@@ -15,6 +15,7 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QTimer>
+#include <QSignalBlocker>
 #include <algorithm>
 
 // 统一毛玻璃：设置窗不再用原生 Fusion 控件（QTabWidget/QGroupBox/QComboBox/QCheckBox/
@@ -34,8 +35,8 @@ TTButton *mkTextBtn(const QString &t, QWidget *parent) {
 
 SettingsWindow::SettingsWindow(MainWindow *main, QWidget *parent)
     : SkinWindow(QStringLiteral("设置"), TitleButtons::Close, parent), m_main(main) {
-    // 设置窗不跟随半透明：拖透明度滑块时自身始终读得清，只有四个主面板变化。
-    setGlassTransparencyFollows(false);
+    setAttribute(Qt::WA_DeleteOnClose);
+    setWindowModality(Qt::NonModal);
     resize(480, 440 + 30); // 高度补上自绘标题条（~30）
 
     auto *outer = new QVBoxLayout(body());
@@ -64,6 +65,7 @@ QWidget *SettingsWindow::buildPlayback() {
     auto *modeSec = new SkinSection(QStringLiteral("播放模式"), page);
     auto *mf = new QVBoxLayout(modeSec->content());
     m_mode = new SkinComboBox(modeSec->content());
+    m_mode->setObjectName(QStringLiteral("settingsPlayMode"));
     m_mode->addItem(QStringLiteral("顺序播放"), int(PlayMode::Order));
     m_mode->addItem(QStringLiteral("列表循环"), int(PlayMode::ListLoop));
     m_mode->addItem(QStringLiteral("单曲循环"), int(PlayMode::SingleLoop));
@@ -76,6 +78,11 @@ QWidget *SettingsWindow::buildPlayback() {
     connect(m_mode, &SkinComboBox::activated, this, [this](int i) {
         m_main->controller()->setMode(PlayMode(m_mode->itemData(i).toInt()));
         m_main->requestSave();
+    });
+    connect(m_main->controller(), &PlayerController::modeChanged, this, [this] {
+        const QSignalBlocker blocker(m_mode);
+        for (int i = 0; i < m_mode->count(); ++i)
+            if (m_mode->itemData(i).toInt() == int(m_main->controller()->mode())) m_mode->setCurrentIndex(i);
     });
     mf->addWidget(m_mode);
     v->addWidget(modeSec);
@@ -137,6 +144,10 @@ QWidget *SettingsWindow::buildPlayback() {
         m_main->controller()->setSleepFadeEnabled(on);
         m_main->requestSave();
     });
+    connect(m_main->controller(), &PlayerController::sleepChanged, this, [this, sleepFade] {
+        const QSignalBlocker blocker(sleepFade);
+        sleepFade->setChecked(m_main->controller()->sleepFadeEnabled());
+    });
     sf->addWidget(sleepFade);
     v->addWidget(sleepSec);
     v->addStretch();
@@ -191,6 +202,15 @@ QWidget *SettingsWindow::buildAudioFx() {
         m_main->controller()->setReplayGainPreamp(v);
     });
     connect(m_preamp, &SkinSlider::sliderReleased, this, [this] { m_main->requestSave(); });
+    connect(m_main->controller(), &PlayerController::replayGainChanged, this, [this, peak] {
+        const QSignalBlocker modeBlocker(m_rgMode), peakBlocker(peak), preampBlocker(m_preamp);
+        for (int i = 0; i < m_rgMode->count(); ++i)
+            if (m_rgMode->itemData(i).toInt() == int(m_main->controller()->replayGainMode()))
+                m_rgMode->setCurrentIndex(i);
+        peak->setChecked(m_main->controller()->replayGainPeakLimit());
+        m_preamp->setValue(int(std::lround(m_main->controller()->replayGainPreamp())));
+        m_preampLabel->setText(QStringLiteral("%1 dB").arg(m_preamp->value()));
+    });
 
     v->addWidget(sec);
     v->addStretch();
@@ -299,7 +319,7 @@ QWidget *SettingsWindow::buildAppearance() {
     auto *sec = new SkinSection(QStringLiteral("玻璃外观"), page);
     auto *f = new QVBoxLayout(sec->content());
 
-    auto *glass = new SkinCheckBox(QStringLiteral("半透明玻璃（主面板 / 播放列表 / 均衡器 / 歌词）"), sec->content());
+    auto *glass = new SkinCheckBox(QStringLiteral("半透明玻璃（主面板及设置 / 文件信息 / 封面）"), sec->content());
     glass->setChecked(GlassStyle::enabled());
     connect(glass, &SkinCheckBox::toggled, this, [this](bool on) {
         GlassStyle::setEnabled(on);
@@ -326,6 +346,12 @@ QWidget *SettingsWindow::buildAppearance() {
         GlassStyle::setTransparency(float(p) / 100.0f);
     });
     connect(m_transparency, &SkinSlider::sliderReleased, this, [this] { m_main->requestSave(); });
+    connect(&GlassNotifier::instance(), &GlassNotifier::changed, this, [this, glass] {
+        const QSignalBlocker glassBlocker(glass), alphaBlocker(m_transparency);
+        glass->setChecked(GlassStyle::enabled());
+        m_transparency->setValue(int(std::lround(GlassStyle::transparency() * 100)));
+        m_transparencyLabel->setText(QStringLiteral("%1%").arg(m_transparency->value()));
+    });
 
     v->addWidget(sec);
     v->addStretch();

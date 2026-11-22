@@ -475,7 +475,11 @@ END
   add_dependencies(ttplayer ttplayer_windows_icon)
   target_sources(ttplayer PRIVATE "${_tt_windows_rc}")
 endif()
-install(TARGETS ttplayer BUNDLE DESTINATION . RUNTIME DESTINATION bin)
+if(WIN32)
+  install(TARGETS ttplayer RUNTIME DESTINATION .)
+else()
+  install(TARGETS ttplayer BUNDLE DESTINATION . RUNTIME DESTINATION bin)
+endif()
 if(UNIX AND NOT APPLE)
   set(_tt_linux_icon "${CMAKE_CURRENT_BINARY_DIR}/icons/$<CONFIG>/ttplayer.png")
   add_custom_command(OUTPUT "${_tt_linux_icon}"
@@ -489,7 +493,7 @@ if(UNIX AND NOT APPLE)
   install(FILES "${_tt_linux_icon}" DESTINATION share/icons/hicolor/256x256/apps)
 endif()
 if(WIN32 AND DEFINED ENV{TTPLAYER_VCPKG_ROOT})
-  install(DIRECTORY "$ENV{TTPLAYER_VCPKG_ROOT}/bin/" DESTINATION bin FILES_MATCHING PATTERN "*.dll")
+  install(DIRECTORY "$ENV{TTPLAYER_VCPKG_ROOT}/bin/" DESTINATION . FILES_MATCHING PATTERN "*.dll")
 endif()
 if(WIN32 AND MSVC)
   # app-local 部署可再分发的 Release CRT，保持 /MD 与 Qt/FFmpeg 的 ABI；不发布 Debug CRT。
@@ -509,7 +513,7 @@ if(WIN32 AND MSVC)
       message(FATAL_ERROR "缺少 app-local VC 运行时 ${_tt_crt}（${MSVC_CRT_DIR}）；请安装 MSVC x64 可再分发组件")
     endif()
   endforeach()
-  install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} DESTINATION bin
+  install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} DESTINATION .
     CONFIGURATIONS Release RelWithDebInfo MinSizeRel)
 endif()
 if(NOT APPLE OR TTPLAYER_BUNDLE)
@@ -532,18 +536,26 @@ if(NOT APPLE OR TTPLAYER_BUNDLE)
       install(FILES "$<TARGET_FILE:Qt6::QOffscreenIntegrationPlugin>" DESTINATION "ttplayer.app/Contents/PlugIns/platforms")
     endif()
   endif()
-  set(_tt_deploy_options)
-  if(WIN32 AND MSVC)
-    # CRT 已由上面的统一安装规则部署，不让 windeployqt 再附 vc_redist 安装器。
-    list(APPEND _tt_deploy_options NO_COMPILER_RUNTIME)
+  if(WIN32)
+    # Windows 专属根布局；CRT 由统一安装规则部署，不附 vc_redist 安装器。
+    qt_generate_deploy_script(TARGET ttplayer OUTPUT_SCRIPT ttplayer_deploy CONTENT [[
+      set(QT_DEPLOY_BIN_DIR ".")
+      set(QT_DEPLOY_LIB_DIR ".")
+      set(QT_DEPLOY_PLUGINS_DIR "plugins")
+      qt_deploy_runtime_dependencies(
+        EXECUTABLE "$<TARGET_FILE:ttplayer>"
+        BIN_DIR "." LIB_DIR "." PLUGINS_DIR "plugins"
+        GENERATE_QT_CONF NO_COMPILER_RUNTIME)
+    ]])
+  else()
+    qt_generate_deploy_app_script(TARGET ttplayer OUTPUT_SCRIPT ttplayer_deploy
+      NO_UNSUPPORTED_PLATFORM_ERROR)
   endif()
-  qt_generate_deploy_app_script(TARGET ttplayer OUTPUT_SCRIPT ttplayer_deploy
-    NO_UNSUPPORTED_PLATFORM_ERROR ${_tt_deploy_options})
   install(SCRIPT ${ttplayer_deploy})
   if(WIN32)
     # Qt 部署每次重写 qt.conf；随后补平台参数，保留原有 [Paths] 与绿色包可搬动性。
     install(CODE [[
-      set(_tt_qt_conf "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/qt.conf")
+      set(_tt_qt_conf "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/qt.conf")
       if(NOT EXISTS "${_tt_qt_conf}")
         message(FATAL_ERROR "Qt 部署未生成 ${_tt_qt_conf}，无法配置 Windows FreeType 字体后端")
       endif()

@@ -9,6 +9,7 @@
 #include "models/UserPlaylist.h"
 
 #include <QPainter>
+#include <QFontMetricsF>
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QWheelEvent>
@@ -27,6 +28,17 @@ namespace {
 QString clock(double sec) {
     const int s = int(std::lround(sec));
     return QStringLiteral("%1:%2").arg(s / 60).arg(s % 60, 2, 10, QLatin1Char('0'));
+}
+
+QString durationText(const Track &track) {
+    if (track.isRadio()) return QStringLiteral("直播");
+    return track.duration() > 0 ? clock(track.duration()) : QStringLiteral("...");
+}
+
+QFont durationFont(const Track &track) {
+    QFont font = track.isRadio() ? Fonts::small : Fonts::numericSmall;
+    font.setStyleStrategy(QFont::PreferMatch);
+    return font;
 }
 
 // 能否转格式：只收本机文件。电台没实体、CUE 分轨转出来会变成整张镜像、
@@ -163,9 +175,23 @@ int PlaylistView::rowAtPos(const QPoint &p) const {
     return row;
 }
 
+qreal PlaylistView::durationTextLeft(int row) const {
+    if (row < 0 || row >= m_tracks.size()) return viewport()->width() - 4;
+    const Track &track = m_tracks[row];
+    const QFontMetricsF metrics(durationFont(track), viewport());
+    return viewport()->width() - 4 - metrics.horizontalAdvance(durationText(track));
+}
+
+QRectF PlaylistView::favoriteGlyphRect(int row) const {
+    return QRectF(durationTextLeft(row) - kFavoriteGap - kFavoriteGlyphSize,
+                  row * kRowH - verticalScrollBar()->value() + (kRowH - kFavoriteGlyphSize) / 2.0, kFavoriteGlyphSize,
+                  kFavoriteGlyphSize);
+}
+
 QRect PlaylistView::favoriteRect(int row) const {
-    return QRect(viewport()->width() - kDurW - kFavoriteW, row * kRowH - verticalScrollBar()->value(), kFavoriteW,
-                 kRowH);
+    // 点击区向左扩展，右侧不覆盖时长；图标贴实际文字而非固定列的左边界。
+    const int right = int(std::ceil(favoriteGlyphRect(row).right()));
+    return QRect(right - kFavoriteW, row * kRowH - verticalScrollBar()->value(), kFavoriteW, kRowH);
 }
 
 bool PlaylistView::favoriteHit(const QPoint &pos, int row) const {
@@ -227,31 +253,21 @@ void PlaylistView::paintEvent(QPaintEvent *) {
         QFont nameFont = isCurrent ? Fonts::title : Fonts::small;
         p.setFont(nameFont);
         p.setPen(isCurrent ? Theme::inkOnGlassAccent : Theme::inkOnGlass);
-        const int nameRight = durX - (m_collections ? kFavoriteW : 0);
+        const int nameRight = m_collections ? qMin(durX - kFavoriteW, favoriteRect(row).left()) : durX;
         QRectF nameRect(12, top, qMax(0, nameRight - 12 - 4), kRowH);
         p.drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft | Qt::TextShowMnemonic,
                    p.fontMetrics().elidedText(name, Qt::ElideMiddle, int(nameRect.width())));
 
         if (m_collections) {
             const bool favorite = m_collections->isFavorite(t.identityKey());
-            Skin::drawGlyph(&p, favorite ? Skin::Glyph::HeartFilled : Skin::Glyph::HeartOutline,
-                            QRectF(favoriteRect(row)), favorite ? Theme::inkOnGlassAccent : Theme::inkOnGlassSoft,
-                            14.0 / kRowH);
+            Skin::drawGlyph(&p, favorite ? Skin::Glyph::HeartFilled : Skin::Glyph::HeartOutline, favoriteGlyphRect(row),
+                            favorite ? Theme::inkOnGlassAccent : Theme::inkOnGlassSoft, 1.0);
         }
 
         // 时长列：右对齐、等宽数字；电台「直播」，未知「...」
-        QString durText;
-        if (t.isRadio())
-            durText = QStringLiteral("直播");
-        else if (t.duration() > 0)
-            durText = clock(t.duration());
-        else
-            durText = QStringLiteral("...");
-        QFont durFont = t.isRadio() ? Fonts::small : Fonts::numericSmall;
-        durFont.setStyleStrategy(QFont::PreferMatch);
-        p.setFont(durFont);
+        p.setFont(durationFont(t));
         p.setPen(isCurrent ? Theme::inkOnGlassAccent : Theme::inkOnGlassSoft);
-        p.drawText(QRectF(durX + 4, top, kDurW - 8, kRowH), Qt::AlignVCenter | Qt::AlignRight, durText);
+        p.drawText(QRectF(durX + 4, top, kDurW - 8, kRowH), Qt::AlignVCenter | Qt::AlignRight, durationText(t));
     }
 
     // 拖拽插入指示：目标行顶部一条 2px accent 线
@@ -271,7 +287,9 @@ void PlaylistView::mousePressEvent(QMouseEvent *event) {
     if (event->button() == Qt::LeftButton) {
         const int row = rowAtPos(event->pos());
         m_ignoreFavoriteRelease = false;
+        m_favoriteClickRect = {};
         if (favoriteHit(event->pos(), row)) {
+            m_favoriteClickRect = favoriteRect(row);
             m_favoritePress = true;
             m_favoriteCancelled = false;
             m_favoriteKey = m_tracks[row].identityKey();
@@ -430,10 +448,9 @@ void PlaylistView::keyPressEvent(QKeyEvent *event) {
 
 void PlaylistView::mouseDoubleClickEvent(QMouseEvent *event) {
     const int row = rowAtPos(event->pos());
-    const bool heartColumn = m_collections && viewport()->rect().contains(event->pos()) &&
-                             event->pos().x() >= viewport()->width() - kDurW - kFavoriteW &&
-                             event->pos().x() < viewport()->width() - kDurW;
-    if (heartColumn) {
+    const bool heart = m_collections && viewport()->rect().contains(event->pos()) &&
+                       (favoriteHit(event->pos(), row) || m_favoriteClickRect.contains(event->pos()));
+    if (heart) {
         m_ignoreFavoriteRelease = true;
         m_favoritePress = m_pressing = m_dragging = false;
         event->accept();
@@ -449,7 +466,7 @@ void PlaylistView::wheelEvent(QWheelEvent *event) {
     verticalScrollBar()->setValue(verticalScrollBar()->value() + delta);
 }
 
-// 右键菜单：选中行上给曲目 / 电台 / 移除，页级入口（添加 / 列表 / 歌单）
+// 右键菜单：选中行上给曲目 / 电台 / 移除，页级入口（添加 / 列表）
 // 行上与空白处都给。当前页或当前行做不到的动作直接不生成（不给灰项），判定只看
 // 集合层与视图自己的状态。本视图只弹菜单与发信号，真正动集合 / 落盘由上层
 // （PlaylistWindow）做。
@@ -477,7 +494,7 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
     const bool onRow = row >= 0 && row < m_tracks.size();
     const QList<int> rows = onRow ? selectedRows() : QList<int>();
     const QString pageId = m_collections ? m_collections->viewId() : Collections::kAllViewId;
-    // 只有自建歌单页有「定义」可改；媒体库是扫描出来的只读投影；筛选态下列表不是整页原貌，
+    // 只有自建列表页有「定义」可改；媒体库是扫描出来的只读投影；筛选态下列表不是整页原貌，
     // 整页动作先不给。
     const bool customPage = m_collections && m_collections->playlists().contains(pageId);
     const bool libraryPage = pageId == Collections::kLibraryViewId;
@@ -490,7 +507,7 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
     if (onRow) {
         const Track t = m_tracks[row];
 
-        // —— 歌单：整段选区都已在该歌单里的不再列 ——
+        // —— 列表：整段选区都已在该列表里的不再列 ——
         if (m_collections) {
             QMenu *lists = nullptr;
             for (const UserPlaylist &pl : m_collections->playlists().items()) {
@@ -500,7 +517,7 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
                     return inList.contains(track.identityKey());
                 });
                 if (alreadyThere) continue;
-                if (!lists) lists = SkinMenu::addSubmenu(menu, QStringLiteral("加入歌单"));
+                if (!lists) lists = SkinMenu::addSubmenu(menu, QStringLiteral("加入列表"));
                 const QString listId = pl.id;
                 connect(lists->addAction(pl.name), &QAction::triggered, this,
                         [this, rows, listId] { emit addToListRequested(rows, listId); });
@@ -571,7 +588,7 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
 
     }
 
-    // —— 页级动作：添加 / 列表 / 歌单 ——
+    // —— 页级动作：添加 / 列表 ——
     if (onRow) menu.addSeparator();
 
     QMenu *add = SkinMenu::addSubmenu(menu, QStringLiteral("添加"));
@@ -628,11 +645,8 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
         connect(listMenu->addAction(QStringLiteral("清空当前列表")), &QAction::triggered, this,
                 [this] { emit clearListRequested(); });
 
-    // 「歌单」：新建 / 导入 / 导出 / 重命名 / 删除这些定义级动作由上层按当前页现填，
-    // 它才知道这一页真能做哪些；整块为空就把子菜单摘掉。
-    QMenu *playlistMenu = SkinMenu::addSubmenu(menu, QStringLiteral("歌单"));
-    emit playlistMenuRequested(playlistMenu);
-    if (playlistMenu->isEmpty()) menu.removeAction(playlistMenu->menuAction());
+    // 新建 / 导入 / 导出 / 重命名 / 删除由上层按当前页追加，共用「列表」子菜单。
+    emit playlistMenuRequested(listMenu);
 }
 
 void PlaylistView::scrollToCurrent() {

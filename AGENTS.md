@@ -85,7 +85,7 @@ zlib、SDL3、libarchive 与 lame/ogg/vorbis/opus 一样由 `3rd/` 源码现编�
 Debug（/MDd），Debug 静态库放在 `3rd/ffmpeg-build/debug/`；CMake 按构型选库。
 用 `-DTTPLAYER_VENDORED=OFF` 回落到系统库时，Debug 自检仍需对应运行时的 DLL
 在搜索路径上，不能只提供 Release 的 `bin`。
-Windows Release 安装由 CMake 统一把可再分发 VC DLL 放进 `bin/`（与 exe 同目录），不得依赖
+Windows Release 安装由 CMake 把 `ttplayer.exe`、Qt/可再分发 VC DLL 和 `qt.conf` 放在发布根目录；Qt 插件保留 `plugins/platforms` 等子目录，Linux 的 bin 布局与 macOS bundle 不变。不得依赖
 用户预装 VC Redistributable、附安装器代替 DLL，或发布 `debug_nonredist`。打包后运行
 `python scripts/package.py --verify-windows build/dist`，核对目标进程实际加载的是包内 CRT；
 Windows 10+ 的 UCRT 等系统组件仍由系统提供。Windows exe 图标必须由构建期复用 AppIcon
@@ -182,7 +182,7 @@ python3 scripts/package.py               # 只生成本地 build/dist，不发�
 - registry、默认列表成员、媒体库扫描贡献互相独立。离线根目录不能当作确认删除。
 - 存档是 SQLite（`state.db`）：设置/列表/现场分表存，写操作走事务；`saveResume` 每 5 秒及暂停/停止只写现场表，不重写整库。
 - 存档位置：macOS/Linux 在 AppDataLocation；Windows 是绿色版，库与 `ttplayer.exe` 同目录（不写 `%APPDATA%`），整个文件夹可拷贝/删除。Windows 首启会把 `%APPDATA%/TTPlayer` 的旧 `state.db`（含 `-wal`/`-shm`）或旧 JSON 复制过来，不删源文件。
-- Windows 单实例锁按 exe 目录区分（同一目录只跑一个，两个拷贝各跑各的），不按 AppData。
+- Windows 单实例锁按 exe 目录区分（同一目录只跑一个，两个拷贝各跑各的），不按 AppData。根目录部署不兼容、不迁移旧 `bin/state.db`，也不修改或删除旧文件；既有 `%APPDATA%` 导入规则保持不变。
 - Windows 发布目录必须可写（不要放 `Program Files` 等只读位置）；不可写时 `save` 返回失败并提示，不静默丢。
 - 旧 JSON 首次启动自动迁移一次并改名 `.migrated-<时间戳>` 留底；未知顶层键进 `v1_meta` 的 `legacy_unknown`。
 - 表名带世代前缀（`v1_settings`、`v1_list_items` 等），前缀必须与 `PRAGMA user_version` 一致。改 schema 三步：全文件把 `v1_` 换成新世代 → 在 `kMigrations` 尾部追一条搬数据的迁移（CREATE 新表 / INSERT SELECT / DROP 旧表）→ `kSchemaVersion` 加一，cpp 里 `static_assert` 会对上数组长度。
@@ -194,7 +194,8 @@ python3 scripts/package.py               # 只生成本地 build/dist，不发�
 - 改窗口尺寸/面板划分必须递增 MainWindow 中 kSkinLayoutVersion。
 - 主面板 × 直接退出；— 隐藏整组继续播放，恢复仅重开隐藏前可见面板。无托盘平台保留最小化恢复入口。列表、均衡器、歌词标题条不创建最小化/关闭按钮，由主面板分别控制开合；保留标题、拖动、缩放、吸附和浮动。
 - 频谱保持 24 fps，隐藏/不可曝光时停绘制及 analyzer；64 柱采用合并路径绘制。
-- 保持既有深色 GlassStyle：主窗/播放列表/均衡器/歌词四个主面板的壳、槽、按钮共用同一 alpha；设置/属性/转换/专辑封面等辅助窗不跟随透明度、始终保持不透明。SkinMenu 单独绘制背景，alpha=min(1, glassAlpha+0.15)，玻璃关闭时为 1；文字/勾选/箭头不透明，启用项悬停或键盘选中叠 accent 0.28 高亮，全部子菜单经统一工厂创建，托盘原生菜单不变。
+- 保持既有深色 GlassStyle：主窗/播放列表/均衡器/歌词及设置/媒体文件信息/专辑封面的壳、槽、按钮共用同一 alpha，并实时刷新；文字、图片不透明，不使用整体 setWindowOpacity。转换等其余辅助窗仍不透明。SkinMenu 单独绘制背景，alpha=min(1, glassAlpha+0.15)，玻璃关闭时为 1；文字/勾选/箭头不透明，启用项悬停或键盘选中叠 accent 0.28 高亮，全部子菜单经统一工厂创建，托盘原生菜单不变。
+- 设置为非模态单实例，重复打开只激活；属性允许多实例且关闭销毁；封面隐藏重开保留会话摆位。三者首次优先在主窗旁侧无遮挡摆位，空间不足时选择最小遮挡且标题可见的位置；吸附后随主窗移动、拖离后独立浮动，所有方位保留自身宽度。辅助成员纳入隐藏/恢复/置顶，使用安全指针与收束定时器；其几何和吸附态不写 panelFrames、不跨重启自动打开，原四面板布局版本与 pl/eq/ly 序列化不变。
 - 收藏以列表时长左侧矢量爱心按 identityKey 单项切换，不放右键菜单；不改变选区/Shift 锚点，不触发播放或拖拽，刷新保留搜索和滚动现场。
 - 封面最多解码到 256 px，显示小档 112 px，缓存预算 8 MiB；热路径不重新开音频取图片字节。
 - README 面向用户，构建、自检、目录结构只写本文与 docs。

@@ -12,6 +12,7 @@
 #include <QWidget>
 #include <QPixmap>
 #include <QSet>
+#include <QPointer>
 
 class QLabel;
 class SpectrumView;
@@ -24,6 +25,7 @@ class PlaylistWindow;
 class EqWindow;
 class LyricWindow;
 class CoverWindow;
+class SettingsWindow;
 class SkinDock;
 class QFileSystemWatcher;
 class QTimer;
@@ -79,6 +81,8 @@ public:
     void toggleEqPanel();
     void toggleLyricPanel();
     void toggleCoverPanel();
+    void openSettings();
+    void openProperties(const Track &track);
     void applyPinTop(bool on) { togglePinTop(on); } // 探针：驱动真实「置顶整组」逻辑
     int probeGroupVisible() const;                  // 当前可见的整组窗数（含主窗）
     int probeGroupPinned() const;                   // 其中带 stays-on-top 的数
@@ -120,7 +124,9 @@ private:
     void syncState();
     void applyVolume();
     void toggleFavoriteCurrent();              // Cmd+D：当前曲加入 / 移出收藏
-    void placeFloating(QWidget *w, int slot);  // SkinDock 式：主窗下方错开摆
+    void ensureDock();
+    void showAuxiliary(QWidget *w);
+    QList<QPointer<QWidget>> groupWindows() const;
     void loadState();                          // 从 state.db 应用设置
     void saveState();                          // 当前运行时写回 state.db
     void updateModeBadge();                    // 标题条播放方式徽章（[列表循环] 等）
@@ -160,6 +166,8 @@ private:
     EqWindow *m_eqWindow = nullptr;       // 懒建
     LyricWindow *m_lyricWindow = nullptr; // 懒建
     CoverWindow *m_coverWindow = nullptr; // 懒建（点封面格开合）
+    QPointer<SettingsWindow> m_settingsWindow;
+    QList<QPointer<QWidget>> m_auxiliaryWindows; // 瞬态成员，封面只在此集合参与组操作
 
     SkinDock *m_dock = nullptr; // 主窗锚点 + 列表/均衡器/歌词自由拖动、靠近才磁吸
     bool m_dockReady = false;
@@ -180,7 +188,7 @@ private:
     QSet<QString> m_scannedKeys; // 上一次由「曲库文件夹扫描」贡献的 @all 身份键（R02：重扫只换这批，不动手工项/电台）
 
     // R19：隐藏到后台前整组哪些窗可见，恢复时只弹回这些
-    QList<QWidget *> m_groupBeforeHide;
+    QList<QPointer<QWidget>> m_groupBeforeHide;
     std::shared_ptr<std::atomic<bool>> m_scanCancel;
     uint64_t m_scanGeneration = 0;
     bool m_groupHidden = false;

@@ -57,8 +57,8 @@ namespace Theme {
 void applyAppStyle(QApplication *app);
 }
 
-/// 半透明玻璃全局开关：主窗、播放列表、均衡器、歌词四个主面板共用同一 alpha；
-/// 设置/属性/队列/封面等辅助窗不跟随，始终保持不透明，避免重叠时透底看不清。
+/// 半透明玻璃全局开关：主窗、播放列表、均衡器、歌词及设置/属性/封面共用同一 alpha；
+/// 转换等其余辅助窗不跟随，文字与图片始终保持不透明。
 /// 单例 QObject：变更 broadcast changed() 信号，自绘控件 connect 到它的 update。
 /// 用信号而非手写回调表：控件析构时 Qt 自动断开连接，不会悬垂。
 class GlassNotifier : public QObject {

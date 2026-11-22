@@ -55,15 +55,15 @@ bool UserPlaylists::create(const QString &rawName, QString *id, QString *note) {
     const QString newId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     m_items.append(UserPlaylist(newId, name));
     if (id) *id = newId;
-    if (note && changed) *note = QStringLiteral("已经有叫「%1」的歌单，这张改名为「%2」").arg(base, name);
+    if (note && changed) *note = QStringLiteral("已经有叫「%1」的列表，新列表命名为「%2」").arg(base, name);
     return true;
 }
 
 QString UserPlaylists::rename(const QString &id, const QString &rawName) {
     const int i = indexOf(id);
-    if (i < 0) return QStringLiteral("这张歌单已经不在了");
+    if (i < 0) return QStringLiteral("这个列表已经不在了");
     const QString base = NameRules::normalized(rawName).left(kNameLimit);
-    if (base.isEmpty()) return QStringLiteral("歌单名不能是空的");
+    if (base.isEmpty()) return QStringLiteral("列表名不能是空的");
     QSet<QString> taken;
     for (int j = 0; j < m_items.size(); ++j)
         if (j != i) taken.insert(m_items[j].name);

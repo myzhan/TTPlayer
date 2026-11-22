@@ -1,8 +1,8 @@
 #pragma once
 
-// 播放列表窗（F04/F05 完整版）：左栏多页浏览器（收藏 + 各自建歌单 + 全部）+
+// 播放列表窗（F04/F05 完整版）：左栏多页浏览器（收藏 + 各自建列表 + 全部）+
 // 右栏「歌曲列表」——顶部标题行（标题 + 固定放大镜 + 可展开搜索框 + 计数），
-// 下面是全自绘 PlaylistView；收藏用行内爱心，添加/电台/删除/排序/模式/歌单在右键里。
+// 下面是全自绘 PlaylistView；收藏用行内爱心，添加/电台/删除/排序/模式/列表在右键里。
 //
 // 分工：集合层 Collections 是各页内容的真相，
 // 搜索命中只是临时把控制器列表换成命中表（pitfall #13）——清空关键字即从
@@ -28,7 +28,7 @@ class PlaylistWindow : public SkinWindow {
 public:
     explicit PlaylistWindow(PlayerController *controller, Collections *collections, QWidget *parent = nullptr);
 
-    /// 左栏那一列随歌单增删 / 媒体库换页刷新（ MainWindow 载入后与每次开窗前调用）
+    /// 左栏那一列随列表增删 / 媒体库换页刷新（ MainWindow 载入后与每次开窗前调用）
     void refreshGroups();
     void refreshFavorites(); // 收藏改变后刷新当前页，保留搜索、选区和滚动现场。
 
@@ -40,7 +40,7 @@ public:
     void probeSearch(const QString &text);
 
 signals:
-    /// 收藏 / 歌单内容变了，外层据此重建索引 + 落盘
+    /// 收藏 / 列表内容变了，外层据此重建索引 + 落盘
     void collectionsChanged();
     /// 从列表移走了一行（携带被移走的 Track）：外层据此记录内置电台黑名单
     void trackRemoved(const Track &track);
@@ -60,7 +60,7 @@ signals:
 
 protected:
     void paintBody(QPainter *p, const QRectF &rect) override;
-    // 自建歌单页拖入目录/音频时直接进这张歌单；其它页保持「导入媒体库」的原行为。
+    // 自建列表页拖入目录/音频时直接进此列表；其它页保持「导入媒体库」的原行为。
     void dropEvent(QDropEvent *event) override;
 
 private:
@@ -74,13 +74,14 @@ private:
     QString selectedViewId() const;          // 左栏当前选中页的 viewId（无=全部页）
     void updateInfo();                       // 「共 N 首 · MM:SS」计数
     void sortView(int key);                  // 当前页显示排序：0=标题 1=艺术家 2=专辑 3=时长 -1=还原
-    // 右键「歌单」子菜单：每次现填，只列当前页真能做的定义级动作
-    // （新建/导入/导出/重命名/删除、往本歌单加歌）。
+    // 右键「列表」子菜单：每次新建后追加当前页可用的定义级动作
+    // （新建/导入/导出/重命名/删除、往本列表加歌），保留视图已有动作。
     void buildListMenu(QMenu *menu);
-    // 把外部目录/音频加进当前自建歌单：后台走 Importer（目录递归、m3u/CUE 展开），
-    // 读完注册进媒体库再写歌单。非自建歌单页给出提示。
+    void createPlaylist(); // 侧栏与曲目列表共用新建弹窗、校验和切页流程。
+    // 把外部目录/音频加进当前自建列表：后台走 Importer（目录递归、m3u/CUE 展开），
+    // 读完注册进媒体库再写列表。非自建列表页给出提示。
     void addPathsToCurrentPlaylist(const QStringList &paths);
-    // 注册 + 写入歌单的同步核心（拖放/对话框/探针共用），返回真正新增的条数。
+    // 注册 + 写入列表的同步核心（拖放/对话框/探针共用），返回真正新增的条数。
     int addTracksToPlaylist(const QList<Track> &tracks, const QString &playlistId);
 
     PlayerController *m_controller;

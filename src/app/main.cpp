@@ -50,6 +50,8 @@
 #include <QEventLoop>
 #include <QTextStream>
 #include <QTemporaryDir>
+#include <QScreen>
+#include <QPointer>
 #include <QThread>
 #ifdef TTPLAYER_HAVE_TEXTCODEC
 #include <QTextCodec>
@@ -161,10 +163,11 @@ static int runSearchListProbe(QTextStream &out) {
     col.playlists().addKeys({a.identityKey(), c.identityKey()}, cid);
     check("col_playlist_tracks", col.tracksOf(cid).size() == 2);
     const auto vl = col.viewList();
-    // R13 后固定页在前（6 个）+ 未分类电台（恒有）+ 那张自建歌单 = 8：首页 [默认]、末叶是歌单
+    // 普通固定页 + 自建列表 + 电台入口，共 8 行；自建列表在电台之前。
     check("col_viewlist", vl.size() == 8 && vl.first().first == Collections::kAllViewId &&
-                              vl.first().second == QStringLiteral("[默认]") &&
-                              vl.last().second == QStringLiteral("深夜"));
+                              vl.first().second == QStringLiteral("[默认]") && vl.at(4).first == cid &&
+                              vl.at(4).second == QStringLiteral("深夜") &&
+                              vl.last().first == Collections::radioCatViewId(RadioStations::uncategorizedID));
     const SearchResult sr = col.search(TrackFilter(QStringLiteral("beta")));
     check("col_search", sr.hits.size() == 1 && col.pagesOf(b.identityKey()).contains(QStringLiteral("[默认]")) &&
                             col.pagesOf(b.identityKey()).contains(QStringLiteral("我的收藏")));
@@ -290,6 +293,155 @@ static int runDockProbe(QTextStream &out) {
               af.right() == main.frameGeometry().left() - 1 - SkinDock::kGap && af.top() == main.frameGeometry().top());
     }
 
+    {
+        QWidget lyric;
+        lyric.setWindowFlags(Qt::FramelessWindowHint);
+        lyric.resize(main.width(), 120);
+        dock.registerPanel(SkinDock::Lyric, &lyric);
+        lyric.show();
+        const QString savedFrames = dock.panelFramesString();
+        QWidget restoredMain, restoredPl, restoredEq, restoredLyric;
+        for (QWidget *w : {&restoredMain, &restoredPl, &restoredEq, &restoredLyric})
+            w->setWindowFlags(Qt::FramelessWindowHint);
+        restoredMain.resize(main.size());
+        restoredMain.show();
+        SkinDock restored;
+        restored.setSavedPanels(savedFrames);
+        restored.registerPanel(SkinDock::Main, &restoredMain);
+        restored.restoreGeometry(dock.geometryString());
+        restored.registerPanel(SkinDock::Playlist, &restoredPl);
+        restored.registerPanel(SkinDock::Equalizer, &restoredEq);
+        restored.registerPanel(SkinDock::Lyric, &restoredLyric);
+        restoredPl.show();
+        restoredEq.show();
+        restoredLyric.show();
+        check("fixed_panel_frames_roundtrip", restored.panelFramesString() == savedFrames);
+        check("fixed_panel_labels_unchanged", savedFrames.startsWith("pl=") && savedFrames.contains(";eq=") &&
+                                                  savedFrames.contains(";ly=") && !savedFrames.contains("aux"));
+    }
+    // 辅助成员不占固定槽，同类多实例按创建序排布；无框测试窗复用真实事件路径。
+    {
+        const QRect available = QGuiApplication::primaryScreen()->availableGeometry();
+        QWidget anchor;
+        anchor.setWindowFlags(Qt::FramelessWindowHint);
+        anchor.resize(180, 100);
+        anchor.move(available.topLeft() + QPoint(220, 120));
+        anchor.show();
+        SkinDock auxiliaryDock;
+        auxiliaryDock.registerPanel(SkinDock::Main, &anchor);
+        auto makeAux = [&] {
+            auto *aux = new QWidget;
+            aux->setWindowFlags(Qt::FramelessWindowHint);
+            aux->resize(110, 100);
+            auxiliaryDock.registerAuxiliary(aux);
+            return aux;
+        };
+        auto *first = makeAux();
+        check("aux_preplaced_before_show", !first->isVisible() && available.contains(first->frameGeometry()) &&
+                                               !first->frameGeometry().intersects(anchor.frameGeometry()));
+        first->show();
+        auto *second = makeAux();
+        second->show();
+        spin(150);
+        check("aux_initial_right_order", auxiliaryDock.windowSide(first) == SkinDock::Right &&
+                                             auxiliaryDock.windowSide(second) == SkinDock::Right &&
+                                             second->y() == first->frameGeometry().bottom() + SkinDock::kGap + 2);
+        check("aux_initial_no_overlap", !second->frameGeometry().intersects(first->frameGeometry()) &&
+                                            !second->frameGeometry().intersects(anchor.frameGeometry()));
+        const QPoint firstBefore = first->pos(), secondBefore = second->pos();
+        anchor.move(anchor.pos() + QPoint(12, 9));
+        check("aux_follow_main",
+              first->pos() - firstBefore == QPoint(12, 9) && second->pos() - secondBefore == QPoint(12, 9));
+        first->resize(137, 130);
+        check("aux_height_reflows", second->y() == first->frameGeometry().bottom() + SkinDock::kGap + 2);
+        anchor.resize(200, anchor.height());
+        check("aux_right_width_independent", first->width() == 137 && second->width() == 110);
+        first->move(anchor.pos() + QPoint(400, 350));
+        spin(150);
+        check("aux_detach", !auxiliaryDock.isWindowDocked(first));
+        const QPoint frozen = first->pos();
+        anchor.move(anchor.pos() + QPoint(8, 7));
+        check("aux_float_stays", first->pos() == frozen);
+        first->move(QPoint(anchor.x(), anchor.frameGeometry().bottom() + SkinDock::kGap + 1));
+        spin(150);
+        check("aux_bottom_snap_keeps_width", auxiliaryDock.isWindowDocked(first) &&
+                                                 auxiliaryDock.windowSide(first) == SkinDock::Bottom &&
+                                                 first->width() == 137 && anchor.width() == 200);
+        first->resize(143, first->height());
+        check("aux_bottom_resize_not_shared", first->width() == 143 && anchor.width() == 200);
+        first->move(QPoint(anchor.frameGeometry().right() + SkinDock::kGap + 1, anchor.y()));
+        spin(150);
+        const int secondWidth = second->width();
+        first->hide();
+        check("aux_hide_reflows", second->y() == anchor.y() && second->width() == secondWidth);
+        first->show();
+        spin(150);
+        check("aux_show_reflows", second->y() == first->frameGeometry().bottom() + SkinDock::kGap + 2);
+        const QString saved = auxiliaryDock.panelFramesString();
+        check("aux_not_serialized", saved.isEmpty());
+        first->move(first->pos() + QPoint(8, 4));
+        delete first; // settle 仍在途，必须同步移除计时器和映射。
+        spin(150);
+        check("aux_destroy_reflows", second->y() == anchor.y());
+        delete second;
+        const int timerBaseline = auxiliaryDock.findChildren<QTimer *>().size();
+        bool safe = true;
+        for (int cycle = 0; cycle < 30; ++cycle) {
+            QPointer<QWidget> transient = makeAux();
+            transient->show();
+            transient->move(transient->pos() + QPoint(9, 3));
+            delete transient.data();
+            safe &= transient.isNull() && auxiliaryDock.findChildren<QTimer *>().size() == timerBaseline;
+            spin(100);
+        }
+        check("aux_destroy_with_settle_30", safe);
+        {
+            QWidget floatingPanel;
+            floatingPanel.setWindowFlags(Qt::FramelessWindowHint);
+            const QPoint blocked(anchor.frameGeometry().right() + SkinDock::kGap + 1, anchor.y());
+            auxiliaryDock.setSavedPanels(QStringLiteral("pl=%1,%2,110,100,0,2").arg(blocked.x()).arg(blocked.y()));
+            auxiliaryDock.registerPanel(SkinDock::Playlist, &floatingPanel);
+            floatingPanel.show();
+            auto *beside = makeAux();
+            beside->show();
+            check("aux_avoids_floating_panel", !beside->frameGeometry().intersects(floatingPanel.frameGeometry()) &&
+                                                   !beside->frameGeometry().intersects(anchor.frameGeometry()) &&
+                                                   auxiliaryDock.windowSide(beside) == SkinDock::Left);
+            delete beside;
+        }
+        for (bool rightEdge : {true, false}) {
+            anchor.resize(180, 100);
+            anchor.move(rightEdge ? QPoint(available.right() - anchor.width() + 1, available.top() + 100)
+                                  : available.topLeft() + QPoint(0, 100));
+            auto *edge = makeAux();
+            edge->show();
+            check(rightEdge ? "aux_right_screen_uses_left" : "aux_left_screen_uses_right",
+                  available.contains(edge->frameGeometry()) &&
+                      !edge->frameGeometry().intersects(anchor.frameGeometry()) &&
+                      auxiliaryDock.windowSide(edge) == (rightEdge ? SkinDock::Left : SkinDock::Right));
+            delete edge;
+        }
+        anchor.move(available.center() - QPoint(90, 50));
+        auto *fallback = new QWidget;
+        fallback->setWindowFlags(Qt::FramelessWindowHint);
+        fallback->resize(110, available.height());
+        auxiliaryDock.registerAuxiliary(fallback);
+        fallback->show();
+        spin(150);
+        check("aux_nonstandard_fallback_floats", available.contains(fallback->frameGeometry()) &&
+                                                     !fallback->frameGeometry().intersects(anchor.frameGeometry()) &&
+                                                     !auxiliaryDock.isWindowDocked(fallback));
+        delete fallback;
+        anchor.resize(available.size());
+        anchor.move(available.topLeft());
+        auto *crowded = makeAux();
+        crowded->show();
+        spin(150);
+        check("aux_insufficient_space_title_visible", available.contains(crowded->frameGeometry()) &&
+                                                          crowded->frameGeometry().intersects(anchor.frameGeometry()) &&
+                                                          !auxiliaryDock.isWindowDocked(crowded));
+        delete crowded;
+    }
     out << "DOCK_PROBE done fail=" << fail << '\n';
     return fail;
 }
@@ -571,6 +723,26 @@ static int runGroupVisProbe(AudioEnginePtr engine, PlayerController &controller,
     check("toggle_hides", w.isGroupHidden());
     w.toggleGroupVisibility();
     check("toggle_shows", !w.isGroupHidden() && w.isVisible());
+    const int baseline = w.probeGroupVisible();
+    bool safe = true;
+    for (int cycle = 0; cycle < 30; ++cycle) {
+        w.openSettings();
+        w.openProperties(Track(QUrl::fromLocalFile("/group/probe.mp3")));
+        QPointer<SettingsWindow> settings = w.findChild<SettingsWindow *>();
+        QPointer<PropertyWindow> property = w.findChild<PropertyWindow *>();
+        safe &= w.probeGroupVisible() == baseline + 2;
+        w.hideGroupToBackground();
+        safe &= w.probeGroupVisible() == 0;
+        if (property) property->close();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        safe &= property.isNull();
+        w.restoreGroupFromBackground();
+        safe &= w.probeGroupVisible() == baseline + 1 && settings && settings->isVisible();
+        if (settings) settings->close();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        safe &= settings.isNull() && w.probeGroupVisible() == baseline;
+    }
+    check("aux_hidden_destroy_restore_30", safe);
     return fail;
 }
 
@@ -922,7 +1094,7 @@ static int runLyricProbe(QTextStream &out) {
 }
 
 // R13 固定页与最近档案探针（纯 Collections 逻辑，不碰设备/窗口）：
-// 验左栏 6 个固定页次序/身份、@radio 与 @library 投影、@recent 录入上限、
+// 验左栏普通列表在前、电台入口在后的次序/身份、@radio 与 @library 投影、@recent 录入上限、
 // 删行语义（@radio 真删、@library 只读）、空提示、viewListID/recent 存档往返。
 static int runGroupsProbe(QTextStream &out) {
     int fail = 0;
@@ -945,23 +1117,45 @@ static int runGroupsProbe(QTextStream &out) {
     col.setAllTracks({a, b, r});
     col.setLibraryKeys({a.identityKey()}); // 只有 a 来自扫描
 
-    // 1) 固定页次序与身份（R13 后恒含「未分类电台」页，无自建分类/歌单时恰好 7 行）
+    // 1) 固定页次序与身份（恒含「未分类电台」页，无自建分类/列表时恰好 7 行）
     const auto vl = col.viewList();
     QStringList order;
     for (const auto &p : vl)
         order.append(p.first);
     check("seven_fixed_pages", vl.size() == 7);
     check("page_order",
-          order == QStringList({Collections::kAllViewId, Collections::kLibraryViewId, Collections::kRadioViewId,
-                                Collections::kRecentRadioViewId, Collections::kRecentViewId, Collections::kFavViewId,
+          order == QStringList({Collections::kAllViewId, Collections::kLibraryViewId, Collections::kRecentViewId,
+                                Collections::kFavViewId, Collections::kRadioViewId, Collections::kRecentRadioViewId,
                                 Collections::radioCatViewId(RadioStations::uncategorizedID)}));
     QStringList names;
     for (const auto &p : vl)
         names.append(p.second);
     check("page_names",
-          names == QStringList({QStringLiteral("[默认]"), QStringLiteral("媒体库"), QStringLiteral("网络电台"),
-                                QStringLiteral("最近听的台"), QStringLiteral("最近播放"), QStringLiteral("我的收藏"),
+          names == QStringList({QStringLiteral("[默认]"), QStringLiteral("媒体库"), QStringLiteral("最近播放"),
+                                QStringLiteral("我的收藏"), QStringLiteral("网络电台"), QStringLiteral("最近听的台"),
                                 QStringLiteral("未分类电台")}));
+    Collections grouped;
+    QString firstList, secondList, firstCategory, secondCategory;
+    grouped.radios().createCategory(QStringLiteral("通勤"), &firstCategory, nullptr);
+    grouped.playlists().create(QStringLiteral("晨间"), &firstList);
+    grouped.radios().createCategory(QStringLiteral("专注"), &secondCategory, nullptr);
+    grouped.playlists().create(QStringLiteral("夜间"), &secondList);
+    QStringList groupedIds;
+    for (const auto &entry : grouped.viewList())
+        groupedIds.append(entry.first);
+    check("radio_entries_after_all_user_lists",
+          groupedIds ==
+              QStringList({Collections::kAllViewId, Collections::kLibraryViewId, Collections::kRecentViewId,
+                           Collections::kFavViewId, firstList, secondList, Collections::kRadioViewId,
+                           Collections::kRecentRadioViewId, Collections::radioCatViewId(RadioStations::uncategorizedID),
+                           Collections::radioCatViewId(firstCategory), Collections::radioCatViewId(secondCategory)}));
+    grouped.setViewId(Collections::radioCatViewId(firstCategory));
+    LibraryStore::Loaded groupedState;
+    grouped.saveTo(groupedState);
+    Collections groupedBack;
+    groupedBack.loadFrom(groupedState);
+    check("sidebar_order_and_view_survive_restore",
+          groupedBack.viewList() == grouped.viewList() && groupedBack.viewId() == grouped.viewId());
 
     // 2) 投影页
     check("all_has_three", keysOf(col.tracksOf(Collections::kAllViewId)).size() == 3);
@@ -1531,6 +1725,21 @@ int main(int argc, char *argv[]) {
         window.applyPinTop(false);
         QCoreApplication::processEvents();
         check("unpin_clears_all", window.probeGroupPinned() == 0);
+        window.applyPinTop(true);
+        window.openSettings();
+        window.openProperties(Track(QUrl::fromLocalFile("/pin/probe.mp3")));
+        window.toggleCoverPanel();
+        QCoreApplication::processEvents();
+        check("aux_late_open_inherits_pin", window.probeGroupVisible() == 7 && window.probeGroupPinned() == 7);
+        bool stable = true;
+        for (int cycle = 0; cycle < 30; ++cycle) {
+            window.applyPinTop(false);
+            stable &= window.probeGroupPinned() == 0;
+            window.applyPinTop(true);
+            stable &= window.probeGroupPinned() == window.probeGroupVisible();
+        }
+        check("aux_group_pin_30", stable);
+        window.applyPinTop(false);
         out << "PIN_PROBE done fail=" << fail << '\n';
         out.flush();
 

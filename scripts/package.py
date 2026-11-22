@@ -7,10 +7,12 @@
 """
 import argparse
 import configparser
+import hashlib
 import os
 from pathlib import Path
 import platform
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -40,6 +42,7 @@ def build_bundle():
 
 
 WINDOWS_CRT = {"msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"}
+WINDOWS_QT = {"qt6core.dll", "qt6gui.dll", "qt6widgets.dll"}
 
 
 def windows_modules(pid):
@@ -85,13 +88,24 @@ def windows_modules(pid):
         kernel.CloseHandle(handle)
 
 
-def check_windows_modules(modules, bin_dir):
-    """所有已加载 VC DLL 必须来自 exe 同目录；UCRT 等 Windows 系统 DLL 不在此列。"""
+def check_windows_modules(modules, app_dir, platform_plugin="qoffscreen.dll"):
+    """VC/Qt DLL 来自发布根目录，实际加载的 Qt 插件来自包内对应子目录。"""
+    plugins = {path.name.lower(): path.resolve() for path in (app_dir / "plugins").rglob("*.dll")}
+    plugin_dirs = {"platforms", "imageformats", "styles", "sqldrivers", "iconengines", "platformthemes",
+                   "networkinformation", "tls", "generic", "printsupport", "multimedia"}
     for name, path in modules.items():
-        if re.fullmatch(r"(?:msvcp|vcruntime|concrt)140.*\.dll", name):
-            if path.parent != bin_dir:
-                raise RuntimeError(f"VC 运行时未从包内加载：{path}")
-    return WINDOWS_CRT.union({"qt6widgets.dll", "qoffscreen.dll"}).issubset(modules)
+        if re.fullmatch(r"(?:msvcp|vcruntime|concrt)140.*\.dll", name) or name.startswith("qt6"):
+            if path.parent != app_dir:
+                raise RuntimeError(f"VC/Qt 运行时未从包内根目录加载：{path}")
+        if name in plugins and path != plugins[name]:
+            raise RuntimeError(f"Qt 插件未从包内相应目录加载：{path}")
+        if name.startswith("q") and path.parent.name.lower() in plugin_dirs:
+            expected = app_dir / "plugins" / path.parent.name / name
+            if path != expected or not expected.is_file():
+                raise RuntimeError(f"Qt 插件不属于发布包：{path}")
+        if name == platform_plugin and path != app_dir / "plugins" / "platforms" / platform_plugin:
+            raise RuntimeError(f"Qt 平台插件路径不符：{path}")
+    return WINDOWS_CRT.union(WINDOWS_QT, {platform_plugin}).issubset(modules)
 
 
 def windows_version_strings(exe):
@@ -139,9 +153,28 @@ def verify_windows_metadata(exe):
 def verify_windows_ui(exe, env, temporary):
     """用 Windows 平台插件验证图标、真实 HWND 及置顶透明样式，不以 offscreen 替代。"""
     native_env = dict(env, QT_QPA_PLATFORM="windows", TTPLAYER_QT_UI_PROBE="1")
-    result = subprocess.run([exe], cwd=temporary, env=native_env, capture_output=True,
-                            text=True, encoding="utf-8", errors="replace", timeout=120)
-    output = result.stdout + result.stderr
+    loaded = False
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as log:
+        process = subprocess.Popen([exe], cwd=temporary, env=native_env, stdout=log, stderr=log)
+        try:
+            deadline = time.monotonic() + 120
+            while process.poll() is None:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Windows 原生界面验证超时")
+                try:
+                    modules = windows_modules(process.pid)
+                except OSError as error:
+                    if error.winerror not in (299, 6):
+                        raise
+                else:
+                    loaded |= check_windows_modules(modules, Path(exe).parent, "qwindows.dll")
+                time.sleep(0.02)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=10)
+        log.seek(0)
+        output = log.read()
     passed = len(re.findall(r" PASS$", output, re.M))
     skipped = len(re.findall(r" SKIP(?:$|[ (])", output, re.M))
     required = {"UI_exe_embedded_icon", "UI_windows_resolved_font", "UI_windows_native_single_taskbar",
@@ -149,17 +182,20 @@ def verify_windows_ui(exe, env, temporary):
                 "UI_windows_unpin_preserves_layered_surface", "UI_windows_pin_toggle_30_preserves_surfaces",
                 "UI_windows_pin_first_show_inherits", "UI_windows_pin_reopen_inherits",
                 "UI_windows_unpin_hidden_panel_reopen", "UI_windows_pin_minimize_restore",
-                "UI_windows_pin_background_restore", "UI_windows_unpin_while_hidden_restore"}
+                "UI_windows_pin_background_restore", "UI_windows_unpin_while_hidden_restore",
+                "UI_windows_aux_owned_single_taskbar", "UI_windows_aux_pin_30_preserves_surfaces",
+                "UI_settings_menu_entry_nonmodal", "UI_two_property_entries_multi_instance",
+                "UI_cover_reopen_keeps_user_position"}
     completed = set(re.findall(r"^REVIEW_PROBE (\S+) PASS$", output, re.M))
-    if (result.returncode or not required.issubset(completed) or skipped
+    if (process.returncode or not loaded or not required.issubset(completed) or skipped
             or re.search(r" FAIL(?:$|[ (])", output, re.M)):
-        raise RuntimeError(f"Windows 原生界面验证失败（{result.returncode}）：\n{output}")
+        raise RuntimeError(f"Windows 原生界面验证失败（{process.returncode}，包内模块={loaded}）：\n{output}")
     print(f"WINDOWS_NATIVE_UI PASS={passed} SKIP={skipped}")
 
 
-def verify_windows_qt_conf(bin_dir):
+def verify_windows_qt_conf(app_dir):
     """确保分发包通过 qt.conf 使用用户实测通过的 FreeType 字体后端。"""
-    path = Path(bin_dir) / "qt.conf"
+    path = Path(app_dir) / "qt.conf"
     config = configparser.ConfigParser(interpolation=None)
     try:
         with path.open(encoding="utf-8-sig") as source:
@@ -168,22 +204,53 @@ def verify_windows_qt_conf(bin_dir):
         raise RuntimeError(f"Windows 分发的 qt.conf 缺失或无法解析：{path}") from error
     if config.get("Platforms", "WindowsArguments", fallback="").strip() != "fontengine=freetype":
         raise RuntimeError(f"Windows 分发未配置 FreeType 字体后端：{path}")
-    print("WINDOWS_QT_CONF PASS fontengine=freetype")
+    defaults = {"Prefix": ".", "Binaries": "bin", "Libraries": "lib", "Plugins": "plugins"}
+    for key, expected in {"Prefix": ".", "Binaries": ".", "Libraries": ".", "Plugins": "plugins"}.items():
+        value = config.get("Paths", key, fallback=defaults[key]).strip()
+        if value != expected:
+            raise RuntimeError(f"Windows qt.conf 根布局不符：{key}={value!r}，应为 {expected!r}")
+    if not config.has_section("Paths"):
+        raise RuntimeError(f"Windows qt.conf 缺少相对路径配置：{path}")
+    print("WINDOWS_QT_CONF PASS root/plugins fontengine=freetype")
 
 
 def verify_windows(dist):
-    """发布门禁：字体配置、DLL 齐全、隔离环境冒烟、核对 app-local CRT 路径。"""
+    """原包与用户存档逐字节守卫，所有进程使用隔离存档。"""
+    from selftest_guard import fingerprints, STATE_FILES
+
+    app_dir = Path(dist).resolve()
+
+    def state_fingerprints():
+        values = fingerprints()
+        for root in (app_dir, app_dir / "bin"):
+            for name in STATE_FILES:
+                path = root / name
+                values[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+        return values
+
+    before = state_fingerprints()
+    try:
+        _verify_windows(app_dir)
+    finally:
+        if before != state_fingerprints():
+            raise RuntimeError("USER_STATE_GUARD FAIL：用户档或旧 bin 存档字节发生变化")
+    print("USER_STATE_GUARD PASS")
+
+
+def _verify_windows(dist):
+    """发布门禁：根布局、DLL 齐全、搬动后隔离冒烟与实际模块来源。"""
     if platform.system() != "Windows":
         raise RuntimeError("Windows 分发验证必须在 Windows x64 上运行")
     import struct
     if struct.calcsize("P") != 8:
         raise RuntimeError("Windows x64 分发验证需要 64 位 Python")
-    bin_dir = (Path(dist) / "bin").resolve()
-    verify_windows_qt_conf(bin_dir)
-    for name in ["ttplayer.exe", *sorted(WINDOWS_CRT)]:
-        if not (bin_dir / name).is_file():
-            raise RuntimeError(f"Windows 分发缺少 {bin_dir / name}")
-    for path in bin_dir.rglob("*.dll"):
+    app_dir = Path(dist).resolve()
+    verify_windows_qt_conf(app_dir)
+    for name in ["ttplayer.exe", *sorted(WINDOWS_CRT | WINDOWS_QT),
+                 "plugins/platforms/qoffscreen.dll", "plugins/platforms/qwindows.dll"]:
+        if not (app_dir / name).is_file():
+            raise RuntimeError(f"Windows 分发缺少 {app_dir / name}")
+    for path in app_dir.rglob("*.dll"):
         if re.fullmatch(r"(?:msvcp140(?:_[12])?d(?:_.*)?|vcruntime140(?:_1)?d|concrt140d|ucrtbased)\.dll",
                         path.name.lower()):
             raise RuntimeError(f"发布包包含不可再分发的 Debug CRT：{path}")
@@ -197,8 +264,12 @@ def verify_windows(dist):
     probe_root = ROOT / "build"
     probe_root.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="windows-package-", dir=probe_root) as temporary:
+        moved = Path(temporary) / "relocated-player"
+        shutil.copytree(app_dir, moved, ignore=shutil.ignore_patterns("state.db*", "state.json", "resume.json", "bin"))
+        app_dir = moved.resolve()
+        verify_windows_qt_conf(app_dir)
         env["TTPLAYER_QT_STATE"] = str(Path(temporary) / "state.json")
-        exe = str(bin_dir / "ttplayer.exe")
+        exe = str(app_dir / "ttplayer.exe")
         version = subprocess.run([exe, "--version"], cwd=temporary, env=env,
                                  capture_output=True, text=True, check=True, timeout=30)
         if not re.fullmatch(r"TTPlayer \S+ Qt \S+ x86_64", version.stdout.strip()):
@@ -219,7 +290,7 @@ def verify_windows(dist):
                         if error.winerror != 299:  # DLL 装载尚未完成，下一轮重试。
                             raise
                     else:
-                        if check_windows_modules(modules, bin_dir):
+                        if check_windows_modules(modules, app_dir):
                             for name in sorted(WINDOWS_CRT):
                                 print(f"APP_LOCAL_CRT PASS {modules[name]}")
                             break
@@ -231,6 +302,7 @@ def verify_windows(dist):
                     process.terminate()
                 process.wait(timeout=10)
         verify_windows_ui(exe, env, temporary)
+        print("WINDOWS_RELOCATED_PACKAGE PASS")
 
 
 def sign(app):

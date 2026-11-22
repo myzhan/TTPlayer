@@ -430,19 +430,19 @@ QList<Track> Collections::currentTracks() const {
 
 QList<QPair<QString, QString>> Collections::viewList() const {
     QList<QPair<QString, QString>> out;
-    // 固定页永远按这个次序排在最前（对齐参考图 playlist.png），自建歌单跟在后面
+    // 普通固定页与自建列表在前，自建列表保留创建顺序。
     out.append({kAllViewId, QStringLiteral("[默认]")});
     out.append({kLibraryViewId, QStringLiteral("媒体库")});
-    out.append({kRadioViewId, QStringLiteral("网络电台")});
-    out.append({kRecentRadioViewId, QStringLiteral("最近听的台")});
     out.append({kRecentViewId, QStringLiteral("最近播放")});
     out.append({kFavViewId, QStringLiteral("我的收藏")});
-    // 未分类电台是默认入口、永远在（不由用户创建，这里补在前面），其后跟各分类（创建序）
+    for (const UserPlaylist &p : m_lists.items())
+        out.append({p.id, p.name});
+    // 电台相关入口统一置于末尾，固定入口与自建分类各自保持原有顺序。
+    out.append({kRadioViewId, QStringLiteral("网络电台")});
+    out.append({kRecentRadioViewId, QStringLiteral("最近听的台")});
     out.append({radioCatViewId(RadioStations::uncategorizedID), QStringLiteral("未分类电台")});
     for (const RadioCategory &c : m_radio.categories())
         out.append({radioCatViewId(c.id), c.name});
-    for (const UserPlaylist &p : m_lists.items())
-        out.append({p.id, p.name});
     return out;
 }
 
@@ -454,7 +454,7 @@ QString Collections::emptyHintFor(const QString &viewId) {
     if (viewId == kRecentViewId) return QStringLiteral("还没有播放记录");
     if (viewId == kFavViewId) return QStringLiteral("右键曲目 → 加入收藏，或按 ⌘D");
     if (isRadioCatView(viewId)) return QStringLiteral("在电台页右键台 → 移入分类，归到这一类的台就在这一页");
-    return QStringLiteral("右键曲目 → 加入歌单，或右键这里导入 m3u"); // 自建歌单
+    return QStringLiteral("右键曲目 → 加入列表，或右键这里 → 列表 → 导入 m3u"); // 自建列表
 }
 
 QList<SearchPage> Collections::buildPages() const {

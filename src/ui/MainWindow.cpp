@@ -148,7 +148,12 @@ std::optional<Track> promptRadioInfo(QWidget *parent, const Track &current = {})
 class LevelMeter : public QWidget {
 public:
     explicit LevelMeter(AudioEngine *eng, QWidget *parent = nullptr) : QWidget(parent), m_eng(eng) {
+        setObjectName(QStringLiteral("levelMeter"));
         setFixedSize(72, 40);
+        // L/R 单独使用小字号，沿用现有拉丁字体及 Windows 减 1 pt 的规则。
+        QFont labelFont = Fonts::numericTiny;
+        labelFont.setPointSize(qMax(1, labelFont.pointSize() - 2));
+        setFont(labelFont);
         setAttribute(Qt::WA_TransparentForMouseEvents, true);
     }
     void advanceFrame() {
@@ -172,6 +177,7 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
+        p.setRenderHint(QPainter::TextAntialiasing, true);
         drawBar(p, QRectF(16, 7, width() - 18, 9), m_holdL, QStringLiteral("L"));
         drawBar(p, QRectF(16, 24, width() - 18, 9), m_holdR, QStringLiteral("R"));
     }
@@ -192,7 +198,8 @@ private:
         p.fillRect(QRectF(track.left() + 1, track.top() + 1, w, track.height() - 2),
                    v > 0.98f ? Theme::meterRed : Theme::meterGreen);
         p.setPen(Theme::inkOnGlassSoft);
-        p.drawText(QRectF(0, track.top(), 14, track.height()), Qt::AlignCenter, lab);
+        // 标签与电平条中心对齐，但不再挤进仅 9 px 高的条内绘制区。
+        p.drawText(QRectF(0, track.center().y() - 8, 14, 16), Qt::AlignCenter, lab);
     }
     AudioEngine *m_eng;
     float m_levelL = 0.0f, m_levelR = 0.0f; // 平滑后的电平
@@ -498,16 +505,10 @@ MainWindow::MainWindow(PlayerController *controller, AudioEnginePtr engine, QWid
         QAction *chosen = menu.exec(openBtn->mapToGlobal(QPoint(0, openBtn->height())));
         if (chosen == openAct)
             openFiles();
-        else if (chosen == settingsAct) {
-            // 无边框皮肤窗不能 QDialog::exec：改应用级模态 + 关窗即销毁（避漏）。
-            auto *sw = new SettingsWindow(this, this);
-            sw->setAttribute(Qt::WA_DeleteOnClose);
-            sw->setWindowModality(Qt::ApplicationModal);
-            sw->show();
-            sw->raise();
-            sw->activateWindow();
-        } else if (chosen == propAct)
-            (new PropertyWindow(m_controller->currentTrack(), m_controller, this))->show();
+        else if (chosen == settingsAct)
+            openSettings();
+        else if (chosen == propAct)
+            openProperties(m_controller->currentTrack());
     });
     connect(hideBtn, &TTButton::clicked, this, &MainWindow::hideGroupToBackground);
     connect(closeBtn, &TTButton::clicked, qApp, &QCoreApplication::quit); // R19：× 直退进程
@@ -613,12 +614,15 @@ MainWindow::~MainWindow() {
     delete m_dock;
     m_dock = nullptr;
     m_dockReady = false;
-    for (QWidget *panel : QList<QWidget *>{m_playlist, m_eqWindow, m_lyricWindow, m_coverWindow}) {
-        if (panel) {
+    const auto group = groupWindows();
+    for (const auto &panel : group) {
+        if (panel && panel != this) {
             QObject::disconnect(panel, nullptr, this, nullptr);
-            delete panel;
+            delete panel.data();
         }
     }
+    m_auxiliaryWindows.clear();
+    m_groupBeforeHide.clear();
     m_playlist = nullptr;
     m_eqWindow = nullptr;
     m_lyricWindow = nullptr;
@@ -699,12 +703,11 @@ void MainWindow::setWindowPinTop(QWidget *w, bool on) {
         w->setWindowFlags(f);
 }
 
-// 置顶：用户置顶 = 整组置顶。主窗 + 当前可见的列表/均衡器/歌词/封面/队列一起 stays-on-top；
+// 置顶：用户置顶 = 整组置顶。主窗、可见副面板及辅助窗一起 stays-on-top；
 // 置顶之后才打开的窗在各自 show 点用 setWindowPinTop 继承当前置顶态（见各按钮 handler）。
 void MainWindow::togglePinTop(bool on) {
     m_pinTop = on; // 先记权威态，置顶后新开的窗据此继承
-    const QList<QWidget *> group = {this, m_playlist, m_eqWindow, m_lyricWindow, m_coverWindow};
-    for (QWidget *w : group)
+    for (const auto &w : groupWindows())
         if (w && w->isVisible()) setWindowPinTop(w, on);
 }
 
@@ -731,8 +734,7 @@ void MainWindow::togglePlaylistPanel() {
         // 右键「添加网络电台…」：同时填写地址与显示信息
         connect(m_playlist, &PlaylistWindow::radioRequested, this, [this] { addRadioPrompt(); });
         // 右键「属性」：开曲目属性窗
-        connect(m_playlist, &PlaylistWindow::propertiesRequested, this,
-                [this](const Track &track) { (new PropertyWindow(track, m_controller, this))->show(); });
+        connect(m_playlist, &PlaylistWindow::propertiesRequested, this, &MainWindow::openProperties);
         // 右键「转换为其他格式…」：开转换窗（走内嵌 libav*，不开外部进程）
         connect(m_playlist, &PlaylistWindow::convertRequested, this,
                 [this](const QList<Track> &tracks) { (new ConvertWindow(tracks, this))->show(); });
@@ -830,29 +832,63 @@ void MainWindow::toggleLyricPanel() {
 }
 
 void MainWindow::toggleCoverPanel() {
-    if (!m_coverWindow) m_coverWindow = new CoverWindow(m_controller, panelOwner(this));
+    if (!m_coverWindow) m_coverWindow = new CoverWindow(m_controller, this);
     const bool show = !m_coverWindow->isVisible();
     if (show) {
         m_coverWindow->reload();
-        placeFloating(m_coverWindow, 3);
-        setWindowPinTop(m_coverWindow, m_pinTop);
+        showAuxiliary(m_coverWindow);
+    } else {
+        m_coverWindow->hide();
     }
-    m_coverWindow->setVisible(show);
 }
 
-// 探针：整组 = 主窗 + 4 面板；统计当前可见数与其中带 stays-on-top 的数。
+void MainWindow::openSettings() {
+    if (!m_settingsWindow) m_settingsWindow = new SettingsWindow(this, this);
+    showAuxiliary(m_settingsWindow);
+}
+
+void MainWindow::openProperties(const Track &track) {
+    showAuxiliary(new PropertyWindow(track, m_controller, this));
+}
+
+void MainWindow::showAuxiliary(QWidget *w) {
+    ensureDock();
+    m_auxiliaryWindows.removeIf([](const auto &guard) { return guard.isNull(); });
+    if (!m_auxiliaryWindows.contains(w)) {
+        m_auxiliaryWindows.append(w);
+        m_dock->registerAuxiliary(w);
+    }
+    setWindowPinTop(w, m_pinTop);
+    w->showNormal();
+    w->raise();
+    w->activateWindow();
+}
+
+QList<QPointer<QWidget>> MainWindow::groupWindows() const {
+    QList<QPointer<QWidget>> out;
+    auto add = [&out](QWidget *w) {
+        if (w && !out.contains(w)) out.append(w);
+    };
+    add(const_cast<MainWindow *>(this));
+    add(m_playlist);
+    add(m_eqWindow);
+    add(m_lyricWindow);
+    for (const auto &w : m_auxiliaryWindows)
+        add(w);
+    return out;
+}
+
+// 探针与组操作共用去重的安全窗口集合。
 int MainWindow::probeGroupVisible() const {
-    const QList<const QWidget *> group = {this, m_playlist, m_eqWindow, m_lyricWindow, m_coverWindow};
     int n = 0;
-    for (const QWidget *w : group)
+    for (const auto &w : groupWindows())
         if (w && w->isVisible()) ++n;
     return n;
 }
 
 int MainWindow::probeGroupPinned() const {
-    const QList<const QWidget *> group = {this, m_playlist, m_eqWindow, m_lyricWindow, m_coverWindow};
     int n = 0;
-    for (const QWidget *w : group) {
+    for (const auto &w : groupWindows()) {
         if (!w || !w->isVisible()) continue;
 #ifdef Q_OS_WIN
         if (QGuiApplication::platformName() == QStringLiteral("windows")) {
@@ -869,7 +905,7 @@ int MainWindow::probeGroupPinned() const {
     return n;
 }
 
-// R19 后台驻留：整组 = 主窗 + 已懒建的列表/均衡器/歌词/封面面板。
+// R19 后台驻留：整组包含已创建的副面板与辅助窗。
 // 隐藏时只记住当前可见的那几扇，恢复时只弹回它们（不强制打开本来关着的）。
 void MainWindow::hideGroupToBackground() {
     if (m_groupHidden) return;
@@ -879,8 +915,7 @@ void MainWindow::hideGroupToBackground() {
         return;
     }
     m_groupBeforeHide.clear();
-    const QList<QWidget *> group = {this, m_playlist, m_eqWindow, m_lyricWindow, m_coverWindow};
-    for (QWidget *w : group)
+    for (const auto &w : groupWindows())
         if (w && w->isVisible()) {
             m_groupBeforeHide.append(w);
             w->hide();
@@ -895,11 +930,10 @@ void MainWindow::restoreGroupFromBackground() {
         activateWindow();
         return;
     }
-    for (QWidget *w : std::as_const(m_groupBeforeHide)) {
-        w->show();
-#ifdef Q_OS_WIN
+    for (const auto &w : std::as_const(m_groupBeforeHide)) {
+        if (!w) continue;
         setWindowPinTop(w, m_pinTop);
-#endif
+        w->show();
     }
     m_groupBeforeHide.clear();
     m_groupHidden = false;
@@ -1399,6 +1433,10 @@ void MainWindow::showEvent(QShowEvent *e) {
 #ifdef Q_OS_WIN
     setWindowPinTop(this, m_pinTop);
 #endif
+    ensureDock();
+}
+
+void MainWindow::ensureDock() {
     if (m_dockReady) return;
     m_dockReady = true;
     m_dock = new SkinDock(this);
@@ -1411,21 +1449,6 @@ void MainWindow::showEvent(QShowEvent *e) {
     if (m_lyricWindow) m_dock->registerPanel(SkinDock::Lyric, m_lyricWindow);
     if (m_listVisible && !m_playlist) togglePlaylistPanel();
     if (m_savedEQVisible && !m_eqWindow) toggleEqPanel();
-}
-
-// 浮窗错开落在主窗下方（slot 越大越往右），夹回可用屏幕，避免堆在原点。
-void MainWindow::placeFloating(QWidget *w, int slot) {
-    const QRect g = frameGeometry();
-    QRect avail = QGuiApplication::primaryScreen()->availableGeometry();
-    if (screen()) avail = screen()->availableGeometry();
-    int x = g.left() + slot * 28;
-    int y = g.bottom() + 4;
-    const QSize sz = w->size();
-    if (x + sz.width() > avail.right()) x = avail.right() - sz.width();
-    if (y + sz.height() > avail.bottom()) y = g.top() - sz.height() - 4; // 下方放不下就顶到上方
-    x = qMax(avail.left(), x);
-    y = qMax(avail.top(), y);
-    w->move(x, y);
 }
 
 void MainWindow::paintEvent(QPaintEvent *) {

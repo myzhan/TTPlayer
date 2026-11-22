@@ -6,6 +6,9 @@
 #include <QPointer>
 #include <QGuiApplication>
 #include <QScreen>
+#include <QLayout>
+#include <tuple>
+#include <limits>
 
 SkinDock::SkinDock(QObject *parent) : QObject(parent) {}
 
@@ -24,7 +27,7 @@ int SkinDock::panelSide(Panel p) const {
 }
 
 void SkinDock::registerPanel(Panel panel, QWidget *w) {
-    if (!w) return;
+    if (!w || m_vis.contains(w)) return;
     m_win[panel] = w;
     m_panel[w] = panel;
     m_vis[w] = w->isVisible();
@@ -51,6 +54,7 @@ void SkinDock::registerPanel(Panel panel, QWidget *w) {
         w->resize(m_width, w->height());
 
     w->installEventFilter(this);
+    connect(w, &QObject::destroyed, this, [this, w] { unregisterWindow(w); });
 
     // 主窗是宽度与组锚点的基准
     if (panel == Main) {
@@ -62,12 +66,121 @@ void SkinDock::registerPanel(Panel panel, QWidget *w) {
     layout();
 }
 
+QList<QWidget *> SkinDock::members() const {
+    QList<QWidget *> out;
+    for (Panel p : {Playlist, Equalizer, Lyric})
+        if (QWidget *w = panelWindow(p)) out.append(w);
+    for (const auto &w : m_auxiliary)
+        if (w) out.append(w.data());
+    return out;
+}
+
+void SkinDock::unregisterWindow(QWidget *w) {
+    if (QTimer *timer = m_settle.take(w)) {
+        timer->stop();
+        delete timer;
+    }
+    if (m_panel.contains(w)) m_win.remove(m_panel.take(w));
+    m_auxiliary.removeIf([w](const auto &guard) { return !guard || guard.data() == w; });
+    m_vis.remove(w);
+    m_lastTopLeft.remove(w);
+    m_docked.remove(w);
+    m_side.remove(w);
+    m_firstShow.remove(w);
+    layout();
+}
+
+void SkinDock::registerAuxiliary(QWidget *w) {
+    if (!w || m_vis.contains(w)) return;
+    w->ensurePolished();
+    if (w->layout()) w->layout()->activate();
+    w->resize(w->size().expandedTo(w->minimumSizeHint()));
+    m_auxiliary.append(w);
+    m_vis[w] = w->isVisible();
+    m_docked[w] = false;
+    m_side[w] = Right;
+    placeAuxiliary(w);
+    m_firstShow.insert(w);
+    w->installEventFilter(this);
+    connect(w, &QObject::destroyed, this, [this, w] { unregisterWindow(w); });
+}
+
+void SkinDock::placeAuxiliary(QWidget *w) {
+    QWidget *mainW = panelWindow(Main);
+    if (!mainW) return;
+    const QRect mainFrame = mainW->frameGeometry();
+    const QScreen *screen = mainW->screen();
+    const QRect available = screen ? screen->availableGeometry() : QRect(0, 0, 1280, 800);
+    QList<QRect> others;
+    for (QWidget *other : members())
+        if (other != w && m_vis.value(other, false)) others.append(other->frameGeometry());
+    auto area = [](const QRect &a, const QRect &b) -> qint64 {
+        const QRect overlap = a.intersected(b);
+        return qint64(overlap.width()) * overlap.height();
+    };
+    auto overlaps = [&](const QRect &frame) {
+        if (frame.intersects(mainFrame)) return true;
+        for (const QRect &other : others)
+            if (frame.intersects(other)) return true;
+        return false;
+    };
+    const bool wasLayingOut = m_layingOut;
+    m_layingOut = true;
+    for (Side side : {Right, Left, Bottom}) {
+        const QRect slot = computeSlot(w, side);
+        if (!available.contains(slot) || overlaps(slot)) continue;
+        m_docked[w] = true;
+        m_side[w] = side;
+        w->move(slot.topLeft());
+        m_lastTopLeft[w] = w->frameGeometry().topLeft();
+        m_layingOut = wasLayingOut;
+        return;
+    }
+    const QSize size = w->frameGeometry().size();
+    QList<QPoint> candidates = {available.topLeft(), QPoint(available.right() - size.width() + 1, available.top()),
+                                QPoint(available.left(), available.bottom() - size.height() + 1),
+                                QPoint(available.right() - size.width() + 1, available.bottom() - size.height() + 1)};
+    QList<QRect> anchors = others;
+    anchors.prepend(mainFrame);
+    for (const QRect &anchor : anchors) {
+        for (int y : {anchor.top(), anchor.bottom() - size.height() + 1}) {
+            candidates.append(QPoint(anchor.right() + kGap + 1, y));
+            candidates.append(QPoint(anchor.left() - kGap - size.width(), y));
+        }
+        for (int x : {anchor.left(), anchor.right() - size.width() + 1}) {
+            candidates.append(QPoint(x, anchor.bottom() + kGap + 1));
+            candidates.append(QPoint(x, anchor.top() - kGap - size.height()));
+        }
+    }
+    using Score = std::tuple<qint64, qint64, int>;
+    Score best(std::numeric_limits<qint64>::max(), std::numeric_limits<qint64>::max(), std::numeric_limits<int>::max());
+    QPoint position = available.topLeft();
+    for (const QPoint &candidate : candidates) {
+        const QPoint clamped(
+            qBound(available.left(), candidate.x(), qMax(available.left(), available.right() - size.width() + 1)),
+            qBound(available.top(), candidate.y(), qMax(available.top(), available.bottom() - size.height() + 1)));
+        const QRect frame(clamped, size);
+        qint64 otherArea = 0;
+        for (const QRect &other : others)
+            otherArea += area(frame, other);
+        const Score score(area(frame, mainFrame), otherArea, (frame.center() - mainFrame.center()).manhattanLength());
+        if (score < best) {
+            best = score;
+            position = clamped;
+        }
+    }
+    m_docked[w] = false;
+    w->move(position);
+    m_lastTopLeft[w] = w->frameGeometry().topLeft();
+    m_layingOut = wasLayingOut;
+}
+
 bool SkinDock::eventFilter(QObject *obj, QEvent *ev) {
     auto *w = qobject_cast<QWidget *>(obj);
-    if (!w || !m_panel.contains(w)) return false;
+    if (!w || !m_vis.contains(w)) return false;
     switch (ev->type()) {
     case QEvent::Move:
-        if (panelOf(w) == Main)
+        if (w == panelWindow(Main))
             memberMovedMain(w);
         else
             memberMovedPanel(w);
@@ -77,10 +190,13 @@ bool SkinDock::eventFilter(QObject *obj, QEvent *ev) {
         break;
     case QEvent::Show:
         m_vis[w] = true;
+        if (QTimer *timer = m_settle.value(w)) timer->stop();
+        if (m_firstShow.remove(w)) placeAuxiliary(w);
         layout();
         break;
     case QEvent::Hide:
         m_vis[w] = false;
+        if (QTimer *timer = m_settle.value(w)) timer->stop();
         layout();
         break;
     default:
@@ -124,15 +240,13 @@ void SkinDock::memberMovedPanel(QWidget *w) {
 // 拉宽：主窗或任一 Bottom 吸附成员改宽 → 主列同宽；Left/Right 侧列与浮动成员尺寸各自独立。
 void SkinDock::memberResized(QWidget *w) {
     if (m_layingOut) return;
-    if (panelOf(w) == Main) {
+    if (w == panelWindow(Main)) {
         if (w->width() != m_width) m_width = w->width();
         layout();
         return;
     }
-    if (isDocked(w) && sideOf(w) == Bottom && w->width() != m_width) {
-        m_width = w->width();
-        layout();
-    }
+    if (sharesWidth(w) && isDocked(w) && sideOf(w) == Bottom && w->width() != m_width) m_width = w->width();
+    layout();
 }
 
 // w 若此刻吸附到 side 方位应落在的框。Bottom：主列，宽度取组宽，落在同方位前序成员下方；
@@ -140,37 +254,35 @@ void SkinDock::memberResized(QWidget *w) {
 QRect SkinDock::computeSlot(QWidget *w, Side side) const {
     QWidget *mainW = panelWindow(Main);
     const QRect mf = mainW ? mainW->frameGeometry() : QRect(m_originX, m_originTopY, m_width, 200);
-    const Panel target = panelOf(w);
+    const QSize size = w->frameGeometry().size();
 
     if (side == Bottom) {
         QWidget *prev = mainW;
-        for (Panel p : {Playlist, Equalizer, Lyric}) {
-            if (p == target) break;
-            QWidget *pw = panelWindow(p);
+        for (QWidget *pw : members()) {
+            if (pw == w) break;
             if (!pw || !m_vis.value(pw, false) || !isDocked(pw) || sideOf(pw) != Bottom) continue;
             prev = pw;
         }
         const QRect pr = prev ? prev->frameGeometry() : QRect(m_originX, m_originTopY, m_width, 0);
-        return QRect(pr.left(), pr.bottom() + kGap + 1, m_width, w->height());
+        return QRect(pr.left(), pr.bottom() + kGap + 1, sharesWidth(w) ? m_width : size.width(), size.height());
     }
 
     // Left / Right 侧列：先算同方位、排在 w 之前的成员把游标往下推多少
     int cursorY = mf.top();
-    for (Panel p : {Playlist, Equalizer, Lyric}) {
-        if (p == target) break;
-        QWidget *pw = panelWindow(p);
+    for (QWidget *pw : members()) {
+        if (pw == w) break;
         if (!pw || !m_vis.value(pw, false) || !isDocked(pw) || sideOf(pw) != side) continue;
         cursorY += pw->frameGeometry().height() + kGap + 1;
     }
-    const int ww = w->width();
-    if (side == Right) return QRect(mf.right() + 1 + kGap, cursorY, ww, w->height());
-    return QRect(mf.left() - kGap - ww, cursorY, ww, w->height()); // Left：右边缘贴主窗左侧留缝
+    const int ww = size.width();
+    if (side == Right) return QRect(mf.right() + 1 + kGap, cursorY, ww, size.height());
+    return QRect(mf.left() - kGap - ww, cursorY, ww, size.height()); // Left：右边缘贴主窗左侧留缝
 }
 
 // 拖动停下后：在 Bottom/Left/Right 三个候选槽里挑「左上角最近且 ≤ 阈值」的吸附；
 // 都不够近则脱离浮动，让其余吸附成员补位。
 void SkinDock::evaluateSnap(QWidget *w) {
-    if (m_layingOut || !m_panel.contains(w)) return;
+    if (m_layingOut || !m_vis.value(w, false)) return;
     const QRect f = w->frameGeometry();
     Side best = Bottom;
     int bestDist = kSnapDist + 1;
@@ -205,43 +317,12 @@ void SkinDock::layout() {
         mainW->move(m_originX, m_originTopY);
         m_lastTopLeft[mainW] = mainW->frameGeometry().topLeft();
     }
-    const QRect mf = mainW ? mainW->frameGeometry() : QRect(m_originX, m_originTopY, m_width, 0);
-
-    // Bottom 主列：只堆叠「可见 + 吸附 + Bottom」成员，同宽；浮动 / 侧列成员不碰。
-    QWidget *prev = mainW;
-    for (Panel p : {Playlist, Equalizer, Lyric}) {
-        QWidget *w = panelWindow(p);
-        if (!w || !m_vis.value(w, false) || !isDocked(w) || sideOf(w) != Bottom) continue;
-        if (w->width() != m_width) w->resize(m_width, w->height());
-        const QRect pr = prev ? prev->frameGeometry() : QRect(m_originX, m_originTopY, m_width, 0);
-        w->move(pr.left(), pr.bottom() + kGap + 1);
+    // 固定面板在前，辅助窗按创建序追加；只有原 Bottom 面板参与同宽联动。
+    for (QWidget *w : members()) {
+        if (!m_vis.value(w, false) || !isDocked(w)) continue;
+        if (sharesWidth(w) && sideOf(w) == Bottom && w->width() != m_width) w->resize(m_width, w->height());
+        w->move(computeSlot(w, sideOf(w)).topLeft());
         m_lastTopLeft[w] = w->frameGeometry().topLeft();
-        prev = w;
-    }
-
-    // Right 侧列：顶边与主窗对齐，沿侧往下堆，宽度各自独立。
-    {
-        const int x = mf.right() + 1 + kGap;
-        int cursorY = mf.top();
-        for (Panel p : {Playlist, Equalizer, Lyric}) {
-            QWidget *w = panelWindow(p);
-            if (!w || !m_vis.value(w, false) || !isDocked(w) || sideOf(w) != Right) continue;
-            w->move(x, cursorY);
-            cursorY += w->frameGeometry().height() + kGap + 1;
-            m_lastTopLeft[w] = w->frameGeometry().topLeft();
-        }
-    }
-    // Left 侧列：右边缘贴主窗左侧留缝，顶边对齐，沿侧往下堆。
-    {
-        const int rightEdge = mf.left() - 1 - kGap;
-        int cursorY = mf.top();
-        for (Panel p : {Playlist, Equalizer, Lyric}) {
-            QWidget *w = panelWindow(p);
-            if (!w || !m_vis.value(w, false) || !isDocked(w) || sideOf(w) != Left) continue;
-            w->move(rightEdge - w->width() + 1, cursorY);
-            cursorY += w->frameGeometry().height() + kGap + 1;
-            m_lastTopLeft[w] = w->frameGeometry().topLeft();
-        }
     }
 
     m_layingOut = false;

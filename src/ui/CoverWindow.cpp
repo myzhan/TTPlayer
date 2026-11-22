@@ -15,8 +15,6 @@ QColor scaledAlpha(QColor c, float a) {
 
 CoverWindow::CoverWindow(PlayerController *controller, QWidget *parent)
     : SkinWindow(QStringLiteral("专辑封面"), TitleButtons::MinimizeAndClose, parent), m_controller(controller) {
-    // 辅助窗不跟随半透明：压在播放列表/歌词上时，下层内容不透过封面窗。
-    setGlassTransparencyFollows(false);
     resize(252, 340 + 30); // 高度补上自绘标题条（~30）
     setMinimumSize(200, 260);
 

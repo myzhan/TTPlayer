@@ -13,13 +13,15 @@
 //   · 面板被用户拖动时不实时重排（跟手自由移动），靠一个 settle 定时器在「停下」后判磁吸；
 //     evaluateSnap 在 Bottom/Left/Right 三个候选槽里挑「左上角最近且 ≤ 阈值」的那个吸附；
 //   · 布局期间用 m_layingOut 抑制自激（程序化 move/resize 会再发事件），避免把布局位移
-//     误认成用户拖动。封面 / 属性 / 队列仍是纯浮窗，不入组。
+//     误认成用户拖动。设置 / 属性 / 封面作为瞬态辅助成员入组，不写面板存档。
 
 #include <QObject>
 #include <QHash>
 #include <QPoint>
 #include <QString>
 #include <QRect>
+#include <QPointer>
+#include <QSet>
 
 class QWidget;
 class QTimer;
@@ -37,6 +39,10 @@ public:
     /// 登记成员窗（Main 提供初始宽度与组左上角）。装 eventFilter，不接管其事件。
     /// 若此前 setSavedPanels 存过该面板的几何 / 吸附态，这里套用（消费掉一条）。
     void registerPanel(Panel panel, QWidget *w);
+    /// 瞬态辅助窗：首次预摆并在 Show 校准，所有方位保持自身宽度，不写存档。
+    void registerAuxiliary(QWidget *w);
+    bool isWindowDocked(QWidget *w) const { return m_vis.contains(w) && isDocked(w); }
+    int windowSide(QWidget *w) const { return m_vis.contains(w) ? int(sideOf(w)) : -1; }
 
     int width() const { return m_width; }
 
@@ -78,7 +84,10 @@ private:
     void evaluateSnap(QWidget *w);
     void layout();
     QWidget *panelWindow(Panel p) const;
-    Panel panelOf(QWidget *w) const { return m_panel.value(w, Main); }
+    QList<QWidget *> members() const;
+    void unregisterWindow(QWidget *w);
+    void placeAuxiliary(QWidget *w);
+    bool sharesWidth(QWidget *w) const { return m_panel.contains(w); }
     bool isDocked(QWidget *w) const { return m_docked.value(w, true); }
     Side sideOf(QWidget *w) const { return m_side.value(w, Bottom); }
     /// w 若此刻吸附到 side 方位应落在的框：Bottom 用组宽、Left/Right 用 w 自身宽；
@@ -86,6 +95,8 @@ private:
     QRect computeSlot(QWidget *w, Side side) const;
 
     QHash<Panel, QWidget *> m_win;
+    QList<QPointer<QWidget>> m_auxiliary;
+    QSet<QWidget *> m_firstShow;
     QHash<QWidget *, Panel> m_panel;
     QHash<QWidget *, bool> m_vis;
     QHash<QWidget *, QPoint> m_lastTopLeft; // 上次记录的框左上角，用来求拖动位移
