@@ -185,7 +185,7 @@ def verify_windows_ui(exe, env, temporary):
                 "UI_windows_unpin_hidden_panel_reopen", "UI_windows_pin_minimize_restore",
                 "UI_windows_pin_background_restore", "UI_windows_unpin_while_hidden_restore",
                 "UI_windows_aux_owned_single_taskbar", "UI_windows_aux_pin_30_preserves_surfaces",
-                "UI_settings_menu_entry_nonmodal", "UI_two_property_entries_multi_instance",
+                "UI_settings_button_direct_nonmodal", "UI_playlist_properties_multi_instance",
                 "UI_cover_reopen_keeps_user_position"}
     completed = set(re.findall(r"^REVIEW_PROBE (\S+) PASS$", output, re.M))
     if (process.returncode or not loaded or not required.issubset(completed) or skipped
