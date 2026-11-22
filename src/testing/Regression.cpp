@@ -2787,11 +2787,37 @@ public:
                     QCoreApplication::processEvents();
                     check("UI_first_start_main_and_playlist_visible",
                           fresh.isVisible() && fresh.m_playlist && fresh.m_playlist->isVisible());
+                    fresh.setGroupHideBypassTray(true);
+                    bool backgroundSaved = true, startupRestored = true;
+                    for (int cycle = 0; cycle < 30; ++cycle) {
+                        fresh.hideGroupToBackground();
+                        fresh.flushState();
+                        const auto stored = LibraryStore::load();
+                        backgroundSaved &= fresh.isGroupHidden() && !fresh.isVisible() &&
+                                           !fresh.m_playlist->isVisible() && stored.valid && stored.listVisible;
+                        {
+                            MainWindow restored(&ctl, engine);
+                            restored.show();
+                            QCoreApplication::processEvents();
+                            startupRestored &=
+                                restored.isVisible() && restored.m_playlist && restored.m_playlist->isVisible();
+                        }
+                        fresh.restoreGroupFromBackground();
+                    }
+                    check("UI_background_save_preserves_playlist_intent_30", backgroundSaved);
+                    check("UI_restart_after_background_shows_main_and_playlist_30", startupRestored);
                     fresh.togglePlaylistPanel();
                     fresh.flushState();
                     MainWindow reopened(&ctl, engine);
                     reopened.show();
                     check("UI_saved_hidden_playlist_remains_hidden", reopened.isVisible() && !reopened.m_playlist);
+                    reopened.setGroupHideBypassTray(true);
+                    reopened.hideGroupToBackground();
+                    reopened.flushState();
+                    check("UI_background_save_preserves_explicit_closed_playlist", !LibraryStore::load().listVisible);
+                    reopened.restoreGroupFromBackground();
+                    check("UI_background_restore_keeps_explicit_closed_playlist",
+                          reopened.isVisible() && !reopened.m_playlist);
                 }
                 auto hiddenSettings = LibraryStore::load();
                 hiddenSettings.listVisible = false;

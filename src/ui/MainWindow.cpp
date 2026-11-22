@@ -1016,8 +1016,8 @@ void MainWindow::saveState() {
     if (m_dock) s.dockFrame = m_dock->geometryString();      // 停靠组锚点左上角 + 同宽
     if (m_dock) s.panelFrames = m_dock->panelFramesString(); // 各面板几何 + 吸附/浮动态
     s.autoResumePlay = m_autoResumePlay;
-    // 首次显示前列表尚未懒建，保存时不能把默认显示意图误写成隐藏。
-    s.listVisible = m_playlist ? m_playlist->isVisible() : m_listVisible;
+    // 保存列表开合意图：首次懒建与整组后台临时隐藏都不能将它误写成关闭。
+    s.listVisible = m_listVisible;
     s.eqVisible = m_eqWindow && m_eqWindow->isVisible();
     s.replayGainMode = int(m_controller->replayGainMode());
     s.replayGainPreamp = m_controller->replayGainPreamp();
