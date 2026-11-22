@@ -537,6 +537,11 @@ if(NOT APPLE OR TTPLAYER_BUNDLE)
     endif()
   endif()
   if(WIN32)
+    # windeployqt 不默认部署 offscreen；隔离冒烟必须使用包内同构型插件。
+    if(NOT TARGET Qt6::QOffscreenIntegrationPlugin)
+      message(FATAL_ERROR "Windows 分发验证需要 Qt offscreen 平台插件")
+    endif()
+    install(FILES "$<TARGET_FILE:Qt6::QOffscreenIntegrationPlugin>" DESTINATION plugins/platforms)
     # Windows 专属根布局；CRT 由统一安装规则部署，不附 vc_redist 安装器。
     qt_generate_deploy_script(TARGET ttplayer OUTPUT_SCRIPT ttplayer_deploy CONTENT [[
       set(QT_DEPLOY_BIN_DIR ".")
