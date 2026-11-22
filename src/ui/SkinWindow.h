@@ -2,8 +2,8 @@
 
 // 无边框自绘皮肤窗基类：与主窗同一套观感（圆角玻璃壳 + 顶部浅色标题条 +
 // 最小化/关闭按钮 + 边缘缩放），三平台一致——不挂各 OS 原生标题栏，避免 mac/win/linux
-// 标题栏外观、位置、配色各异。二级窗（播放列表/均衡器/歌词/封面/属性/设置/队列 ）都继承它。
-// 默认跟随「半透明玻璃」设置；设置/属性/队列/封面这类辅助窗在构造里关掉，
+// 标题栏外观、位置、配色各异。列表/均衡器/歌词保留标题拖动，窗控统一由主面板负责。
+// 默认跟随「半透明玻璃」设置；设置/属性/封面这类辅助窗在构造里关掉，
 // 壳与标题条画成完全不透明，叠在主面板上时文字不会被下层透上来干扰。
 //
 // 用法：
@@ -25,8 +25,8 @@ class QVBoxLayout;
 class SkinWindow : public QWidget {
     Q_OBJECT
 public:
-    // allowMinimize：是否显示「最小化」键（属性/设置这类瞬时窗只留关闭）。
-    explicit SkinWindow(const QString &title, bool allowMinimize, QWidget *parent = nullptr);
+    enum class TitleButtons { None, Close, MinimizeAndClose };
+    explicit SkinWindow(const QString &title, TitleButtons buttons, QWidget *parent = nullptr);
 
     // 是否跟随「半透明玻璃」设置。默认 true：主窗、播放列表、均衡器、歌词四个主面板
     // 与桌面合成；辅助窗设为 false 后壳/标题条/槽一律按 alpha=1 绘制。

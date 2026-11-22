@@ -300,14 +300,26 @@ bool Collections::toggleFavorite(const QString &key) {
 void Collections::applyEdit(Track &track) const {
     if (track.isNull()) return;
     const auto edit = m_edits.value(track.identityKey()).toObject();
-    if (edit.contains("title")) track.setTitle(edit.value("title").toString());
+    // 电台标题只认台名档案，避免旧字段编辑盖掉别名或取消自定义后的兜底名。
+    if (!track.isRadio() && edit.contains("title")) track.setTitle(edit.value("title").toString());
     if (edit.contains("artist")) track.setArtist(edit.value("artist").toString());
     if (edit.contains("album")) track.setAlbum(edit.value("album").toString());
 }
 void Collections::editTrack(const QString &key, const QString &title, const QString &artist, const QString &album) {
-    m_edits.insert(key, QJsonObject{{"title", title}, {"artist", artist}, {"album", album}});
     Track track = trackForKey(key);
+    if (track.isNull()) return;
+    QJsonObject edit = m_edits.value(key).toObject();
+    if (track.isRadio()) {
+        m_radio.setAlias(key, title);
+        edit.remove("title");
+    } else {
+        edit.insert("title", title);
+    }
+    edit.insert("artist", artist);
+    edit.insert("album", album);
+    m_edits.insert(key, edit);
     applyEdit(track);
+    nameRadio(track, m_radio);
     invalidateIndex();
 }
 

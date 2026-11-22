@@ -1,11 +1,7 @@
 #pragma once
 
-// 待播队列：与浏览列表相互独立的播放上下文。
-// 三条规矩撑起整个功能：
-// 1. 切组、筛选、排序只动浏览列表，绝不重建这里——声音不能因为用户在看别的列表就变了；
-// 2. 「下一首播放」能打断自动选曲（位置 + 来路两个条件都得上），而「稍后播放」只是队尾
-//    的一员——拿共用布尔值加位置判会两种误伤（来路必须不可变留痕）；
-// 3. 从浏览列表里删掉一行不等于停播：正在播的那条形列外。
+// 基础播放上下文，与浏览列表独立：切页、筛选、排序不重建播放序列。
+// 条目身份连接无缝预取、实际推进及随机历史；删行不停止当前曲。
 
 #include "Track.h"
 
@@ -16,14 +12,9 @@
 #include <memory>
 #include <optional>
 
-enum class QueueSource { Basic, Later, Next };
-
 struct QueueItem {
     QUuid id = QUuid::createUuid();
-    Track track;                             // 重新定位（reattach）只换曲不换条目
-    QueueSource source = QueueSource::Basic; // 不可变来路：拖动重排不改它
-    bool explicitQueued() const { return source != QueueSource::Basic; }
-    bool playNext() const { return source == QueueSource::Next; }
+    Track track; // 重新定位只换曲，不换条目身份。
     bool operator==(const QueueItem &o) const { return id == o.id; }
 };
 
@@ -38,36 +29,25 @@ public:
     std::optional<int> cursor() const { return m_cursor; }
     const QueueItem *current() const;
     Track currentTrack() const;
-    /// 待播条目：当前条目之后的那一段（没建立上下文时就是全部）
-    QList<QueueItem> pending() const;
-    int pendingCount() const { return pending().size(); }
     const QueueItem *itemAt(int index) const;
     int indexOf(const QUuid &id) const; // -1 = 没有
     std::optional<int> currentIndex() const { return m_cursor; }
     const QList<QUuid> &history() const { return m_history; }
 
     // —— 建立与选择 ——
-    /// 双击曲目 = 开一段新的播放上下文：以当时的列表顺序作基础序列，旧待播作废
+    /// 双击曲目：以当时的列表顺序建立新的基础播放序列。
     void begin(const QList<Track> &tracks, int index);
     void reset();
     /// 恢复播放现场（F06，后续接存档）：条目次序、游标、历史照单收下
     void restoreScene(const QList<QueueItem> &items, std::optional<int> cursor, const QList<int> &historyIndexes);
-    /// 把游标落到某一条（队列面板直接点某条播）
+    /// 按稳定条目身份移动播放游标。
     const QueueItem *focus(const QUuid &id);
     /// 只查不动：按 id 拿那一条（focus 会挪游标的场合不能用它）
     const QueueItem *item(const QUuid &id) const;
     /// 真开播了才记一笔，供随机回退
     void markPlayed(const QUuid &id);
 
-    // —— 排队与改队列（都不停止当前曲）——
-    void insertNext(const QList<Track> &tracks);
-    void appendLater(const QList<Track> &tracks);
-    /// 正在播的那一条删不掉：它不属于待播，删它等于擅自停播
-    void remove(const QSet<QUuid> &ids);
-    void clearPending();
-    /// 拖动调整待播顺序：落点夹在待播区间内；只改次序不改来路
-    bool movePending(const QUuid &id, int position);
-    bool reorderPending(const QList<QUuid> &order);
+    // —— 浏览列表删除与重新定位（都不停止当前曲）——
     /// 浏览列表删行：同键条目一并摘掉，正在播的形列外
     void dropTracks(const QSet<QString> &keys);
     void replaceTrack(const QString &key, const Track &track);
@@ -88,7 +68,7 @@ public:
     std::function<int(int count, int cursor)> randomIndex;
 
 private:
-    const QueueItem *nextPendingItem() const;
+    const QueueItem *nextItem() const;
     const QueueItem *nextOnFinish(PlayMode mode) const;
     const QueueItem *randomPeek() const;
     const QueueItem *itemWhereId(const QUuid &id) const;

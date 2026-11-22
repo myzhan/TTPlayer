@@ -2,7 +2,7 @@
 """增量构建当前源码、隔离跑自检套件，并守住真实用户存档字节。
 
 用法：
-    ./scripts/selftest.sh                     # smoke：LYRIC / QUEUE / SPECTRUM
+    ./scripts/selftest.sh                     # smoke：LYRIC / PLAYBACK / SPECTRUM
     ./scripts/selftest.sh affected            # 按改动路径挑档
     ./scripts/selftest.sh core                # 除计时档外的全部套件
     ./scripts/selftest.sh all [release]
@@ -35,7 +35,7 @@ SUITE_FILE = ROOT / "src/testing/suites.txt"
 # 这几档耗时明显更长，core 档跳过；全量/发布前仍要跑。
 TIMED = {"GAPLESS", "GAIN", "RADIO", "RADIOLIVE", "WATCH"}
 # smoke 的最小覆盖面。
-SMOKE = ["LYRIC", "QUEUE", "SPECTRUM"]
+SMOKE = ["LYRIC", "PLAYBACK", "SPECTRUM"]
 RADIOLIVE_MODES = ["noresp", "slow", "stall", "disconnect", "icy", "denied", "retry"]
 TIMEOUT_SECONDS = 120
 

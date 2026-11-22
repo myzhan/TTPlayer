@@ -11,7 +11,6 @@
 #include "ui/EqWindow.h"
 #include "ui/LyricWindow.h"
 #include "ui/CoverWindow.h"
-#include "ui/QueueWindow.h"
 #include "ui/PropertyWindow.h"
 #include "ui/ConvertWindow.h"
 #include "ui/SettingsWindow.h"
@@ -29,12 +28,17 @@
 #include <QSystemTrayIcon>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QPushButton>
+#include <QTimer>
 #include <QMenu>
 #include <QDropEvent>
 #include <QDragEnterEvent>
 #include <QMimeData>
 #include "media/PlaylistM3U.h"
 #include "library/Importer.h"
+#include "models/RadioPresets.h"
 #include "media/CoverArt.h"
 #include "media/Lyric.h"
 #include "media/CueSheet.h"
@@ -47,6 +51,8 @@
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QTemporaryDir>
+#include <QJsonDocument>
+#include <QJsonArray>
 #include <QThread>
 #include <cmath>
 #include <chrono>
@@ -71,6 +77,26 @@ constexpr UInt32 kCfStringRefSize = sizeof(void *);
 #endif
 
 namespace {
+// 每个存档用例独立连接与目录，窗口必须先于守卫析构。
+class ScopedTestState {
+public:
+    ScopedTestState() : m_previous(qgetenv("TTPLAYER_QT_STATE")) {
+        LibraryStore::closeDatabase();
+        qputenv("TTPLAYER_QT_STATE", (m_dir.path() + "/state.json").toUtf8());
+    }
+    ~ScopedTestState() {
+        LibraryStore::closeDatabase();
+        if (m_previous.isNull())
+            qunsetenv("TTPLAYER_QT_STATE");
+        else
+            qputenv("TTPLAYER_QT_STATE", m_previous);
+    }
+
+private:
+    QTemporaryDir m_dir;
+    QByteArray m_previous;
+};
+
 // 纯文本基准也走 QWidget：FreeType 对 QWidget / QImage 请求的字形缓存格式不同，
 // 直接在 QImage 上画字会把栅格化差异误报成遮挡。同屏父对象同时保证点字号 DPI 一致。
 class VolumeReadoutReference final : public QWidget {
@@ -274,6 +300,28 @@ public:
         }
         return condition();
     }
+    // 驱动真实模态表单；超时自动取消，缺控件/旧对话框不会让整个 suite 永久阻塞。
+    static bool driveRadioDialog(MainWindow &window, const std::function<void(QDialog &)> &input,
+                                 const std::function<void()> &launch) {
+        bool found = false;
+        QTimer action, timeout;
+        action.setSingleShot(true);
+        timeout.setSingleShot(true);
+        QObject::connect(&action, &QTimer::timeout, &window, [&] {
+            if (auto *dialog = window.findChild<QDialog *>(QStringLiteral("radioInfoDialog"))) {
+                found = true;
+                input(*dialog);
+            }
+        });
+        QObject::connect(&timeout, &QTimer::timeout, &window, [] {
+            if (auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget())) dialog->reject();
+        });
+        action.start(0);
+        timeout.start(1000);
+        launch();
+        return found;
+    }
+
     // 某个位置的样本峰值（左声道），用于比对增益是否真的生效
     static float peakAt(const QString &path, int64_t pos) {
         auto dec = Decoder::openFile(path);
@@ -868,6 +916,54 @@ public:
         controller.setGaplessEnabled(false);
         controller.setTracks({track});
         if (suite == "PLAYBACK") {
+            bool natural = true, preview = true, manual = true;
+            int cases = 0;
+            for (int size = 1; size <= 5; ++size) {
+                QList<Track> base;
+                for (int i = 0; i < size; ++i)
+                    base.append(Track(QUrl::fromLocalFile(QStringLiteral("/base%1.flac").arg(i))));
+                for (int cursor = 0; cursor < size; ++cursor)
+                    for (PlayMode mode :
+                         {PlayMode::Order, PlayMode::ListLoop, PlayMode::SingleLoop, PlayMode::Random}) {
+                        PlayQueue queue;
+                        queue.begin(base, cursor);
+                        queue.randomIndex = [](int, int) { return 0; };
+                        const QString expected = mode == PlayMode::SingleLoop ? base[cursor].identityKey()
+                                                 : mode == PlayMode::Random   ? base.first().identityKey()
+                                                 : cursor + 1 < size          ? base[cursor + 1].identityKey()
+                                                 : mode == PlayMode::ListLoop ? base.first().identityKey()
+                                                                              : QString();
+                        const auto *peek = queue.peekOnFinish(mode);
+                        const QUuid id = peek ? peek->id : QUuid();
+                        const auto *again = queue.peekOnFinish(mode);
+                        preview &= queue.cursor() == cursor && (again ? again->id : QUuid()) == id;
+                        const auto *actual = queue.advanceOnFinish(mode);
+                        natural &= (actual ? actual->track.identityKey() : QString()) == expected &&
+                                   (actual ? actual->id : QUuid()) == id;
+                        queue.begin(base, cursor);
+                        const auto *selected = queue.advanceByUser(mode);
+                        const QString wanted = mode == PlayMode::Random  ? base.first().identityKey()
+                                               : cursor + 1 < size       ? base[cursor + 1].identityKey()
+                                               : mode == PlayMode::Order ? QString()
+                                                                         : base.first().identityKey();
+                        manual &= (selected ? selected->track.identityKey() : QString()) == wanted;
+                        ++cases;
+                    }
+            }
+            check("base_modes_natural_matrix", natural);
+            check("base_peek_and_advance_same_UUID", preview);
+            check("base_manual_next_matrix", manual);
+            out << "PLAYBACK matrix_cases=" << cases << '\n';
+            PlayQueue history;
+            const Track other(QUrl::fromLocalFile("/other.wav"));
+            history.begin({track, other, track}, 0);
+            const QUuid current = history.current()->id;
+            history.dropTracks({track.identityKey()});
+            check("base_drop_duplicate_preserves_current", history.count() == 2 && history.current()->id == current);
+            const auto *next = history.advanceByUser(PlayMode::Order);
+            history.markPlayed(next->id);
+            const auto *previous = history.retreat(PlayMode::Random);
+            check("base_random_actual_history", previous && previous->id == current);
             controller.togglePlay();
             waitFor([&] { return controller.isPlaying(); });
             check("play_without_context", controller.isPlaying());
@@ -878,10 +974,10 @@ public:
             check("resume", controller.isPlaying());
             controller.stop();
             controller.queue().reset();
-            controller.enqueueLater({track});
+            controller.queue().begin({track}, 0);
             controller.togglePlay();
             waitFor([&] { return controller.isPlaying(); });
-            check("play_pending_head",
+            check("play_base_context",
                   controller.isPlaying() && controller.currentTrack().identityKey() == track.identityKey());
             controller.stop();
             check("stop_position", controller.position() == 0);
@@ -924,7 +1020,6 @@ public:
             check("restore_latest_generation_completes", waitFor([&] { return !window.isRestoringLibrary(); }));
             check("resume_metadata_shared", controller.currentTrack().replayGainTags().has_value());
             check("resume_identity", controller.currentTrack().identityKey() == track.identityKey());
-            check("resume_source", controller.queue().current()->source == QueueSource::Basic);
             waitFor([&] { return engine->durationSeconds() > 0; });
             {
                 std::lock_guard<std::mutex> lock(engine->m_mutex);
@@ -950,19 +1045,8 @@ public:
             }
             controller.stop();
             controller.queue().reset();
-            window.collections().setAllTracks({});
-            controller.enqueueLater({track});
             window.requestSave();
-            const auto pending = LibraryStore::load();
-            check("pending_only_scene_saved", pending.trackPaths.isEmpty() && pending.resumeQueue.size() == 1 &&
-                                                  pending.resumeQueue.first().second == int(QueueSource::Later));
-            controller.queue().reset();
-            window.restoreLibrary();
-            waitFor([&] { return !window.isRestoringLibrary(); });
-            check("pending_only_scene_restored_paused",
-                  controller.queue().count() == 1 && controller.queue().current()->source == QueueSource::Later &&
-                      !controller.isPlaying());
-            controller.stop();
+            check("unestablished_scene_not_saved", !LibraryStore::load().resumeValid);
             Track missing(QUrl::fromLocalFile(dir.path() + "/missing.wav"));
             controller.setMode(PlayMode::Order);
             controller.restoreResume({QueueItem{.track = missing}, QueueItem{.track = track}}, 0, {}, 0, false);
@@ -1171,7 +1255,7 @@ public:
             QString id;
             window.collections().playlists().create("Saved", &id);
             window.collections().playlists().addKeys({a.identityKey()}, id);
-            ctl.queue().appendLater({a});
+            ctl.queue().begin({a}, 0);
             const auto entry = ctl.queue().items().value(0).id;
             const QString old = a.identityKey();
             ctl.setLyricShiftTable({{old, 1.5}});
@@ -1179,10 +1263,8 @@ public:
             const QString moved = QUrl::fromLocalFile(dir.path() + "/new/a.wav").toLocalFile();
             check("root_favorite_migrated", window.collections().favorites() == QStringList{moved});
             check("root_list_migrated", window.collections().playlists().keysOf(id) == QStringList{moved});
-            check("root_queue_identity_source", !ctl.queue().items().isEmpty() &&
-                                                    ctl.queue().items().first().id == entry &&
-                                                    ctl.queue().items().first().source == QueueSource::Later &&
-                                                    ctl.queue().items().first().track.identityKey() == moved);
+            check("root_context_identity", !ctl.queue().items().isEmpty() && ctl.queue().items().first().id == entry &&
+                                               ctl.queue().items().first().track.identityKey() == moved);
             check("root_old_reference_gone", !window.collections().allTracks().isEmpty() &&
                                                  window.collections().allTracks().first().identityKey() != old);
             check("root_lyric_calibration_migrated",
@@ -1208,6 +1290,44 @@ public:
             list.close();
             const auto radio = Importer::read({list.fileName()});
             check("EXTINF_name", radio.tracks.size() == 1 && radio.tracks.first().title() == "Named radio");
+            auto engine = AudioEngine::create();
+            PlayerController ctl(engine);
+            MainWindow window(&ctl, engine);
+            bool cancelledInfoAbsent = true;
+            for (int i = 0; i < 30; ++i) {
+                const QString oldKey = QStringLiteral("http://127.0.0.1:1/old-%1").arg(i);
+                const QString newKey = QStringLiteral("http://127.0.0.1:1/new-%1").arg(i);
+                window.loadDirOrFiles(
+                    {oldKey},
+                    {{oldKey, QJsonObject{{"title", "Cancelled"}, {"artist", "Old artist"}, {"album", "Old album"}}}});
+                window.loadPaths({newKey});
+                const bool committed = waitFor([&] {
+                    const auto tracks = window.collections().allTracks();
+                    return std::any_of(tracks.cbegin(), tracks.cend(),
+                                       [&](const Track &track) { return track.identityKey() == newKey; });
+                });
+                ctl.stop();
+                LibraryStore::Loaded snapshot;
+                window.collections().saveTo(snapshot);
+                cancelledInfoAbsent &= committed && !snapshot.radioAliases.contains(oldKey) &&
+                                       !snapshot.trackEdits.contains(oldKey) && !snapshot.defaultKeys.contains(oldKey);
+            }
+            check("import_cancelled_radio_info_30", cancelledInfoAbsent);
+            const QString deferredKey = "http://127.0.0.1:1/deferred";
+            window.restoreLibrary();
+            window.loadDirOrFiles(
+                {deferredKey},
+                {{deferredKey, QJsonObject{{"title", "Deferred"}, {"artist", "Artist"}, {"album", "Album"}}}});
+            const bool deferred = !window.m_deferredRadioEdits.isEmpty();
+            const bool restored = waitFor([&] {
+                if (window.isRestoringLibrary()) return false;
+                return window.collections().trackForKey(deferredKey).title() == "Deferred";
+            });
+            ctl.stop();
+            const Track saved = window.collections().trackForKey(deferredKey);
+            check("import_radio_info_survives_restore", deferred && restored && saved.artist() == "Artist" &&
+                                                            saved.album() == "Album" &&
+                                                            window.m_deferredRadioEdits.isEmpty());
         } else if (suite == "COVER") {
             QImage image(2000, 1000, QImage::Format_RGB32);
             image.fill(Qt::blue);
@@ -1313,8 +1433,7 @@ public:
             check("playlist_add_tracks_dedup", panel.addTracksToPlaylist({b}, direct) == 0);
             check("playlist_add_tracks_fixed_view", panel.addTracksToPlaylist({b}, Collections::kAllViewId) == 0);
             col.playlists().remove(direct);
-            ctl.queue().begin({a, b}, 0);
-            ctl.enqueueLater({a});
+            ctl.queue().begin({a, b, a}, 0);
             panel.m_search->setText("Alpha");
             panel.applySearch();
             panel.removeRows({0});
@@ -1322,7 +1441,7 @@ public:
                   !col.isFavorite(a.identityKey()) && col.playlists().keysOf(list).isEmpty());
             check("search_delete_keeps_library", col.tracksOf(Collections::kLibraryViewId).size() == 2);
             check("search_delete_keeps_current",
-                  ctl.queue().currentTrack().identityKey() == a.identityKey() && ctl.queue().pendingCount() == 1);
+                  ctl.queue().currentTrack().identityKey() == a.identityKey() && ctl.queue().count() == 2);
             check("search_stays_active_after_delete", panel.m_beforeSearch.has_value());
             panel.clearSearch();
             check("search_exit_original_page",
@@ -1338,12 +1457,13 @@ public:
             check("cancel_favorite_keeps_queue_and_default",
                   deleted == 0 && ctl.queue().count() == 2 && col.tracksOf(Collections::kAllViewId).size() == 2);
             panel.showPage(Collections::kAllViewId);
-            int pendingRow = -1;
+            int otherRow = -1;
             for (int row = 0; row < ctl.tracks().size(); ++row)
-                if (ctl.tracks()[row].identityKey() == b.identityKey()) pendingRow = row;
-            panel.removeRows({pendingRow});
-            check("default_delete_drops_pending", deleted == 1 && ctl.queue().count() == 1 &&
-                                                      ctl.queue().currentTrack().identityKey() == a.identityKey());
+                if (ctl.tracks()[row].identityKey() == b.identityKey()) otherRow = row;
+            panel.removeRows({otherRow});
+            check("default_delete_drops_other_context_items",
+                  deleted == 1 && ctl.queue().count() == 1 &&
+                      ctl.queue().currentTrack().identityKey() == a.identityKey());
             QObject::disconnect(deletion);
             QDir().mkpath(dir.path() + "/ambiguous");
             const QString audio = dir.path() + "/ambiguous/01 - song.wav";
@@ -1407,14 +1527,15 @@ public:
                 check("approved_dark_inkOnGlass", Theme::inkOnGlass.rgba() == 0xffedeff1u);
                 check("approved_dark_inkOnGlassSoft", Theme::inkOnGlassSoft.rgba() == 0xffb0b6bcu);
                 check("approved_dark_inkOnGlassAccent", Theme::inkOnGlassAccent.rgba() == 0xfff2a93bu);
-                check("approved_font_size",
-                      Fonts::base.pointSize() == 13 && Fonts::small.pointSize() == 12 && Fonts::tiny.pointSize() == 11);
                 check("numeric_font_size_weight_preserved",
                       Fonts::numericSmall.pointSize() == Fonts::small.pointSize() &&
                           Fonts::numericTiny.pointSize() == Fonts::tiny.pointSize() &&
                           Fonts::numericSmall.weight() == Fonts::small.weight() &&
                           Fonts::numericTiny.weight() == Fonts::tiny.weight());
 #ifdef Q_OS_WIN
+                check("approved_font_size", Fonts::base.pointSize() == 12 && Fonts::small.pointSize() == 11 &&
+                                                Fonts::tiny.pointSize() == 10 && Fonts::title.pointSize() == 12 &&
+                                                Fonts::panelTitle.pointSize() == 12);
                 check("approved_font_families",
                       Fonts::base.families() == QStringList{"Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI",
                                                             "Helvetica Neue", "Arial", "Noto Sans", "DejaVu Sans",
@@ -1429,6 +1550,9 @@ public:
                           Fonts::numericTiny.families() == Fonts::numericSmall.families() &&
                           Fonts::numericTiny.families().contains("Microsoft YaHei UI"));
 #else
+                check("approved_font_size", Fonts::base.pointSize() == 13 && Fonts::small.pointSize() == 12 &&
+                                                Fonts::tiny.pointSize() == 11 && Fonts::title.pointSize() == 13 &&
+                                                Fonts::panelTitle.pointSize() == 13);
                 check("numeric_fonts_preserve_platform",
                       Fonts::numericSmall == Fonts::small && Fonts::numericTiny == Fonts::tiny);
                 check("approved_font_families",
@@ -1524,6 +1648,199 @@ public:
                     check("UI_playlist_scrollbar_short_list", !bar->isVisible() && bar->value() == 0);
                 }
                 {
+                    Collections favorites;
+                    PlayerController favoriteCtl(engine);
+                    QList<Track> tracks;
+                    for (int i = 0; i < 40; ++i) {
+                        Track t(QUrl::fromLocalFile(dir.path() + QStringLiteral("/favorite-%1.wav").arg(i)));
+                        t.setTitle(QStringLiteral("Favorite %1 with a deliberately long title").arg(i));
+                        t.setMetadata(300, 44100, 2, 1411);
+                        tracks.append(t);
+                    }
+                    tracks[1] = Track::fromCueSegment(tracks[1].url(), 1,
+                                                      QUrl::fromLocalFile(dir.path() + "/favorite.cue"), 0, 1);
+                    tracks[2] = Track(Archive::entryUrl(dir.path() + "/archive.zip", "song.flac"));
+                    tracks[3] = Track::fromRadio(QUrl("http://example.com/favorite"));
+                    favorites.setAllTracks(tracks);
+                    favoriteCtl.setTracks(favorites.currentTracks());
+                    PlaylistWindow favoritePanel(&favoriteCtl, &favorites);
+                    favoritePanel.resize(420, 240);
+                    favoritePanel.show();
+                    QCoreApplication::processEvents();
+                    auto *view = favoritePanel.m_view;
+                    auto mouse = [&](QEvent::Type type, QPoint pos, Qt::MouseButtons buttons) {
+                        QMouseEvent event(type, pos, view->viewport()->mapToGlobal(pos),
+                                          type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton, buttons,
+                                          Qt::NoModifier);
+                        QApplication::sendEvent(view->viewport(), &event);
+                    };
+                    auto click = [&](int row) {
+                        const QPoint pos = view->favoriteRect(row).center();
+                        mouse(QEvent::MouseButtonPress, pos, Qt::LeftButton);
+                        mouse(QEvent::MouseButtonRelease, pos, Qt::NoButton);
+                    };
+                    int toggled = 0, played = 0, dragged = 0;
+                    QObject::connect(view, &PlaylistView::toggleFavoriteRequested, view,
+                                     [&](const QString &) { ++toggled; });
+                    QObject::connect(view, &PlaylistView::activateRow, view, [&](int) { ++played; });
+                    QObject::connect(view, &PlaylistView::reorderRequested, view, [&](int) { ++dragged; });
+                    view->selectAt(0, Qt::NoModifier);
+                    view->selectAt(2, Qt::ControlModifier);
+                    view->selectAt(0, Qt::ShiftModifier);
+                    const auto before = view->scene();
+                    const QImage outline = view->viewport()->grab().toImage();
+                    click(0);
+                    const QImage filled = view->viewport()->grab().toImage();
+                    const QRect heart = view->favoriteRect(0);
+                    const qreal dpr = filled.devicePixelRatio();
+                    const QRect crop(qRound(heart.x() * dpr), qRound(heart.y() * dpr), qRound(heart.width() * dpr),
+                                     qRound(heart.height() * dpr));
+                    check("UI_favorite_outline_filled_pixels", outline.copy(crop) != filled.copy(crop));
+                    check("UI_favorite_tooltip_updates_after_click", view->viewport()->toolTip() == "取消收藏");
+                    check("UI_favorite_single_identity_preserves_selection",
+                          favorites.isFavorite(tracks[0].identityKey()) &&
+                              !favorites.isFavorite(tracks[1].identityKey()) &&
+                              view->scene().selected == before.selected && view->scene().primary == before.primary &&
+                              view->scene().anchor == before.anchor);
+                    const QPoint pos = view->favoriteRect(0).center();
+                    mouse(QEvent::MouseButtonDblClick, pos, Qt::LeftButton);
+                    mouse(QEvent::MouseButtonRelease, pos, Qt::NoButton);
+                    check("UI_favorite_double_click_no_play_or_retoggle", toggled == 1 && played == 0 && dragged == 0);
+                    mouse(QEvent::MouseButtonPress, pos, Qt::LeftButton);
+                    mouse(QEvent::MouseMove, pos - QPoint(40, 0), Qt::LeftButton);
+                    mouse(QEvent::MouseMove, pos, Qt::LeftButton);
+                    mouse(QEvent::MouseButtonRelease, pos, Qt::NoButton);
+                    mouse(QEvent::MouseButtonPress, pos, Qt::LeftButton);
+                    mouse(QEvent::MouseButtonRelease, pos - QPoint(40, 0), Qt::NoButton);
+                    check("UI_favorite_drag_and_outside_release_cancel", toggled == 1 && dragged == 0);
+                    mouse(QEvent::MouseButtonPress, pos, Qt::LeftButton);
+                    view->verticalScrollBar()->setValue(24);
+                    mouse(QEvent::MouseButtonRelease, pos, Qt::NoButton);
+                    check("UI_favorite_scroll_identity_cancel", toggled == 1);
+                    view->verticalScrollBar()->setValue(0);
+                    mouse(QEvent::MouseButtonPress, pos, Qt::LeftButton);
+                    favoriteCtl.setTracks(favorites.currentTracks());
+                    mouse(QEvent::MouseButtonRelease, pos, Qt::NoButton);
+                    check("UI_favorite_refresh_cancel", toggled == 1);
+                    for (int row : {1, 2, 3})
+                        click(row);
+                    check("UI_favorite_all_identity_types", favorites.favorites().size() == 4);
+                    favoritePanel.showPage(Collections::kFavViewId);
+                    click(0);
+                    const QString remaining = favoriteCtl.tracks().first().identityKey();
+                    mouse(QEvent::MouseButtonDblClick, view->favoriteRect(0).center(), Qt::LeftButton);
+                    mouse(QEvent::MouseButtonRelease, view->favoriteRect(0).center(), Qt::NoButton);
+                    check("UI_favorite_page_removes_row_double_click_safe",
+                          !favorites.isFavorite(tracks[0].identityKey()) && favorites.isFavorite(remaining) &&
+                              favoriteCtl.tracks().size() == 3 && played == 0);
+                    favoritePanel.showPage(Collections::kAllViewId);
+                    view->selectAt(4, Qt::NoModifier);
+                    view->verticalScrollBar()->setValue(48);
+                    favoritePanel.m_search->setText("Favorite 0");
+                    favoritePanel.applySearch();
+                    const auto original = favoritePanel.m_beforeSearch;
+                    click(0);
+                    check("UI_favorite_search_preserves_presearch_scene",
+                          favoritePanel.m_beforeSearch && original &&
+                              favoritePanel.m_beforeSearch->selected == original->selected &&
+                              favoritePanel.m_beforeSearch->scroll == original->scroll &&
+                              favoritePanel.m_search->text() == "Favorite 0");
+                    favoritePanel.clearSearch();
+                    check("UI_favorite_search_exit_restores_scene",
+                          view->selectedRows() == QList<int>{4} && view->verticalScrollBar()->value() == 48);
+                    favoritePanel.m_formats = {"WAV"};
+                    favoritePanel.applySearch();
+                    const int beforeFormatClick = toggled;
+                    click(view->verticalScrollBar()->value() / PlaylistView::kRowH);
+                    check("UI_favorite_format_real_click", toggled == beforeFormatClick + 1);
+                    check("UI_favorite_format_filter_preserved",
+                          favoritePanel.m_formats == QSet<QString>{"WAV"} && favoritePanel.m_beforeSearch.has_value());
+                    favoritePanel.clearSearch();
+                    PlaylistView independent(&favoriteCtl);
+                    check("UI_favorite_no_collection_no_hit", !independent.favoriteHit(QPoint(1, 1), 0));
+                    check("UI_favorite_duration_geometry",
+                          view->favoriteRect(0).width() == 24 &&
+                              view->favoriteRect(0).right() < view->viewport()->width() - 62);
+                }
+                {
+                    const bool enabled = GlassStyle::enabled();
+                    const float transparency = GlassStyle::transparency();
+                    GlassStyle::setEnabled(true);
+                    GlassStyle::setTransparency(0.2f);
+                    SkinMenu menu;
+                    auto *first = menu.addAction("First");
+                    first->setCheckable(true);
+                    first->setChecked(true);
+                    auto *disabled = menu.addAction("Disabled");
+                    disabled->setEnabled(false);
+                    auto *sub = SkinMenu::addSubmenu(menu, "Submenu");
+                    auto *nested = SkinMenu::addSubmenu(*sub, "Nested");
+                    nested->addAction("Leaf");
+                    menu.popup(QPoint(10, 10));
+                    QCoreApplication::processEvents();
+                    const auto render = [](QWidget &widget) {
+                        QImage image(widget.size(), QImage::Format_ARGB32_Premultiplied);
+                        image.fill(Qt::transparent);
+                        widget.render(&image, QPoint(), QRegion(), QWidget::RenderFlags{});
+                        return image;
+                    };
+                    menu.setActiveAction(nullptr);
+                    const QImage idle = render(menu);
+                    const QPoint blank(menu.width() - 6, menu.actionGeometry(first).center().y());
+                    check("UI_menu_background_alpha",
+                          std::abs(menu.backgroundAlpha() - 0.35f) < 0.001f &&
+                              std::abs(idle.pixelColor(blank).alpha() - qRound(0.35 * 255)) <= 1 &&
+                              menu.windowOpacity() == 1);
+                    const QPoint hover = menu.actionGeometry(first).center();
+                    QMouseEvent move(QEvent::MouseMove, hover, menu.mapToGlobal(hover), Qt::NoButton, Qt::NoButton,
+                                     Qt::NoModifier);
+                    QApplication::sendEvent(&menu, &move);
+                    const QImage hot = render(menu);
+                    check("UI_menu_hover_accent",
+                          menu.activeAction() == first && hot.pixelColor(blank) != idle.pixelColor(blank));
+                    QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
+                    QApplication::sendEvent(&menu, &down);
+                    check("UI_menu_keyboard_skips_disabled", menu.activeAction() == sub->menuAction());
+                    menu.setActiveAction(disabled);
+                    check(
+                        "UI_menu_disabled_no_highlight",
+                        render(menu).pixelColor(QPoint(menu.width() - 6, menu.actionGeometry(disabled).center().y())) ==
+                            idle.pixelColor(QPoint(menu.width() - 6, menu.actionGeometry(disabled).center().y())));
+                    bool foreground = false;
+                    for (int y = menu.actionGeometry(first).top(); y <= menu.actionGeometry(first).bottom(); ++y)
+                        for (int x = 4; x < menu.width() - 20; ++x) {
+                            const QColor color = idle.pixelColor(x, y);
+                            foreground |= color.alpha() > 240 && color.red() > 150;
+                        }
+                    check("UI_menu_foreground_opaque", foreground && first->isChecked());
+                    bool childAlpha = true;
+                    for (SkinMenu *child : {sub, nested}) {
+                        child->resize(child->sizeHint());
+                        childAlpha &= child->testAttribute(Qt::WA_TranslucentBackground) &&
+                                      std::abs(child->backgroundAlpha() - menu.backgroundAlpha()) < 0.001f;
+                    }
+                    check("UI_menu_multilevel_factory", childAlpha);
+                    bool triggered = false;
+                    QObject::connect(first, &QAction::triggered, &menu, [&](bool checked) { triggered = !checked; });
+                    menu.setActiveAction(first);
+                    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                    QApplication::sendEvent(&menu, &enter);
+                    check("UI_menu_keyboard_trigger_and_check", triggered && !first->isChecked());
+                    menu.popup(QPoint(10, 10));
+                    menu.setActiveAction(nullptr);
+                    GlassStyle::setEnabled(false);
+                    check("UI_menu_glass_off_opaque",
+                          menu.backgroundAlpha() == 1 && render(menu).pixelColor(blank).alpha() == 255 &&
+                              sub->backgroundAlpha() == 1 && nested->backgroundAlpha() == 1);
+                    GlassStyle::setEnabled(true);
+                    GlassStyle::setTransparency(0.6f);
+                    check("UI_menu_open_tracks_glass_change",
+                          std::abs(render(menu).pixelColor(blank).alpha() - qRound(0.75 * 255)) <= 1);
+                    menu.close();
+                    GlassStyle::setTransparency(transparency);
+                    GlassStyle::setEnabled(enabled);
+                }
+                {
                     // 右键菜单：分组 + 子菜单 + 「当前页/当前行做不到的动作不生成」。
                     // 只核对菜单树与动作派发，不 exec：模态菜单会把探针卡在 exec 里。
                     Collections mcol;
@@ -1549,7 +1866,9 @@ public:
                           rowLocal.contains("文件/在文件管理器中打开目录") &&
                               rowLocal.contains("文件/转换为其他格式…") &&
                               rowLocal.contains("列表/播放模式/顺序播放") && rowLocal.contains("添加/添加文件…") &&
-                              rowLocal.contains("歌单/新建歌单…") && rowLocal.contains("从列表移除"));
+                              rowLocal.contains("歌单/新建歌单…") && rowLocal.contains("从列表移除") &&
+                              rowLocal.contains("文件/属性") && !rowLocal.contains("属性") &&
+                              !rowLocal.contains("编辑显示信息…"));
                     check("menu_hides_radio_group_for_local",
                           !rowLocal.contains("电台/修改电台地址…") && !rowLocal.contains("电台/重命名台名…"));
 
@@ -1564,7 +1883,39 @@ public:
                     check("menu_radio_group",
                           rowRadio.contains("电台/修改电台地址…") && rowRadio.contains("电台/重试这个电台") &&
                               rowRadio.contains("电台/重命名台名…") && rowRadio.contains("电台/移入分类/未分类") &&
-                              !rowRadio.contains("文件/在文件管理器中打开目录") && !rowRadio.contains("编辑显示信息…"));
+                              !rowRadio.contains("文件/在文件管理器中打开目录") && rowRadio.contains("编辑显示信息…") &&
+                              rowRadio.contains("文件/属性") && !rowRadio.contains("属性"));
+                    bool removeBeforeFile = true;
+                    for (int row : {0, 2}) {
+                        panel.m_view->selectAt(row, Qt::NoModifier);
+                        QMenu menu;
+                        panel.m_view->buildContextMenu(menu, row);
+                        const auto actions = menu.actions();
+                        int removeIndex = -1, fileIndex = -1;
+                        for (int i = 0; i < actions.size(); ++i) {
+                            if (actions[i]->text() == "从列表移除") removeIndex = i;
+                            if (actions[i]->text() == "文件" && actions[i]->menu()) fileIndex = i;
+                        }
+                        removeBeforeFile &= removeIndex >= 0 && fileIndex == removeIndex + 1;
+                    }
+                    check("menu_remove_immediately_before_file", removeBeforeFile);
+                    panel.m_view->selectAt(0, Qt::NoModifier);
+                    panel.m_view->selectAt(2, Qt::ControlModifier);
+                    QMenu mixedLocal, mixedRadio;
+                    panel.m_view->buildContextMenu(mixedLocal, 0);
+                    panel.m_view->buildContextMenu(mixedRadio, 2);
+                    QString editedKey, propertyKey;
+                    QObject::connect(&panel, &PlaylistWindow::editRequested, &panel,
+                                     [&](const Track &track) { editedKey = track.identityKey(); });
+                    QObject::connect(&panel, &PlaylistWindow::propertiesRequested, &panel,
+                                     [&](const Track &track) { propertyKey = track.identityKey(); });
+                    QAction *edit = findMenuAction(mixedRadio, "编辑显示信息…");
+                    QAction *properties = findMenuAction(mixedRadio, "属性");
+                    if (edit) edit->trigger();
+                    if (properties) properties->trigger();
+                    check("menu_radio_edit_and_properties_dispatch", !findMenuAction(mixedLocal, "编辑显示信息…") &&
+                                                                         editedKey == radio.identityKey() &&
+                                                                         propertyKey == radio.identityKey());
 
                     // 媒体库是扫描只读投影：删行/清空都不列
                     mcol.setLibraryKeys({local.identityKey(), radio.identityKey()});
@@ -1602,19 +1953,132 @@ public:
                                                                          filtered.contains("从列表移除"));
                     panel.m_view->setFilterActive(false);
 
-                    // 菜单项走 triggered 真派发：加入收藏 / 清空当前列表
+                    // 菜单中没有收藏或待播入口；清空仍走真实 triggered。
                     QMenu favMenu;
                     panel.m_view->buildContextMenu(favMenu, 0);
-                    QAction *fav = findMenuAction(favMenu, "加入收藏");
-                    if (fav) fav->trigger();
-                    check("menu_action_dispatch", fav != nullptr && mcol.isFavorite(local.identityKey()));
+                    check("menu_removed_features_absent",
+                          !findMenuAction(favMenu, "加入收藏") && !findMenuAction(favMenu, "取消收藏") &&
+                              !findMenuAction(favMenu, "下一首播放") && !findMenuAction(favMenu, "稍后播放") &&
+                              !findMenuAction(favMenu, "待播队列"));
                     QMenu clearMenu;
                     panel.m_view->buildContextMenu(clearMenu, 0);
                     QAction *clear = findMenuAction(clearMenu, "清空当前列表");
                     if (clear) clear->trigger();
                     check("menu_clear_list_dispatch", clear != nullptr && mctl.tracks().isEmpty());
                 }
+                {
+                    ScopedTestState radioState;
+                    PlayerController radioCtl(engine);
+                    MainWindow radioWindow(&radioCtl, engine);
+                    const QString key = "http://127.0.0.1:1/custom?station=1";
+                    auto fill = [](QDialog &dialog, const QString &address, const QString &title, const QString &artist,
+                                   const QString &album) {
+                        for (const auto &entry : QList<QPair<QString, QString>>{{"radioAddress", address},
+                                                                                {"radioTitle", title},
+                                                                                {"radioArtist", artist},
+                                                                                {"radioAlbum", album}}) {
+                            auto *edit = dialog.findChild<QLineEdit *>(entry.first);
+                            if (!edit) {
+                                dialog.reject();
+                                return false;
+                            }
+                            if (!edit->isReadOnly()) edit->setText(entry.second);
+                        }
+                        return true;
+                    };
+                    const auto initialGeneration = radioWindow.m_importGeneration;
+                    const bool cancelled = driveRadioDialog(
+                        radioWindow,
+                        [&](QDialog &dialog) {
+                            fill(dialog, key, "Cancelled", "Artist", "Album");
+                            dialog.reject();
+                        },
+                        [&] { radioWindow.addRadioPrompt(); });
+                    check("UI_radio_add_cancel_atomic", cancelled && radioWindow.collections().allTracks().isEmpty() &&
+                                                            radioWindow.m_importGeneration == initialGeneration);
+                    bool invalidBlocked = false;
+                    driveRadioDialog(
+                        radioWindow,
+                        [&](QDialog &dialog) {
+                            if (!fill(dialog, "file:///tmp/not-radio.wav", "Invalid", {}, {})) return;
+                            auto *buttons = dialog.findChild<QDialogButtonBox *>();
+                            if (buttons) buttons->button(QDialogButtonBox::Ok)->click();
+                            auto *error = dialog.findChild<QLabel *>("radioAddressError");
+                            invalidBlocked = error && !error->text().isEmpty() && dialog.isVisible();
+                            dialog.reject();
+                        },
+                        [&] { radioWindow.addRadioPrompt(); });
+                    check("UI_radio_invalid_address_blocked",
+                          invalidBlocked && radioWindow.m_importGeneration == initialGeneration);
+                    const bool added = driveRadioDialog(
+                        radioWindow,
+                        [&](QDialog &dialog) {
+                            if (!fill(dialog, key, "  Custom radio  ", "  Artist  ", "  Album  ")) return;
+                            if (auto *buttons = dialog.findChild<QDialogButtonBox *>())
+                                buttons->button(QDialogButtonBox::Ok)->click();
+                        },
+                        [&] { radioWindow.addRadioPrompt(); });
+                    const bool committed =
+                        waitFor([&] { return radioWindow.collections().trackForKey(key).title() == "Custom radio"; });
+                    radioCtl.stop();
+                    const Track addedTrack = radioWindow.collections().trackForKey(key);
+                    check("UI_radio_add_display_info", added && committed && addedTrack.artist() == "Artist" &&
+                                                           addedTrack.album() == "Album" &&
+                                                           addedTrack.identityKey() == key);
+                    bool prefilled = false;
+                    const bool edited = driveRadioDialog(
+                        radioWindow,
+                        [&](QDialog &dialog) {
+                            auto *address = dialog.findChild<QLineEdit *>("radioAddress");
+                            auto *title = dialog.findChild<QLineEdit *>("radioTitle");
+                            auto *artist = dialog.findChild<QLineEdit *>("radioArtist");
+                            auto *album = dialog.findChild<QLineEdit *>("radioAlbum");
+                            prefilled = address && address->isReadOnly() && address->text() == key && title &&
+                                        title->text() == "Custom radio" && artist && artist->text() == "Artist" &&
+                                        album && album->text() == "Album";
+                            if (!fill(dialog, key, "Updated", "New artist", "New album")) return;
+                            if (auto *buttons = dialog.findChild<QDialogButtonBox *>())
+                                buttons->button(QDialogButtonBox::Ok)->click();
+                        },
+                        [&] { radioWindow.editRadioPrompt(addedTrack); });
+                    const Track updated = radioWindow.collections().trackForKey(key);
+                    check("UI_radio_edit_prefill_and_submit", edited && prefilled && updated.title() == "Updated" &&
+                                                                  updated.artist() == "New artist" &&
+                                                                  updated.album() == "New album");
+                    const auto stored = LibraryStore::load();
+                    Collections restored;
+                    restored.loadFrom(stored);
+                    restored.setAllTracks({Track::fromRadio(QUrl(key))});
+                    const Track reloaded = restored.trackForKey(key);
+                    check("UI_radio_display_info_persisted", stored.valid && reloaded.title() == "Updated" &&
+                                                                 reloaded.artist() == "New artist" &&
+                                                                 reloaded.album() == "New album");
+                    driveRadioDialog(
+                        radioWindow,
+                        [&](QDialog &dialog) {
+                            fill(dialog, key, "Discarded", "Discarded", "Discarded");
+                            dialog.reject();
+                        },
+                        [&] { radioWindow.editRadioPrompt(updated); });
+                    check("UI_radio_edit_cancel_atomic", updated.title() == "Updated" &&
+                                                             updated.artist() == "New artist" &&
+                                                             updated.album() == "New album");
+                    radioWindow.collections().editTrack(key, {}, {}, {});
+                    radioWindow.collections().registerTracks({Track::fromRadio(QUrl(key))});
+                    const Track fallback = radioWindow.collections().trackForKey(key);
+                    check("UI_radio_clear_display_info_fallback",
+                          fallback.title() == RadioURL::displayName(QUrl(key)) && fallback.artist().isEmpty() &&
+                              fallback.album().isEmpty() &&
+                              !radioWindow.collections().radios().hasCustomName(QUrl(key)));
+                    Track local(QUrl::fromLocalFile(path));
+                    radioWindow.editRadioPrompt(local);
+                    check("UI_radio_edit_rejects_local", local.title() == "a");
+                }
+                auto hiddenSettings = LibraryStore::load();
+                hiddenSettings.listVisible = false;
+                check("UI_hidden_playlist_fixture_saved", LibraryStore::save(hiddenSettings));
                 MainWindow window(&ctl, engine);
+                check("UI_hidden_playlist_startup_lazy", !window.m_playlist);
                 window.show();
                 QCoreApplication::processEvents();
                 check("UI_main_visible", window.isVisible());
@@ -1735,6 +2199,9 @@ public:
                 check("UI_muted_EQ_reads_output_volume", eq->m_volume->value() == 0 && window.userMuted());
                 eq->volumeRequested(0.6);
                 check("UI_EQ_volume_routes_main", window.userVolume() == 0.6 && !window.userMuted());
+                if (!window.m_playlist || !window.m_playlist->isVisible()) window.m_list->click();
+                check("UI_hidden_playlist_opens_from_main", window.m_playlist && window.m_playlist->isVisible());
+                if (!window.m_playlist) return failed;
                 window.m_playlist->focusSearch();
                 window.m_playlist->m_search->setFocus();
                 QKeyEvent f4(QEvent::KeyPress, Qt::Key_F4, Qt::NoModifier);
@@ -1750,9 +2217,7 @@ public:
                 check("UI_lyric_visible", window.m_lyricWindow->isVisible());
 #ifdef Q_OS_WIN
                 window.toggleCoverPanel();
-                window.toggleQueuePanel();
-                const QList<QWidget *> windowsPanels{window.m_playlist, eq, window.m_lyricWindow, window.m_coverWindow,
-                                                     window.m_queueWindow};
+                const QList<QWidget *> windowsPanels{window.m_playlist, eq, window.m_lyricWindow, window.m_coverWindow};
                 check("UI_windows_owned_tool_panels",
                       window.windowType() == Qt::Window &&
                           std::all_of(windowsPanels.begin(), windowsPanels.end(), [&window](QWidget *sub) {
@@ -1793,14 +2258,14 @@ public:
                                 window.applyPinTop(pinned); // 同态重复请求也不能重建或重写透明样式。
                                 QCoreApplication::processEvents();
                                 stable &= surface.unchanged(pinned) && owned() && nativeTaskbarWindowCount() == 1 &&
-                                          window.probeGroupPinned() == (pinned ? 6 : 0);
+                                          window.probeGroupPinned() == (pinned ? 5 : 0);
                             }
                         }
                         check("UI_windows_pin_toggle_30_preserves_surfaces", stable);
                     }
                     window.applyPinTop(true);
                     {
-                        SkinWindow late(QStringLiteral("置顶继承探针"), false, &window);
+                        SkinWindow late(QStringLiteral("置顶继承探针"), SkinWindow::TitleButtons::Close, &window);
                         window.setWindowPinTop(&late, true);
                         const WId hwnd = late.internalWinId();
                         late.show();
@@ -1814,7 +2279,7 @@ public:
                     window.toggleEqPanel();
                     QCoreApplication::processEvents();
                     check("UI_windows_reopen_preserves_taskbar", owned() && nativeTaskbarWindowCount() == 1);
-                    check("UI_windows_pin_reopen_inherits", window.probeGroupPinned() == 6);
+                    check("UI_windows_pin_reopen_inherits", window.probeGroupPinned() == 5);
                     window.m_coverWindow->close();
                     window.applyPinTop(false);
                     window.toggleCoverPanel();
@@ -1835,28 +2300,22 @@ public:
                               std::all_of(windowsPanels.begin(), windowsPanels.end(), [](QWidget *sub) {
                                   return IsWindowVisible(reinterpret_cast<HWND>(sub->winId())) != FALSE;
                               }));
-                    check("UI_windows_pin_minimize_restore", window.probeGroupPinned() == 6);
+                    check("UI_windows_pin_minimize_restore", window.probeGroupPinned() == 5);
                     window.m_groupHideBypassTray = true;
-                    bool minimizeClicked = false;
-                    for (TTButton *button : eq->findChildren<TTButton *>()) {
-                        if (button->toolTip() != QStringLiteral("最小化")) continue;
-                        button->click();
-                        minimizeClicked = true;
-                        break;
-                    }
+                    if (auto *button = window.findChild<TTButton *>("mainMinimize")) button->click();
                     QCoreApplication::processEvents();
                     check("UI_windows_panel_minimize_group",
-                          minimizeClicked && window.probeGroupVisible() == 0 && nativeTaskbarWindowCount() == 0);
+                          window.probeGroupVisible() == 0 && nativeTaskbarWindowCount() == 0);
                     window.restoreGroupFromBackground();
                     QCoreApplication::processEvents();
                     check("UI_windows_panel_minimize_restore",
-                          window.probeGroupVisible() == 6 && owned() && nativeTaskbarWindowCount() == 1);
-                    check("UI_windows_pin_background_restore", window.probeGroupPinned() == 6);
+                          window.probeGroupVisible() == 5 && owned() && nativeTaskbarWindowCount() == 1);
+                    check("UI_windows_pin_background_restore", window.probeGroupPinned() == 5);
                     window.hideGroupToBackground();
                     window.applyPinTop(false);
                     window.restoreGroupFromBackground();
                     QCoreApplication::processEvents();
-                    check("UI_windows_unpin_while_hidden_restore", window.probeGroupVisible() == 6 &&
+                    check("UI_windows_unpin_while_hidden_restore", window.probeGroupVisible() == 5 &&
                                                                        window.probeGroupPinned() == 0 && owned() &&
                                                                        nativeTaskbarWindowCount() == 1);
                 } else {
@@ -1882,16 +2341,49 @@ public:
                                                        GlassStyle::wellAlpha() == GlassStyle::bodyAlpha() &&
                                                        GlassStyle::buttonAlpha() == GlassStyle::bodyAlpha());
                 {
-                    // 半透明只作用于四个主面板；队列/封面/属性/设置等辅助窗保持不透明，
+                    bool noControls = true;
+                    for (SkinWindow *sub : QList<SkinWindow *>{window.m_playlist, eq, window.m_lyricWindow})
+                        noControls &=
+                            !sub->findChild<TTButton *>("panelMinimize") && !sub->findChild<TTButton *>("panelClose");
+                    check("UI_three_panels_no_title_controls", noControls);
+                    window.m_groupHideBypassTray = true;
+                    bool cycles = true;
+                    for (int cycle = 0; cycle < 30; ++cycle) {
+                        window.m_list->click();
+                        cycles &=
+                            !window.m_playlist->isVisible() && eq->isVisible() && window.m_lyricWindow->isVisible();
+                        if (auto *button = window.findChild<TTButton *>("mainMinimize")) button->click();
+                        cycles &= window.isGroupHidden() && !eq->isVisible() && !window.m_lyricWindow->isVisible();
+                        window.restoreGroupFromBackground();
+                        cycles &=
+                            !window.m_playlist->isVisible() && eq->isVisible() && window.m_lyricWindow->isVisible();
+                        window.m_list->click();
+                        window.m_eq->click();
+                        cycles &= window.m_playlist->isVisible() && !eq->isVisible();
+                        window.m_eq->click();
+                        window.m_lyric->click();
+                        cycles &= !window.m_lyricWindow->isVisible();
+                        window.m_lyric->click();
+                    }
+                    check("UI_main_controls_group_visibility_30", cycles);
+                    // 窗口半透明只作用于四个主面板；封面/属性/设置等辅助窗保持不透明，
                     // 叠在主面板上时文字不会被下层透上来。
                     check("UI_main_panels_follow_glass", window.m_playlist->glassTransparencyFollows() &&
                                                              eq->glassTransparencyFollows() &&
                                                              window.m_lyricWindow->glassTransparencyFollows());
                     CoverWindow cover(&ctl);
-                    QueueWindow queue(&ctl);
                     PropertyWindow property(ctl.currentTrack(), &ctl);
                     SettingsWindow settings(&window);
-                    for (SkinWindow *aux : QList<SkinWindow *>{&cover, &queue, &property, &settings})
+                    ConvertWindow conversion({a}, &window);
+                    check("UI_aux_title_controls_unchanged", cover.findChild<TTButton *>("panelMinimize") &&
+                                                                 cover.findChild<TTButton *>("panelClose") &&
+                                                                 !property.findChild<TTButton *>("panelMinimize") &&
+                                                                 property.findChild<TTButton *>("panelClose") &&
+                                                                 !settings.findChild<TTButton *>("panelMinimize") &&
+                                                                 settings.findChild<TTButton *>("panelClose") &&
+                                                                 !conversion.findChild<TTButton *>("panelMinimize") &&
+                                                                 conversion.findChild<TTButton *>("panelClose"));
+                    for (SkinWindow *aux : QList<SkinWindow *>{&cover, &property, &settings})
                         check("UI_aux_windows_opaque", !aux->glassTransparencyFollows() && aux->shellAlpha() == 1.0f);
                     check("UI_main_panel_glass_alpha", std::abs(eq->shellAlpha() - GlassStyle::glassAlpha()) < 0.001f);
                 }
@@ -2051,11 +2543,11 @@ public:
             QFile resume(dir.path() + "/resume.json");
             resume.open(QIODevice::WriteOnly);
             resume.write(
-                "{\"queueKeys\":[\"/offline/song.flac\"],\"queueExplicit\":[true],\"queueNext\":[],\"queueIndex\":0,\"position\":12,\"wasPlaying\":false}");
+                "{\"queueKeys\":[\"/offline/song.flac\"],\"queueExplicit\":[false],\"queueNext\":[],\"queueIndex\":0,\"position\":12,\"wasPlaying\":false}");
             resume.close();
             auto migrated = LibraryStore::load();
             check("migrated_resume_valid", migrated.resumeValid && migrated.resumeQueue.size() == 1 &&
-                                               migrated.resumeQueue.first().second == 1 &&
+                                               migrated.resumeQueue.first() == "/offline/song.flac" &&
                                                migrated.resumePosition == 12);
             check("migrated_fields_consumed", migrated.libraryKeys.size() == 1 && migrated.eqPreGain == -3);
             Collections restored;
@@ -2068,6 +2560,128 @@ public:
                     1);
             check("foreign_fields_preserved", LibraryStore::legacyUnknownFields().value("foreign").toInt() == 123);
             check("db_roundtrip_after_migration", LibraryStore::save(migrated) && LibraryStore::load().eqPreGain == -3);
+            bool jsonCompatible = true, sqliteCompatible = true, sourcesZero = true;
+            for (int source : {1, 2})
+                for (int cursor : {0, 2, 3, 8})
+                    for (bool matching : {false, true}) {
+                        const QStringList keys{"/a.flac", "/discard.flac", "/current.flac", "/b.flac", "/later.flac",
+                                               "",        "/unknown.flac"};
+                        const QList<int> sources{0, 1, source, 0, 2, 0, 9};
+                        const QList<int> oldHistory{0, 1, 0, 2, 4, 3, 5, 6, -1, 8};
+                        const bool keepCurrent = cursor == 2 && matching;
+                        const QString currentKey =
+                            matching && cursor >= 0 && cursor < keys.size() ? keys[cursor] : QString();
+                        const QStringList expected =
+                            keepCurrent ? QStringList{keys[0], keys[2], keys[3]} : QStringList{keys[0], keys[3]};
+                        const int newCursor = cursor == 0   ? 0
+                                              : cursor == 3 ? (keepCurrent ? 2 : 1)
+                                              : keepCurrent ? 1
+                                                            : -1;
+                        const QList<int> expectedHistory = newCursor < 0 ? QList<int>{}
+                                                           : keepCurrent ? QList<int>{0, 0, 1, 2}
+                                                                         : QList<int>{0, 0, 1};
+                        auto matches = [&](const LibraryStore::Loaded &loaded) {
+                            return loaded.resumeQueue == expected && loaded.resumeCursor == newCursor &&
+                                   loaded.resumeValid == (newCursor >= 0) &&
+                                   loaded.resumeWasPlaying == (newCursor >= 0) &&
+                                   loaded.resumeHistoryIndexes == expectedHistory &&
+                                   loaded.resumePosition == (newCursor >= 0 ? 12 : 0) && loaded.volume == 0.4 &&
+                                   loaded.favoriteKeys == QStringList{keys[0]} &&
+                                   loaded.radioAliases.value("http://example.com/live") == "Alias";
+                        };
+                        {
+                            ScopedTestState legacyState;
+                            QJsonArray entries, history;
+                            for (int i = 0; i < keys.size(); ++i)
+                                entries.append(QJsonObject{{"k", keys[i]}, {"s", sources[i]}});
+                            for (int index : oldHistory)
+                                history.append(index);
+                            entries.append(QJsonObject{{"k", "/invalid.flac"}, {"s", "bad"}});
+                            history.append("bad");
+                            QJsonObject fixture{{"resumeQueue", entries},
+                                                {"resumeCursor", cursor},
+                                                {"resumeValid", true},
+                                                {"resumeTrackKey", currentKey},
+                                                {"resumePosition", 12},
+                                                {"resumeWasPlaying", true},
+                                                {"resumeHistoryIndexes", history},
+                                                {"volume", 0.4},
+                                                {"favoriteKeys", QJsonArray{keys[0]}},
+                                                {"radioAliases", QJsonObject{{"http://example.com/live", "Alias"}}}};
+                            QFile legacy(LibraryStore::stateFilePath());
+                            const bool written =
+                                legacy.open(QIODevice::WriteOnly) && legacy.write(QJsonDocument(fixture).toJson()) > 0;
+                            legacy.close();
+                            const auto loaded = LibraryStore::load();
+                            jsonCompatible &= written && matches(loaded);
+                        }
+                        {
+                            ScopedTestState legacyState;
+                            LibraryStore::Loaded seed;
+                            seed.resumeQueue = keys;
+                            seed.resumeCursor = cursor;
+                            seed.resumeValid = true;
+                            seed.resumeTrackKey = currentKey;
+                            seed.resumeWasPlaying = true;
+                            seed.resumePosition = 12;
+                            seed.resumeHistoryIndexes = oldHistory;
+                            seed.volume = 0.4;
+                            seed.favoriteKeys = {keys[0]};
+                            seed.radioAliases.insert("http://example.com/live", "Alias");
+                            sqliteCompatible &= LibraryStore::save(seed);
+                            LibraryStore::closeDatabase();
+                            const QString name = "resume-compat-probe";
+                            {
+                                QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
+                                db.setDatabaseName(LibraryStore::dbFilePath());
+                                sqliteCompatible &= db.open();
+                                {
+                                    QSqlQuery query(db);
+                                    query.prepare("UPDATE v1_resume_queue SET source=? WHERE position=?");
+                                    for (int i = 0; i < sources.size(); ++i) {
+                                        query.bindValue(0, sources[i]);
+                                        query.bindValue(1, i);
+                                        sqliteCompatible &= query.exec();
+                                    }
+                                    sqliteCompatible &=
+                                        query.exec("INSERT INTO v1_resume_queue VALUES (7, '/invalid.flac', 'bad')") &&
+                                        query.exec("INSERT INTO v1_resume_history VALUES (10, 'bad')");
+                                }
+                                db.close();
+                            }
+                            QSqlDatabase::removeDatabase(name);
+                            const auto loaded = LibraryStore::load();
+                            sqliteCompatible &= matches(loaded);
+                            sourcesZero &= LibraryStore::save(loaded);
+                            LibraryStore::closeDatabase();
+                            {
+                                QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE", name);
+                                db.setDatabaseName(LibraryStore::dbFilePath());
+                                sourcesZero &= db.open();
+                                {
+                                    QSqlQuery query(db);
+                                    sourcesZero &= query.exec("SELECT COUNT(*) FROM v1_resume_queue WHERE source<>0") &&
+                                                   query.next() && query.value(0).toInt() == 0;
+                                }
+                                db.close();
+                            }
+                            QSqlDatabase::removeDatabase(name);
+                        }
+                    }
+            check("legacy_JSON_filter_cursor_history_matrix", jsonCompatible);
+            check("legacy_SQLite_filter_cursor_history_matrix", sqliteCompatible);
+            check("new_SQLite_scene_sources_always_zero", sourcesZero);
+            {
+                ScopedTestState legacyState;
+                QFile legacy(LibraryStore::stateFilePath());
+                legacy.open(QIODevice::WriteOnly);
+                legacy.write(
+                    "{\"resumeValid\":true,\"resumeQueue\":[{\"k\":\"/pending.flac\",\"s\":1}],\"resumeCursor\":0,\"resumeWasPlaying\":true}");
+                legacy.close();
+                const auto loaded = LibraryStore::load();
+                check("legacy_pending_only_no_current_discarded",
+                      loaded.resumeQueue.isEmpty() && !loaded.resumeValid && !loaded.resumeWasPlaying);
+            }
         }
         return failed;
     }
@@ -2230,83 +2844,4 @@ QStringList regressionSuites() {
     return {"REVIEW", "CONVERT", "DECODER", "FORMAT",  "GAPLESS", "GAIN",  "SPECTRUM", "PLAYBACK",
             "SCENE",  "DEVICE",  "SLEEP",   "LIBRARY", "IMPORT",  "COVER", "SEARCH",   "UI",
             "PERF",   "SYSTEM",  "ARCHIVE", "CUE",     "LISTS",   "SHIFT", "PLAYLIST"};
-}
-
-int runQueueCoverage(QTextStream &out) {
-    RegressionTests tests{out};
-    bool natural = true, preview = true, intents = true, manual = true;
-    int cases = 0;
-    const Track next(QUrl::fromLocalFile("/next.flac")), later(QUrl::fromLocalFile("/later.flac"));
-    for (int size = 1; size <= 5; ++size)
-        for (int cursor = 0; cursor < size; ++cursor)
-            for (PlayMode mode : {PlayMode::Order, PlayMode::ListLoop, PlayMode::SingleLoop, PlayMode::Random})
-                for (bool insert : {false, true})
-                    for (bool append : {false, true}) {
-                        QList<Track> base;
-                        for (int i = 0; i < size; ++i)
-                            base << Track(QUrl::fromLocalFile(QStringLiteral("/base%1.flac").arg(i)));
-                        auto setup = [&](PlayQueue &queue) {
-                            queue.begin(base, cursor);
-                            queue.randomIndex = [](int, int) { return 0; };
-                            if (append) queue.appendLater({later});
-                            if (insert) queue.insertNext({next});
-                        };
-                        PlayQueue queue;
-                        setup(queue);
-                        QString expected;
-                        const bool atEnd = cursor + 1 >= size;
-                        if (insert)
-                            expected = next.identityKey();
-                        else if (mode == PlayMode::SingleLoop)
-                            expected = base[cursor].identityKey();
-                        else if (mode == PlayMode::Random || (mode == PlayMode::ListLoop && atEnd && !append))
-                            expected = base.first().identityKey();
-                        else if (!atEnd)
-                            expected = base[cursor + 1].identityKey();
-                        else if (append)
-                            expected = later.identityKey();
-                        const auto *peek = queue.peekOnFinish(mode);
-                        const QUuid picked = peek ? peek->id : QUuid();
-                        const auto *again = queue.peekOnFinish(mode);
-                        preview &= queue.cursor() == cursor && (again ? again->id : QUuid()) == picked;
-                        const auto *actual = queue.advanceOnFinish(mode);
-                        natural &= (actual ? actual->track.identityKey() : QString()) == expected;
-                        for (const QueueItem &item : queue.items()) {
-                            if (item.track.identityKey() == next.identityKey())
-                                intents &= item.source == QueueSource::Next;
-                            else if (item.track.identityKey() == later.identityKey())
-                                intents &= item.source == QueueSource::Later;
-                            else
-                                intents &= item.source == QueueSource::Basic;
-                        }
-                        PlayQueue user;
-                        setup(user);
-                        const auto *selected = user.advanceByUser(mode);
-                        QString wanted = insert                     ? next.identityKey()
-                                         : mode == PlayMode::Random ? base.first().identityKey()
-                                         : cursor + 1 < size        ? base[cursor + 1].identityKey()
-                                         : append                   ? later.identityKey()
-                                         : mode == PlayMode::Order  ? QString()
-                                                                    : base.first().identityKey();
-                        manual &= (selected ? selected->track.identityKey() : QString()) == wanted;
-                        ++cases;
-                    }
-    tests.check("queue_mode_source_natural_matrix", natural);
-    tests.check("queue_peek_stable_without_cursor_change", preview);
-    tests.check("queue_sources_immutable_matrix", intents);
-    tests.check("queue_manual_next_matrix", manual);
-    out << "QUEUE matrix_cases=" << cases << '\n';
-    PlayQueue queue;
-    queue.begin({next, later, next}, 0);
-    const QUuid current = queue.current()->id;
-    queue.remove({current});
-    tests.check("queue_current_cannot_remove", queue.current() && queue.current()->id == current && queue.count() == 3);
-    const auto before = queue.items();
-    tests.check("queue_invalid_reorder_atomic",
-                !queue.reorderPending({before[1].id, before[1].id}) && queue.items() == before);
-    queue.dropTracks({next.identityKey()});
-    tests.check("queue_drop_duplicate_preserves_playing", queue.count() == 2 && queue.current()->id == current);
-    queue.clearPending();
-    tests.check("queue_clear_keeps_current", queue.count() == 1 && queue.current()->id == current);
-    return tests.failed;
 }

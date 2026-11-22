@@ -6,7 +6,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMenu>
+#include "SkinWidgets.h"
 #include <QPainter>
 #include <cmath>
 
@@ -48,7 +48,7 @@ QString freqLabel(double hz) {
 } // namespace
 
 EqWindow::EqWindow(AudioEnginePtr engine, QWidget *parent)
-    : SkinWindow(QStringLiteral("均衡器"), true, parent), m_engine(std::move(engine)) {
+    : SkinWindow(QStringLiteral("均衡器"), TitleButtons::None, parent), m_engine(std::move(engine)) {
     resize(460, 178 + 30); // 高度补上自绘标题条（~30）；与主窗/列表同紧凑默认宽
     setMinimumSize(360, 178);
 
@@ -205,7 +205,7 @@ void EqWindow::refreshReadout() {
 }
 
 void EqWindow::showPresetMenu() {
-    QMenu menu(this);
+    SkinMenu menu(this);
     struct Item {
         QString name;
         std::array<double, 10> g;

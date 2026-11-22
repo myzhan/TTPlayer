@@ -66,15 +66,8 @@ public:
     void seekTo(double sec);
     void stop();
 
-    // MARK: 待播队列（F03）。都不打断当前曲；没在播时只入表，按播放/双击再开播。
-    int enqueueNext(const QList<Track> &tracks);  // 「下一首播放」：插到当前之后
-    int enqueueLater(const QList<Track> &tracks); // 「稍后播放」：追加到尾部
-    void removeQueued(const QSet<QUuid> &ids);    // 移走待播条目（正在播的形列外）
+    // 浏览列表删行不打断当前曲，仍需同步基础播放上下文与预取。
     void dropTracks(const QSet<QString> &keys);
-    void clearPendingQueue();                      // 清空待播：当前曲继续播完就收手
-    bool moveQueued(const QUuid &id, int index);   // 拖动调整待播次序（落点夹在待播区间）
-    bool reorderQueued(const QList<QUuid> &order); // 一次性提交整个待播段重排
-    void playQueued(const QUuid &id);              // 队列面板双击某条：只挪游标不重建上下文
 
     // R03 现场恢复：重建队列上下文/游标/历史，装载当前曲并定位。
     // autoPlay=false 停在原位（恢复现场但不响），true 才开声；模式由调用方先 setMode。
@@ -153,7 +146,6 @@ signals:
     void replayGainChanged();
     void lyricShiftChanged();
     void sleepChanged();
-    void queueChanged(); // 排队 / 移除 / 重排 / 换游标：驱动待播队列面板刷新
 
 private:
     friend class RegressionTests;
@@ -170,7 +162,7 @@ private:
     static std::unique_ptr<Decoder>
     openDecoderFor(const Track &track, std::shared_ptr<std::atomic<bool>> cancel = {}); // 文件/归档/电台统一开流
 
-    void refreshPrefetch(); // 队列变了：有当前曲就重算预取，否则丢弃旧预取
+    void refreshPrefetch(); // 基础播放上下文改变后重算预取。
 
     // R08：电台异步开流——不在 UI 线程阻塞等网络；token 不匹配的晚到结果直接丢弃。
     void startLocalAsync(const Track &track, bool autoPlay, double position, bool restoring);

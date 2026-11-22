@@ -74,7 +74,6 @@ PlayerController::PlayerController(AudioEnginePtr engine, QObject *parent)
         guard->m_queue.markPlayed(next->id);
         guard->m_positionCache = guard->m_engine->positionSeconds();
         guard->loadLyricForCurrent();
-        emit guard->queueChanged();
         emit guard->trackChanged();
         emit guard->playbackStateChanged();
         guard->schedulePrefetch();
@@ -101,7 +100,6 @@ void PlayerController::replaceTrackReferences(const QHash<QString, Track> &repla
         emit trackChanged();
     }
     emit lyricShiftChanged();
-    emit queueChanged();
 }
 
 PlayerController::~PlayerController() {
@@ -158,7 +156,7 @@ void PlayerController::beginContextAndPlay(int row) {
     }
 }
 
-// 队列变了（排队 / 移除 / 重排 / 换游标）：重算预取。有当前曲才值得重新开一条
+// 基础播放上下文改变后重算预取。有当前曲才值得重新开一条
 // 解码器；彻底停住（无游标）时只丢弃旧预取，不白开流。
 void PlayerController::refreshPrefetch() {
     if (m_queue.current())
@@ -169,70 +167,9 @@ void PlayerController::refreshPrefetch() {
     }
 }
 
-int PlayerController::enqueueNext(const QList<Track> &tracks) {
-    if (tracks.isEmpty()) return 0;
-    m_queue.insertNext(tracks);
-    emit queueChanged();
-    refreshPrefetch();
-    return tracks.size();
-}
-
-int PlayerController::enqueueLater(const QList<Track> &tracks) {
-    if (tracks.isEmpty()) return 0;
-    m_queue.appendLater(tracks);
-    emit queueChanged();
-    refreshPrefetch();
-    return tracks.size();
-}
-
-void PlayerController::removeQueued(const QSet<QUuid> &ids) {
-    if (ids.isEmpty()) return;
-    m_queue.remove(ids);
-    emit queueChanged();
-    refreshPrefetch();
-}
-
 void PlayerController::dropTracks(const QSet<QString> &keys) {
     m_queue.dropTracks(keys);
     refreshPrefetch();
-    emit queueChanged();
-}
-
-void PlayerController::clearPendingQueue() {
-    m_queue.clearPending();
-    emit queueChanged();
-    refreshPrefetch();
-}
-
-bool PlayerController::moveQueued(const QUuid &id, int index) {
-    if (!m_queue.movePending(id, index)) return false;
-    emit queueChanged();
-    refreshPrefetch();
-    return true;
-}
-
-bool PlayerController::reorderQueued(const QList<QUuid> &order) {
-    if (!m_queue.reorderPending(order)) return false;
-    emit queueChanged();
-    refreshPrefetch();
-    return true;
-}
-
-// 直接播队列里某一条（队列面板双击）：只把游标移到它，不重建上下文，
-// 所以它后面的条目照样按原次序轮到。
-void PlayerController::playQueued(const QUuid &id) {
-    m_consecutiveFailures = 0;
-    const QueueItem *item = m_queue.focus(id);
-    if (!item) return;
-    m_queue.markPlayed(item->id);
-    emit queueChanged();
-    if (loadAndPlay(item->track)) {
-        emit trackChanged();
-        emit playbackStateChanged();
-    } else {
-        emit trackChanged();
-        onTrackFinished();
-    }
 }
 
 // R03：重建上下文/游标/历史，装载当前曲并定位；autoPlay=false 停在原位不响。
@@ -242,7 +179,6 @@ bool PlayerController::restoreResume(const QList<QueueItem> &items, std::optiona
     m_queue.restoreScene(items, cursor, historyIndexes);
     const QueueItem *cur = m_queue.current();
     if (!cur) return false;
-    emit queueChanged();
     // loadAndPlay 会立即开播：定位后若不需自动续播就马上暂停（decoder 留住，之后可 resume）。
     // 电台走异步开流，把 autoPlay 意图交给 m_resumeAutoPlay，由 onRadioOpened 收尾时暂停。
     m_resumeAutoPlay = autoPlay;
@@ -607,10 +543,16 @@ void PlayerController::togglePlay() {
     }
     if (!m_queue.current()) {
         const QueueItem *head = m_queue.itemAt(0);
-        if (head)
-            playQueued(head->id);
-        else if (!m_tracks.isEmpty())
+        if (head) {
+            const QUuid id = head->id;
+            m_queue.focus(id);
+            m_queue.markPlayed(id);
+            m_consecutiveFailures = 0;
+            cancelSleepTimer();
+            loadAndPlay(m_queue.currentTrack());
+        } else if (!m_tracks.isEmpty()) {
             playRowAt(0);
+        }
         return;
     }
     if (m_openJob) {

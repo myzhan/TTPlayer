@@ -63,6 +63,12 @@ set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 set(CMAKE_OBJCXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
 
+# Qt 6.8 创建目标时默认强制 CMP0156=OLD，新 CMake 会报告弃用。
+# 用 Qt 提供的开关启用按链接器能力去重，保留弃用告警检查，不修改第三方。
+if(POLICY CMP0156)
+  set(QT_FORCE_CMP0156_TO_NEW ON)
+endif()
+
 find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Core Network Core5Compat Concurrent Sql)
 find_package(Threads REQUIRED)
 
@@ -302,7 +308,6 @@ qt_add_executable(ttplayer
   src/ui/TransportBar.cpp
   src/ui/PlaylistView.cpp
   src/ui/PlaylistWindow.cpp
-  src/ui/QueueWindow.cpp
   src/ui/EqWindow.cpp
   src/ui/LyricWindow.cpp
   src/ui/CoverWindow.cpp
@@ -535,6 +540,16 @@ if(NOT APPLE OR TTPLAYER_BUNDLE)
   qt_generate_deploy_app_script(TARGET ttplayer OUTPUT_SCRIPT ttplayer_deploy
     NO_UNSUPPORTED_PLATFORM_ERROR ${_tt_deploy_options})
   install(SCRIPT ${ttplayer_deploy})
+  if(WIN32)
+    # Qt 部署每次重写 qt.conf；随后补平台参数，保留原有 [Paths] 与绿色包可搬动性。
+    install(CODE [[
+      set(_tt_qt_conf "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/qt.conf")
+      if(NOT EXISTS "${_tt_qt_conf}")
+        message(FATAL_ERROR "Qt 部署未生成 ${_tt_qt_conf}，无法配置 Windows FreeType 字体后端")
+      endif()
+      file(APPEND "${_tt_qt_conf}" "\n[Platforms]\nWindowsArguments = fontengine=freetype\n")
+    ]])
+  endif()
   if(APPLE)
     # macdeployqt 把 sqldrivers 整个目录搬进来，其中 mimer 插件链到本机不存在的
     # /usr/local/lib/libmimerapi.dylib，加载必失败；只留 state.db 需要的 sqlite 插件。

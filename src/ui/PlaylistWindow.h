@@ -2,8 +2,7 @@
 
 // 播放列表窗（F04/F05 完整版）：左栏多页浏览器（收藏 + 各自建歌单 + 全部）+
 // 右栏「歌曲列表」——顶部标题行（标题 + 固定放大镜 + 可展开搜索框 + 计数），
-// 下面是全自绘 PlaylistView；添加/电台/删除/排序/模式/队列/歌单动作都在列表右键里，
-// 按播放 / 收藏 / 曲目 / 电台 / 列表 / 歌单 / 添加分组。
+// 下面是全自绘 PlaylistView；收藏用行内爱心，添加/电台/删除/排序/模式/歌单在右键里。
 //
 // 分工：集合层 Collections 是各页内容的真相，
 // 搜索命中只是临时把控制器列表换成命中表（pitfall #13）——清空关键字即从
@@ -31,6 +30,7 @@ public:
 
     /// 左栏那一列随歌单增删 / 媒体库换页刷新（ MainWindow 载入后与每次开窗前调用）
     void refreshGroups();
+    void refreshFavorites(); // 收藏改变后刷新当前页，保留搜索、选区和滚动现场。
 
     /// 展开并聚焦搜索框（Cmd+F 走这里）
     void focusSearch();
@@ -44,8 +44,6 @@ signals:
     void collectionsChanged();
     /// 从列表移走了一行（携带被移走的 Track）：外层据此记录内置电台黑名单
     void trackRemoved(const Track &track);
-    /// 右键「待播队列」：外层懒建 / 开关待播队列面板
-    void queueRequested();
     /// 右键「添加文件…」：外层开文件对话框
     void addRequested();
     /// 右键「添加文件夹…」：外层选目录后整棵导入

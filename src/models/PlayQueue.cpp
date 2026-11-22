@@ -13,14 +13,6 @@ Track PlayQueue::currentTrack() const {
     return i ? i->track : Track();
 }
 
-QList<QueueItem> PlayQueue::pending() const {
-    if (!m_cursor) return m_items;
-    QList<QueueItem> out;
-    for (int i = *m_cursor + 1; i < m_items.size(); ++i)
-        out.append(m_items[i]);
-    return out;
-}
-
 const QueueItem *PlayQueue::itemAt(int index) const {
     return idxOk(index) ? &m_items[index] : nullptr;
 }
@@ -35,7 +27,7 @@ void PlayQueue::begin(const QList<Track> &tracks, int index) {
     invalidatePick();
     m_items.clear();
     for (const Track &t : tracks)
-        m_items.append(QueueItem{.track = t, .source = QueueSource::Basic});
+        m_items.append(QueueItem{.track = t});
     m_cursor = idxOk(index) ? std::optional<int>(index) : std::nullopt;
     m_history.clear();
     if (m_cursor) m_history.append(m_items[*m_cursor].id);
@@ -79,79 +71,6 @@ void PlayQueue::markPlayed(const QUuid &id) {
     if (m_history.isEmpty() || m_history.last() != id) m_history.append(id);
 }
 
-void PlayQueue::insertNext(const QList<Track> &tracks) {
-    if (tracks.isEmpty()) return;
-    invalidatePick();
-    QList<QueueItem> fresh;
-    for (const Track &t : tracks)
-        fresh.append(QueueItem{.track = t, .source = QueueSource::Next});
-    // 还没建立上下文（没播任何东西）时，插到最前面就是「接下来第一首」
-    int pos = m_cursor ? *m_cursor + 1 : 0;
-    for (const QueueItem &it : fresh)
-        m_items.insert(pos++, it);
-}
-
-void PlayQueue::appendLater(const QList<Track> &tracks) {
-    if (tracks.isEmpty()) return;
-    invalidatePick();
-    for (const Track &t : tracks)
-        m_items.append(QueueItem{.track = t, .source = QueueSource::Later});
-}
-
-void PlayQueue::remove(const QSet<QUuid> &ids) {
-    invalidatePick();
-    const QueueItem *cur = current();
-    const QUuid curID = cur ? cur->id : QUuid();
-    const bool hasCur = cur != nullptr;
-    for (int i = m_items.size() - 1; i >= 0; --i)
-        if (ids.contains(m_items[i].id) && !(hasCur && m_items[i].id == curID)) m_items.removeAt(i);
-    if (hasCur) m_cursor = indexOf(curID);
-    pruneHistory();
-}
-
-void PlayQueue::clearPending() {
-    invalidatePick();
-    if (!m_cursor || !idxOk(*m_cursor)) {
-        reset();
-        return;
-    }
-    const int c = *m_cursor;
-    while (m_items.size() > c + 1)
-        m_items.removeLast();
-}
-
-bool PlayQueue::movePending(const QUuid &id, int position) {
-    const int from = indexOf(id);
-    if (from < 0 || !m_cursor || from <= *m_cursor || from >= m_items.size()) return false;
-    const int c = *m_cursor;
-    const int clamped = std::clamp(position, c + 1, int(m_items.size()) - 1);
-    if (clamped == from) return true;
-    invalidatePick();
-    m_items.move(from, clamped);
-    return true;
-}
-
-bool PlayQueue::reorderPending(const QList<QUuid> &order) {
-    if (!m_cursor || order.size() != m_items.size() - *m_cursor - 1) return false;
-    const int c = *m_cursor;
-    QList<QueueItem> tail = pending();
-    QList<QueueItem> rebuilt;
-    for (const QUuid &id : order) {
-        int i = -1;
-        for (int j = 0; j < tail.size(); ++j)
-            if (tail[j].id == id) {
-                i = j;
-                break;
-            }
-        if (i < 0) return false;
-        rebuilt.append(tail.takeAt(i));
-    }
-    invalidatePick();
-    for (const QueueItem &it : rebuilt)
-        m_items[c + 1 + rebuilt.indexOf(it)] = it;
-    return true;
-}
-
 void PlayQueue::dropTracks(const QSet<QString> &keys) {
     if (keys.isEmpty()) return;
     invalidatePick();
@@ -169,7 +88,7 @@ void PlayQueue::dropTracks(const QSet<QString> &keys) {
     pruneHistory();
 }
 
-const QueueItem *PlayQueue::nextPendingItem() const {
+const QueueItem *PlayQueue::nextItem() const {
     if (m_cursor) return idxOk(*m_cursor + 1) ? &m_items[*m_cursor + 1] : nullptr;
     return m_items.isEmpty() ? nullptr : &m_items.first();
 }
@@ -181,11 +100,9 @@ void PlayQueue::replaceTrack(const QString &key, const Track &track) {
 }
 
 /// 纯算「播完之后轮到谁」，不碰游标也不记历史：预取与推进共用这一套规矩。
-/// 坐在待播第一位、且确实是「下一首播放」插进来的那条先吃（位置 + 来路缺一不可）；
 /// 随机模式不看位置，只认摇出来的结果（否则「随机」实际变成顺序遍历）
 const QueueItem *PlayQueue::nextOnFinish(PlayMode mode) const {
-    const QueueItem *next = nextPendingItem();
-    if (next && next->playNext()) return next;
+    const QueueItem *next = nextItem();
     switch (mode) {
     case PlayMode::Random:
         return randomPeek();
@@ -202,8 +119,7 @@ const QueueItem *PlayQueue::nextOnFinish(PlayMode mode) const {
 const QueueItem *PlayQueue::advanceByUser(PlayMode mode) {
     // 注意不能在入口就 invalidatePick：那会把预取刚定下的答案抹掉（出口作废，
     // 而 focus() 内部本就作废）
-    const QueueItem *next = nextPendingItem();
-    if (next && next->playNext()) return focus(next->id);
+    const QueueItem *next = nextItem();
     if (mode == PlayMode::Random) {
         if (const QueueItem *p = randomPeek()) return focus(p->id);
     }

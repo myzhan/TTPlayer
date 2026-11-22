@@ -36,7 +36,7 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
-        // 标题条跟随所属窗：辅助窗（设置/属性/队列/封面）不透明时不再透出下层。
+        // 标题条跟随所属窗：辅助窗（设置/属性/封面）不透明时不再透出下层。
         const auto *shell = qobject_cast<SkinWindow *>(window());
         const float a = shell ? shell->shellAlpha() : (GlassStyle::enabled() ? GlassStyle::glassAlpha() : 1.0f);
         Painter::drawBody(&p, QRectF(rect()), Theme::titleTop, Theme::titleBottom, a, 0, Theme::skinEdge, true);
@@ -66,7 +66,7 @@ Qt::Edges frameResizeEdges(const QWidget *w, QPointF p) {
 
 } // namespace
 
-SkinWindow::SkinWindow(const QString &title, bool allowMinimize, QWidget *parent) : QWidget(parent) {
+SkinWindow::SkinWindow(const QString &title, TitleButtons buttons, QWidget *parent) : QWidget(parent) {
 #ifdef Q_OS_WIN
     // 副面板是工具窗，不占独立任务栏/Alt-Tab 入口；主窗仍是普通 Window。
     setWindowFlags(Qt::Tool | Qt::FramelessWindowHint);
@@ -92,25 +92,28 @@ SkinWindow::SkinWindow(const QString &title, bool allowMinimize, QWidget *parent
     cap->setFont(Fonts::panelTitle);
     cap->setStyleSheet(QStringLiteral("color:%1;background:transparent;").arg(Theme::titleText.name()));
 
-    auto *minBtn = new TTButton(bar);
-    minBtn->setGlyph(Skin::Glyph::Minus);
-    minBtn->setFace(TTButton::Face::Glass);
-    minBtn->setPreferredSize({22, 18});
-    minBtn->setToolTip(QStringLiteral("最小化"));
-    minBtn->setVisible(allowMinimize);
-
-    auto *closeBtn = new TTButton(bar);
-    closeBtn->setGlyph(Skin::Glyph::Close);
-    closeBtn->setFace(TTButton::Face::Glass);
-    closeBtn->setPreferredSize({22, 18});
-    closeBtn->setToolTip(QStringLiteral("关闭"));
-
     bl->addWidget(cap);
     bl->addStretch();
-    bl->addWidget(minBtn);
-    bl->addWidget(closeBtn);
-    connect(minBtn, &TTButton::clicked, this, [this] { onMinimize(); });
-    connect(closeBtn, &TTButton::clicked, this, [this] { onClose(); });
+    if (buttons == TitleButtons::MinimizeAndClose) {
+        auto *minBtn = new TTButton(bar);
+        minBtn->setObjectName(QStringLiteral("panelMinimize"));
+        minBtn->setGlyph(Skin::Glyph::Minus);
+        minBtn->setFace(TTButton::Face::Glass);
+        minBtn->setPreferredSize({22, 18});
+        minBtn->setToolTip(QStringLiteral("最小化"));
+        bl->addWidget(minBtn);
+        connect(minBtn, &TTButton::clicked, this, [this] { onMinimize(); });
+    }
+    if (buttons != TitleButtons::None) {
+        auto *closeBtn = new TTButton(bar);
+        closeBtn->setObjectName(QStringLiteral("panelClose"));
+        closeBtn->setGlyph(Skin::Glyph::Close);
+        closeBtn->setFace(TTButton::Face::Glass);
+        closeBtn->setPreferredSize({22, 18});
+        closeBtn->setToolTip(QStringLiteral("关闭"));
+        bl->addWidget(closeBtn);
+        connect(closeBtn, &TTButton::clicked, this, [this] { onClose(); });
+    }
 
     m_body = new QWidget(this);
     root->addWidget(bar);

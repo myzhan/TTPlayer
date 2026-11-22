@@ -3,6 +3,8 @@
 #include <QFileInfo>
 #include "Theme.h"
 #include "Painter.h"
+#include "SkinParts.h"
+#include "SkinWidgets.h"
 #include "library/Collections.h"
 #include "models/UserPlaylist.h"
 
@@ -74,13 +76,17 @@ PlaylistView::PlaylistView(PlayerController *controller, QWidget *parent)
 
     connect(controller, &PlayerController::listChanged, this, &PlaylistView::reload);
     connect(controller, &PlayerController::trackChanged, this, &PlaylistView::reload);
-    connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { viewport()->update(); });
+    connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
+        if (m_favoritePress) m_favoriteCancelled = true;
+        viewport()->update();
+    });
     connect(this, &PlaylistView::activateRow, controller, &PlayerController::playRowAt);
 
     reload();
 }
 
 void PlaylistView::reload() {
+    if (m_favoritePress) m_favoriteCancelled = true;
     const Scene previous = scene();
     m_tracks = m_controller->tracks();
     const Track cur = m_controller->currentTrack();
@@ -112,6 +118,8 @@ PlaylistView::Scene PlaylistView::scene() const {
     result.scroll = verticalScrollBar()->value();
     for (int row : selectedRows())
         if (row >= 0 && row < m_tracks.size()) result.selected << m_tracks[row].identityKey();
+    if (m_selectedRow >= 0 && m_selectedRow < m_tracks.size()) result.primary = m_tracks[m_selectedRow].identityKey();
+    if (m_anchor >= 0 && m_anchor < m_tracks.size()) result.anchor = m_tracks[m_anchor].identityKey();
     return result;
 }
 void PlaylistView::restoreScene(const Scene &scene) {
@@ -123,7 +131,11 @@ void PlaylistView::restoreScene(const Scene &scene) {
             m_selection.insert(row);
             m_selectedRow = row;
         }
-    m_anchor = m_selectedRow;
+    for (int row = 0; row < m_tracks.size(); ++row) {
+        const QString key = m_tracks[row].identityKey();
+        if (key == scene.primary) m_selectedRow = row;
+        if (key == scene.anchor) m_anchor = row;
+    }
     verticalScrollBar()->setValue(scene.scroll);
     viewport()->update();
 }
@@ -149,6 +161,16 @@ int PlaylistView::rowAtPos(const QPoint &p) const {
     const int row = y / kRowH;
     if (row < 0 || row >= m_tracks.size()) return -1;
     return row;
+}
+
+QRect PlaylistView::favoriteRect(int row) const {
+    return QRect(viewport()->width() - kDurW - kFavoriteW, row * kRowH - verticalScrollBar()->value(), kFavoriteW,
+                 kRowH);
+}
+
+bool PlaylistView::favoriteHit(const QPoint &pos, int row) const {
+    return m_collections && row >= 0 && row < m_tracks.size() && viewport()->rect().contains(pos) &&
+           favoriteRect(row).contains(pos);
 }
 
 void PlaylistView::paintEvent(QPaintEvent *) {
@@ -205,9 +227,17 @@ void PlaylistView::paintEvent(QPaintEvent *) {
         QFont nameFont = isCurrent ? Fonts::title : Fonts::small;
         p.setFont(nameFont);
         p.setPen(isCurrent ? Theme::inkOnGlassAccent : Theme::inkOnGlass);
-        QRectF nameRect(12, top, durX - 12 - 4, kRowH);
+        const int nameRight = durX - (m_collections ? kFavoriteW : 0);
+        QRectF nameRect(12, top, qMax(0, nameRight - 12 - 4), kRowH);
         p.drawText(nameRect, Qt::AlignVCenter | Qt::AlignLeft | Qt::TextShowMnemonic,
                    p.fontMetrics().elidedText(name, Qt::ElideMiddle, int(nameRect.width())));
+
+        if (m_collections) {
+            const bool favorite = m_collections->isFavorite(t.identityKey());
+            Skin::drawGlyph(&p, favorite ? Skin::Glyph::HeartFilled : Skin::Glyph::HeartOutline,
+                            QRectF(favoriteRect(row)), favorite ? Theme::inkOnGlassAccent : Theme::inkOnGlassSoft,
+                            14.0 / kRowH);
+        }
 
         // 时长列：右对齐、等宽数字；电台「直播」，未知「...」
         QString durText;
@@ -240,6 +270,17 @@ QList<int> PlaylistView::selectedRows() const {
 void PlaylistView::mousePressEvent(QMouseEvent *event) {
     if (event->button() == Qt::LeftButton) {
         const int row = rowAtPos(event->pos());
+        m_ignoreFavoriteRelease = false;
+        if (favoriteHit(event->pos(), row)) {
+            m_favoritePress = true;
+            m_favoriteCancelled = false;
+            m_favoriteKey = m_tracks[row].identityKey();
+            m_pressPos = event->pos();
+            m_pressing = m_dragging = false;
+            m_dragTarget = -1;
+            event->accept();
+            return;
+        }
         selectAt(row, event->modifiers());
         // 按下在有效行上→记为潜在拖拽起点（选中行不在选区内时 selectAt 已收到单行）
         if (row >= 0) {
@@ -253,6 +294,12 @@ void PlaylistView::mousePressEvent(QMouseEvent *event) {
 }
 
 void PlaylistView::mouseMoveEvent(QMouseEvent *event) {
+    if (m_favoritePress) {
+        if ((event->pos() - m_pressPos).manhattanLength() >= QApplication::startDragDistance())
+            m_favoriteCancelled = true;
+        event->accept();
+        return;
+    }
     if (m_pressing && (event->buttons() & Qt::LeftButton)) {
         if (!m_dragging && (event->pos() - m_pressPos).manhattanLength() >= QApplication::startDragDistance())
             m_dragging = true;
@@ -264,6 +311,11 @@ void PlaylistView::mouseMoveEvent(QMouseEvent *event) {
     }
     // 非拖拽：维护 hover 行（只在变化时重绘）。
     const int hr = rowAtPos(event->pos());
+    const bool heart = favoriteHit(event->pos(), hr);
+    viewport()->setCursor(heart ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    viewport()->setToolTip(heart ? (m_collections->isFavorite(m_tracks[hr].identityKey()) ? QStringLiteral("取消收藏")
+                                                                                          : QStringLiteral("加入收藏"))
+                                 : QString());
     if (hr != m_hoverRow) {
         m_hoverRow = hr;
         viewport()->update();
@@ -272,6 +324,8 @@ void PlaylistView::mouseMoveEvent(QMouseEvent *event) {
 }
 
 void PlaylistView::leaveEvent(QEvent *event) {
+    viewport()->unsetCursor();
+    viewport()->setToolTip({});
     if (m_hoverRow != -1) {
         m_hoverRow = -1;
         viewport()->update();
@@ -281,6 +335,29 @@ void PlaylistView::leaveEvent(QEvent *event) {
 
 void PlaylistView::mouseReleaseEvent(QMouseEvent *event) {
     if (event->button() == Qt::LeftButton) {
+        if (m_ignoreFavoriteRelease) {
+            m_ignoreFavoriteRelease = false;
+            event->accept();
+            return;
+        }
+        if (m_favoritePress) {
+            const int row = rowAtPos(event->pos());
+            const bool toggle =
+                !m_favoriteCancelled && favoriteHit(event->pos(), row) && m_tracks[row].identityKey() == m_favoriteKey;
+            const QString key = m_favoriteKey;
+            m_favoritePress = false;
+            m_favoriteKey.clear();
+            if (toggle) emit toggleFavoriteRequested(key);
+            const int hoverRow = rowAtPos(event->pos());
+            const bool heart = favoriteHit(event->pos(), hoverRow);
+            viewport()->setToolTip(heart ? (m_collections->isFavorite(m_tracks[hoverRow].identityKey())
+                                                ? QStringLiteral("取消收藏")
+                                                : QStringLiteral("加入收藏"))
+                                         : QString());
+            viewport()->update();
+            event->accept();
+            return;
+        }
         if (m_dragging) {
             const int target = rowAtPos(event->pos());
             if (target >= 0) emit reorderRequested(target);
@@ -353,6 +430,15 @@ void PlaylistView::keyPressEvent(QKeyEvent *event) {
 
 void PlaylistView::mouseDoubleClickEvent(QMouseEvent *event) {
     const int row = rowAtPos(event->pos());
+    const bool heartColumn = m_collections && viewport()->rect().contains(event->pos()) &&
+                             event->pos().x() >= viewport()->width() - kDurW - kFavoriteW &&
+                             event->pos().x() < viewport()->width() - kDurW;
+    if (heartColumn) {
+        m_ignoreFavoriteRelease = true;
+        m_favoritePress = m_pressing = m_dragging = false;
+        event->accept();
+        return;
+    }
     if (row >= 0) emit activateRow(row);
     QAbstractScrollArea::mouseDoubleClickEvent(event);
 }
@@ -363,9 +449,9 @@ void PlaylistView::wheelEvent(QWheelEvent *event) {
     verticalScrollBar()->setValue(verticalScrollBar()->value() + delta);
 }
 
-// 右键菜单：选中行上给队列 / 收藏 / 曲目 / 电台 / 移除，页级入口（添加 / 列表 / 歌单）
+// 右键菜单：选中行上给曲目 / 电台 / 移除，页级入口（添加 / 列表 / 歌单）
 // 行上与空白处都给。当前页或当前行做不到的动作直接不生成（不给灰项），判定只看
-// 集合层与视图自己的状态。本视图只弹菜单与发信号，真正动队列 / 集合 / 落盘由上层
+// 集合层与视图自己的状态。本视图只弹菜单与发信号，真正动集合 / 落盘由上层
 // （PlaylistWindow）做。
 void PlaylistView::contextMenuEvent(QContextMenuEvent *event) {
     const int row = rowAtPos(event->pos());
@@ -380,7 +466,7 @@ void PlaylistView::contextMenuEvent(QContextMenuEvent *event) {
         }
         viewport()->update();
     }
-    QMenu menu(this);
+    SkinMenu menu(this);
     buildContextMenu(menu, onRow ? row : -1);
     menu.exec(event->globalPos());
 }
@@ -404,18 +490,8 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
     if (onRow) {
         const Track t = m_tracks[row];
 
-        // —— 播放 ——
-        connect(menu.addAction(QStringLiteral("下一首播放")), &QAction::triggered, this,
-                [this, rows] { emit enqueueNextRequested(rows); });
-        connect(menu.addAction(QStringLiteral("稍后播放")), &QAction::triggered, this,
-                [this, rows] { emit enqueueLaterRequested(rows); });
-
-        // —— 收藏 / 歌单：整段选区都已在该歌单里的不再列，免得点了没反应 ——
+        // —— 歌单：整段选区都已在该歌单里的不再列 ——
         if (m_collections) {
-            menu.addSeparator();
-            const bool isFav = m_collections->isFavorite(t.identityKey());
-            connect(menu.addAction(isFav ? QStringLiteral("取消收藏") : QStringLiteral("加入收藏")),
-                    &QAction::triggered, this, [this, rows] { emit toggleFavoriteRequested(rows); });
             QMenu *lists = nullptr;
             for (const UserPlaylist &pl : m_collections->playlists().items()) {
                 const QStringList keys = m_collections->playlists().keysOf(pl.id);
@@ -424,24 +500,26 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
                     return inList.contains(track.identityKey());
                 });
                 if (alreadyThere) continue;
-                if (!lists) lists = menu.addMenu(QStringLiteral("加入歌单"));
+                if (!lists) lists = SkinMenu::addSubmenu(menu, QStringLiteral("加入歌单"));
                 const QString listId = pl.id;
                 connect(lists->addAction(pl.name), &QAction::triggered, this,
                         [this, rows, listId] { emit addToListRequested(rows, listId); });
             }
         }
 
-        // —— 曲目信息 ——
-        menu.addSeparator();
-        connect(menu.addAction(QStringLiteral("属性")), &QAction::triggered, this,
-                [this, t] { emit propertiesRequested(t); });
-        // 电台的显示名由台名（别名/内置名）盖掉字段编辑，改名走「电台 / 重命名台名…」
-        if (!t.isRadio())
+        // —— 显示信息 / 移除 / 文件 ——
+        if (!menu.isEmpty()) menu.addSeparator();
+        // 只编辑右键指向的电台；本地、CUE 与归档曲目的显示信息沿用原始元数据。
+        if (t.isRadio())
             connect(menu.addAction(QStringLiteral("编辑显示信息…")), &QAction::triggered, this,
                     [this, t] { emit editRequested(t); });
-        // 文件类只对磁盘上的实体有意义：电台没有本地路径，探不到的文件不提供转格式
+        // 媒体库是只读投影；筛选态下删的是命中页，仍可删。入口紧邻「文件」上方。
+        if (m_collections && (m_filterActive || !libraryPage))
+            connect(menu.addAction(QStringLiteral("从列表移除")), &QAction::triggered, this,
+                    [this, rows] { emit removeRequested(rows); });
+        QMenu *file = SkinMenu::addSubmenu(menu, QStringLiteral("文件"));
+        // 电台只提供属性；磁盘操作只对本地实体有意义。
         if (!t.isRadio()) {
-            QMenu *file = menu.addMenu(QStringLiteral("文件"));
             connect(file->addAction(QStringLiteral("在文件管理器中打开目录")), &QAction::triggered, this, [t] {
                 QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(t.url().toLocalFile()).absolutePath()));
             });
@@ -455,12 +533,15 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
             if (allConvertible)
                 connect(file->addAction(QStringLiteral("转换为其他格式…")), &QAction::triggered, this,
                         [this, picked] { emit convertRequested(picked); });
+            file->addSeparator();
         }
+        connect(file->addAction(QStringLiteral("属性")), &QAction::triggered, this,
+                [this, t] { emit propertiesRequested(t); });
 
         // —— 电台：台名/归属都记在地址上（R13） ——
         if (t.isRadio()) {
             menu.addSeparator();
-            QMenu *radio = menu.addMenu(QStringLiteral("电台"));
+            QMenu *radio = SkinMenu::addSubmenu(menu, QStringLiteral("电台"));
             connect(radio->addAction(QStringLiteral("修改电台地址…")), &QAction::triggered, this,
                     [this, t] { emit radioAddressRequested(t); });
             connect(radio->addAction(QStringLiteral("重试这个电台")), &QAction::triggered, this,
@@ -469,7 +550,7 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
                 radio->addSeparator();
                 connect(radio->addAction(QStringLiteral("重命名台名…")), &QAction::triggered, this,
                         [this, rows] { emit radioAliasRequested(rows); });
-                QMenu *cats = radio->addMenu(QStringLiteral("移入分类"));
+                QMenu *cats = SkinMenu::addSubmenu(*radio, QStringLiteral("移入分类"));
                 const RadioStations &rs = m_collections->radios();
                 const QString cur = rs.categoryIDOf(t.identityKey());
                 QAction *uncat = cats->addAction(QStringLiteral("未分类"));
@@ -488,18 +569,12 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
             }
         }
 
-        // —— 从列表移除：媒体库是只读投影（筛选态下删的是命中页，仍可删） ——
-        if (m_collections && (m_filterActive || !libraryPage)) {
-            menu.addSeparator();
-            connect(menu.addAction(QStringLiteral("从列表移除")), &QAction::triggered, this,
-                    [this, rows] { emit removeRequested(rows); });
-        }
     }
 
     // —— 页级动作：添加 / 列表 / 歌单 ——
     if (onRow) menu.addSeparator();
 
-    QMenu *add = menu.addMenu(QStringLiteral("添加"));
+    QMenu *add = SkinMenu::addSubmenu(menu, QStringLiteral("添加"));
     connect(add->addAction(QStringLiteral("添加文件…")), &QAction::triggered, this,
             [this] { emit addFilesRequested(); });
     connect(add->addAction(QStringLiteral("添加文件夹…")), &QAction::triggered, this,
@@ -507,14 +582,14 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
     connect(add->addAction(QStringLiteral("添加网络电台…")), &QAction::triggered, this,
             [this] { emit addRadioRequested(); });
 
-    QMenu *listMenu = menu.addMenu(QStringLiteral("列表"));
+    QMenu *listMenu = SkinMenu::addSubmenu(menu, QStringLiteral("列表"));
     // 没在播 / 不在本页时「定位当前曲」无处可去
     if (m_currentRow >= 0)
         connect(listMenu->addAction(QStringLiteral("定位当前曲")), &QAction::triggered, this,
                 &PlaylistView::scrollToCurrent);
     // 排序写的是这一页的存储序：派生页（媒体库/电台/最近）没有序可写，筛选态也不能写
     if (sortablePage && !m_filterActive && !m_tracks.isEmpty()) {
-        QMenu *sort = listMenu->addMenu(QStringLiteral("排序"));
+        QMenu *sort = SkinMenu::addSubmenu(*listMenu, QStringLiteral("排序"));
         const struct SortRow {
             const char *name;
             int key;
@@ -531,7 +606,7 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
         connect(sort->addAction(QStringLiteral("还原原序")), &QAction::triggered, this,
                 [this] { emit sortRequested(-1); });
     }
-    QMenu *mode = listMenu->addMenu(QStringLiteral("播放模式"));
+    QMenu *mode = SkinMenu::addSubmenu(*listMenu, QStringLiteral("播放模式"));
     const struct ModeRow {
         const char *name;
         PlayMode mode;
@@ -548,8 +623,6 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
         const PlayMode pickedMode = r.mode;
         connect(act, &QAction::triggered, this, [this, pickedMode] { m_controller->setMode(pickedMode); });
     }
-    connect(listMenu->addAction(QStringLiteral("待播队列")), &QAction::triggered, this,
-            [this] { emit queueRequested(); });
     // 空页没什么可清，媒体库只读，筛选态下清空会把命中之外的也带走
     if (m_collections && !m_filterActive && !libraryPage && !m_tracks.isEmpty())
         connect(listMenu->addAction(QStringLiteral("清空当前列表")), &QAction::triggered, this,
@@ -557,7 +630,7 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
 
     // 「歌单」：新建 / 导入 / 导出 / 重命名 / 删除这些定义级动作由上层按当前页现填，
     // 它才知道这一页真能做哪些；整块为空就把子菜单摘掉。
-    QMenu *playlistMenu = menu.addMenu(QStringLiteral("歌单"));
+    QMenu *playlistMenu = SkinMenu::addSubmenu(menu, QStringLiteral("歌单"));
     emit playlistMenuRequested(playlistMenu);
     if (playlistMenu->isEmpty()) menu.removeAction(playlistMenu->menuAction());
 }

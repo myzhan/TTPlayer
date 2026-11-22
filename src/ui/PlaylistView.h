@@ -1,7 +1,7 @@
 #pragma once
 
-// 播放列表（全自绘，照经典皮肤）：不显示系统表头，两列 ——
-// 「序号. 艺术家 - 标题」+「时长」，当前行前面画 ▶ 并用亮蓝高亮。
+// 全自绘列表：名称、收藏爱心、时长；当前行前面画 ▶。
+// 收藏命中独立于行选区与拖拽，按稳定曲目身份派发。
 // 只管高亮与选中，不负责推进（PlayQueue 是唯一真相，三层约束）。
 
 #include "playback/PlayerController.h"
@@ -38,6 +38,8 @@ public:
     struct Scene {
         QStringList selected;
         int scroll = 0;
+        QString primary;
+        QString anchor;
     };
     Scene scene() const;
     void restoreScene(const Scene &scene);
@@ -60,19 +62,16 @@ signals:
     void radioRetryRequested(const Track &track);
     void activateRow(int row);                          // 双击
     void removeRequested(const QList<int> &rows);       // 右键「从列表移除」（可多选）
-    void enqueueNextRequested(const QList<int> &rows);  // 右键「下一首播放」
-    void enqueueLaterRequested(const QList<int> &rows); // 右键「稍后播放」
     // 工具条已收进右键：页级的添加 / 列表 / 歌单三个子菜单由上层执行或现填
     void addFilesRequested();
     void addFolderRequested();
     void addRadioRequested();
     void sortRequested(int key); // 0-3 升序、4-7 降序、-1 还原
-    void queueRequested();       // 「列表 / 待播队列」
     void clearListRequested();   // 「列表 / 清空当前列表」
     /// 「歌单」子菜单：本视图只管建菜单，内容由上层按当前页现填（哪些动作这一页真能做只有它知道）
     void playlistMenuRequested(QMenu *submenu);
     void addToListRequested(const QList<int> &rows, const QString &listId); // @fav 或自建歌单 id
-    void toggleFavoriteRequested(const QList<int> &rows);                   // 收藏 / 取消收藏
+    void toggleFavoriteRequested(const QString &key);                       // 行内爱心只切换单个身份。
     void radioAliasRequested(const QList<int> &rows); // 右键电台行「重命名台名…」（上层弹框取名）
     void radioMoveCategoryRequested(const QList<int> &rows,
                                     const QString &catId); // 移入分类（catId=未分类 id 则摘归属）
@@ -100,9 +99,11 @@ private:
     void updateScrollRange();
     int rowAtPos(const QPoint &p) const;
     int visibleRows() const;
+    QRect favoriteRect(int row) const;
+    bool favoriteHit(const QPoint &pos, int row) const;
 
     PlayerController *m_controller;
-    Collections *m_collections = nullptr; // 只为「加入歌单」子菜单，可为空
+    Collections *m_collections = nullptr; // 歌单和收藏的真相，可为空。
     QList<Track> m_tracks;
     QString m_emptyHint;    // 当前页空着时的中央提示
     int m_currentRow = -1;  // 正在播的行（identityKey 匹配）
@@ -112,6 +113,8 @@ private:
     int m_hoverRow = -1;    // 鼠标悬停行（统一毛玻璃：静止不画、仅 hover 行轻亮）
 
     // 拖拽内部移动（按下→超过拖动阈值→释放到目标行）
+    bool m_favoritePress = false, m_favoriteCancelled = false, m_ignoreFavoriteRelease = false;
+    QString m_favoriteKey;
     bool m_pressing = false;
     bool m_dragging = false;
     QPoint m_pressPos;
@@ -119,4 +122,5 @@ private:
 
     static constexpr int kRowH = 24;
     static constexpr int kDurW = 62;
+    static constexpr int kFavoriteW = 24;
 };

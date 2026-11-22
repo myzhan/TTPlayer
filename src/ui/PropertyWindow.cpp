@@ -78,7 +78,7 @@ QList<QPair<QString, QString>> PropertyWindow::linesFor(const Track &t) {
 }
 
 PropertyWindow::PropertyWindow(const Track &track, PlayerController *ctl, QWidget *parent)
-    : SkinWindow(QStringLiteral("媒体文件信息"), false, parent) {
+    : SkinWindow(QStringLiteral("媒体文件信息"), TitleButtons::Close, parent) {
     setAttribute(Qt::WA_DeleteOnClose);
     // 辅助窗不跟随半透明：信息行与主面板重叠时不串底。
     setGlassTransparencyFollows(false);

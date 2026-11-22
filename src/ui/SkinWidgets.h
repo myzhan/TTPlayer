@@ -13,12 +13,25 @@
 #include <QColor>
 #include <QVector>
 #include <QVariant>
+#include <QMenu>
 
 class QPainter;
 class QMouseEvent;
 class QPaintEvent;
 class QStackedWidget;
 class QLineEdit;
+
+// 菜单只给背景加玻璃 alpha，文字及 QAction 交互仍由 QMenu 负责。
+class SkinMenu : public QMenu {
+    Q_OBJECT
+public:
+    explicit SkinMenu(QWidget *parent = nullptr);
+    static SkinMenu *addSubmenu(QMenu &parent, const QString &title);
+    float backgroundAlpha() const;
+
+protected:
+    void paintEvent(QPaintEvent *) override;
+};
 
 // —— 分节容器（替 QGroupBox）：小标题 + 右侧发丝线，内容装进 contentLayout ——
 class SkinSection : public QWidget {

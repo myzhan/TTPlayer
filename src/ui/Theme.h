@@ -41,7 +41,7 @@ extern const QColor inkOnGlass, inkOnGlassSoft, inkOnGlassAccent;
 
 } // namespace Theme
 
-/// 字体（system 13/12/11 + bold 13）
+/// 字体（Windows 12/11/10 + bold 12；其他平台 13/12/11 + bold 13）
 /// 不锁 macOS 专有的 .AppleSystemUIFont（Windows/Linux 解析不到会退到各自系统字体），
 /// 而是给一组跨平台优先级字体栈 + sans-serif 兜底（消除 "missing font family" 告警）。
 namespace Fonts {

@@ -3,7 +3,7 @@
 当前产品位于 `src/`，使用 C++20 / Qt 6 Widgets / FFmpeg / libarchive；Windows/Linux 输出使用 SDL3，macOS 按 UID 打开 HAL AudioUnit。
 修改行为时，应对照 `src/testing` 自检，不能仅以编译成功作为验收。
 
-**用户确认的视觉基线是当前 Qt 深色样式。Windows 中文字体按用户要求优先 Microsoft YaHei UI（普通微软雅黑兜底），独立的时间、百分比、均衡器数字读数用 Segoe UI；中文与数字读数分别按实际字体度量，保留既有字号和字重。所有品牌入口统一使用 AppIcon 耳机图标，音量读数修复只调整控件内部间距。macOS/Linux 字体及其余配色、布局、透明度规则和控件外观保持不变。**
+**用户确认的视觉基线是当前 Qt 深色样式。Windows 中文字体按用户要求优先 Microsoft YaHei UI（普通微软雅黑兜底），独立的时间、百分比、均衡器数字读数用 Segoe UI；中文与数字读数分别按实际字体度量；Windows 基础/正文/小读数字号为 12/11/10 pt，标题为粗体 12 pt（相对原字号统一减 1 pt），保留既有字重。所有品牌入口统一使用 AppIcon 耳机图标，音量读数修复只调整控件内部间距。macOS/Linux 字体及其余配色、布局、透明度规则和控件外观保持不变。**
 
 ## 必须遵守
 
@@ -91,6 +91,8 @@ Windows Release 安装由 CMake 统一把可再分发 VC DLL 放进 `bin/`（与
 Windows 10+ 的 UCRT 等系统组件仍由系统提供。Windows exe 图标必须由构建期复用 AppIcon
 生成并嵌入资源，不能只设置运行时窗口图标；副面板使用主窗所属工具窗，任务栏只保留主窗口。
 打包探针还须使用 `windows` 平台插件检查真实 HWND 与图标，不能以 offscreen 代替。
+Windows 字体后端固定为 FreeType：Qt 部署完成后在 `qt.conf` 的 `[Platforms]` 下添加
+`WindowsArguments = fontengine=freetype`，保留原有 `[Paths]`；Windows 字号按上述约定减 1 pt，字体族、字重和透明度规则不变。
 
 ### 运行当前 Qt 版
 
@@ -125,7 +127,7 @@ python3 scripts/lint.py format --fix --all   # 一次性整仓重排（改规则
 ## 验证入口
 
 ```sh
-./scripts/selftest.sh                     # smoke: lyric / queue / spectrum
+./scripts/selftest.sh                     # smoke: lyric / playback / spectrum
 ./scripts/selftest.sh affected            # 本地首选：按改动文件挑档
 ./scripts/selftest.sh UI SYSTEM           # 影响面明确时直接点名 suite
 ./scripts/selftest.sh review gapless gain
@@ -172,7 +174,8 @@ python3 scripts/package.py               # 只生成本地 build/dist，不发�
 - worker 必须有 owner。销毁先取消、收束 worker，最后释放接收对象；SDL 退出晚于引擎析构。
 - EQ、音量、RG 与输出参数统一走引擎锁接口；不要重新暴露可由 UI 直接写的 DSP 引用。
 - 无缝在输出侧接 PCM，不能退回 EOF 后等 UI 再换曲；切段须携带队列条目身份和各自 RG。
-- 下一首播放 / 稍后播放保留 QueueSource；拖动不改来路。浏览页不重建播放上下文。
+- PlayQueue 仅为内部基础播放上下文，不提供插队、稍后播放或待播面板；浏览页不重建播放上下文，预取与自然推进共用预选 UUID，随机回退沿实际历史。
+- 旧现场来源只由 LibraryStore 适配器过滤和重映射；SQLite v1 的 source 列保留兼容，新写恒为 0，不因删除待播能力升级 schema。
 
 ## 数据与界面
 
@@ -189,8 +192,9 @@ python3 scripts/package.py               # 只生成本地 build/dist，不发�
 - 保存失败必须反馈；坏档（JSON 或 SQLite）备份失败不得覆盖原文件。
 - 搜索先保存选区/滚动现场，退出按身份恢复；搜索删除摘掉可写页引用，媒体库保留。
 - 改窗口尺寸/面板划分必须递增 MainWindow 中 kSkinLayoutVersion。
-- × 直接退出；— 隐藏整组继续播放。无托盘平台保留最小化恢复入口。
+- 主面板 × 直接退出；— 隐藏整组继续播放，恢复仅重开隐藏前可见面板。无托盘平台保留最小化恢复入口。列表、均衡器、歌词标题条不创建最小化/关闭按钮，由主面板分别控制开合；保留标题、拖动、缩放、吸附和浮动。
 - 频谱保持 24 fps，隐藏/不可曝光时停绘制及 analyzer；64 柱采用合并路径绘制。
-- 保持既有深色 GlassStyle：主窗/播放列表/均衡器/歌词四个主面板的壳、槽、按钮共用同一 alpha；设置/属性/待播队列/专辑封面等辅助窗不跟随透明度、始终保持不透明（重叠时文字才读得清）；不得改动这套统一透明度。
+- 保持既有深色 GlassStyle：主窗/播放列表/均衡器/歌词四个主面板的壳、槽、按钮共用同一 alpha；设置/属性/转换/专辑封面等辅助窗不跟随透明度、始终保持不透明。SkinMenu 单独绘制背景，alpha=min(1, glassAlpha+0.15)，玻璃关闭时为 1；文字/勾选/箭头不透明，启用项悬停或键盘选中叠 accent 0.28 高亮，全部子菜单经统一工厂创建，托盘原生菜单不变。
+- 收藏以列表时长左侧矢量爱心按 identityKey 单项切换，不放右键菜单；不改变选区/Shift 锚点，不触发播放或拖拽，刷新保留搜索和滚动现场。
 - 封面最多解码到 256 px，显示小档 112 px，缓存预算 8 MiB；热路径不重新开音频取图片字节。
 - README 面向用户，构建、自检、目录结构只写本文与 docs。

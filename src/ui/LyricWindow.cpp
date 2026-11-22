@@ -6,7 +6,7 @@
 #include <QPainterPath>
 
 LyricWindow::LyricWindow(PlayerController *controller, QWidget *parent)
-    : SkinWindow(QStringLiteral("歌词"), true, parent), m_controller(controller) {
+    : SkinWindow(QStringLiteral("歌词"), TitleButtons::None, parent), m_controller(controller) {
     resize(480, 260 + 30); // 高度补上自绘标题条（~30）
     setMinimumSize(320, 160);
 
@@ -61,7 +61,9 @@ void LyricWindow::paintBody(QPainter *p, const QRectF &r) {
         QColor color = Theme::inkOnGlassSoft;
         if (dist == 0) {
             f = Fonts::title;
+#ifndef Q_OS_WIN
             f.setPixelSize(17);
+#endif
             f.setBold(true);
             color = Theme::inkOnGlassAccent;
         } else if (dist == 1) {

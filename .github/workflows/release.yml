@@ -85,7 +85,9 @@ jobs:
           cmake --build build/release -j 4
       - name: Install into AppDir
         # Qt 的 Linux 部署脚本会把 Qt 库与 RPATH 写进 usr/lib；Qt 插件由后面的 linuxdeploy-plugin-qt 补齐。
-        run: cmake --install build/release --prefix build/AppDir/usr
+        run: |
+          # Qt 部署要求安装前缀为绝对路径；AppDir 布局保持不变。
+          cmake --install build/release --prefix "$GITHUB_WORKSPACE/build/AppDir/usr"
       - name: Build AppImage
         env:
           VERSION: ${{ steps.version.outputs.version }}

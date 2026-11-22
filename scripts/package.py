@@ -6,6 +6,7 @@
     build/dist/       cmake --install 的结果（macOS 为 ttplayer.app）
 """
 import argparse
+import configparser
 import os
 from pathlib import Path
 import platform
@@ -156,14 +157,29 @@ def verify_windows_ui(exe, env, temporary):
     print(f"WINDOWS_NATIVE_UI PASS={passed} SKIP={skipped}")
 
 
+def verify_windows_qt_conf(bin_dir):
+    """确保分发包通过 qt.conf 使用用户实测通过的 FreeType 字体后端。"""
+    path = Path(bin_dir) / "qt.conf"
+    config = configparser.ConfigParser(interpolation=None)
+    try:
+        with path.open(encoding="utf-8-sig") as source:
+            config.read_file(source)
+    except (OSError, configparser.Error) as error:
+        raise RuntimeError(f"Windows 分发的 qt.conf 缺失或无法解析：{path}") from error
+    if config.get("Platforms", "WindowsArguments", fallback="").strip() != "fontengine=freetype":
+        raise RuntimeError(f"Windows 分发未配置 FreeType 字体后端：{path}")
+    print("WINDOWS_QT_CONF PASS fontengine=freetype")
+
+
 def verify_windows(dist):
-    """发布门禁：DLL 齐全、隔离环境冒烟、核对目标进程的 app-local CRT 路径。"""
+    """发布门禁：字体配置、DLL 齐全、隔离环境冒烟、核对 app-local CRT 路径。"""
     if platform.system() != "Windows":
         raise RuntimeError("Windows 分发验证必须在 Windows x64 上运行")
     import struct
     if struct.calcsize("P") != 8:
         raise RuntimeError("Windows x64 分发验证需要 64 位 Python")
     bin_dir = (Path(dist) / "bin").resolve()
+    verify_windows_qt_conf(bin_dir)
     for name in ["ttplayer.exe", *sorted(WINDOWS_CRT)]:
         if not (bin_dir / name).is_file():
             raise RuntimeError(f"Windows 分发缺少 {bin_dir / name}")

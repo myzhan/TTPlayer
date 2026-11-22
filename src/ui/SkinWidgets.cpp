@@ -44,6 +44,47 @@ void drawChevron(QPainter *p, const QRectF &box, bool up, const QColor &color) {
 }
 } // namespace
 
+SkinMenu::SkinMenu(QWidget *parent) : QMenu(parent) {
+    setWindowFlags(windowFlags() | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
+    setAttribute(Qt::WA_TranslucentBackground);
+    setAutoFillBackground(false);
+    setStyleSheet(QStringLiteral("QMenu{background:transparent;color:%1;border:1px solid transparent;}"
+                                 "QMenu::item{background:transparent;}"
+                                 "QMenu::item:selected:enabled{background:rgba(%2,%3,%4,71);color:%1;}"
+                                 "QMenu::item:disabled{color:%5;background:transparent;}"
+                                 "QMenu::separator{height:1px;background:%6;margin:3px 5px;}")
+                      .arg(Theme::inkOnGlass.name())
+                      .arg(Theme::inkOnGlassAccent.red())
+                      .arg(Theme::inkOnGlassAccent.green())
+                      .arg(Theme::inkOnGlassAccent.blue())
+                      .arg(Theme::inkOnGlassSoft.name())
+                      .arg(Theme::hairline.name()));
+    connect(&GlassNotifier::instance(), &GlassNotifier::changed, this, [this] { update(); });
+}
+
+SkinMenu *SkinMenu::addSubmenu(QMenu &parent, const QString &title) {
+    auto *menu = new SkinMenu(&parent);
+    menu->setTitle(title);
+    parent.addMenu(menu);
+    return menu;
+}
+
+float SkinMenu::backgroundAlpha() const {
+    return GlassStyle::enabled() ? qMin(1.0f, GlassStyle::glassAlpha() + 0.15f) : 1.0f;
+}
+
+void SkinMenu::paintEvent(QPaintEvent *event) {
+    {
+        QPainter p(this);
+        p.setCompositionMode(QPainter::CompositionMode_Source);
+        p.fillRect(event->rect(), Qt::transparent);
+        p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+        Painter::drawBody(&p, QRectF(rect()), Theme::windowTop, Theme::windowBottom, backgroundAlpha(), 0,
+                          Theme::skinEdge, false);
+    }
+    QMenu::paintEvent(event);
+}
+
 // ————————————————————————————————————————————————
 // SkinSection
 // ————————————————————————————————————————————————

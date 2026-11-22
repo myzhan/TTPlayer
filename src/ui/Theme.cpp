@@ -88,7 +88,8 @@ static QFont uiFont(int pt, bool bold) {
                    QStringLiteral("Noto Sans"), QStringLiteral("DejaVu Sans"), QStringLiteral("PingFang SC"),
                    QStringLiteral("Microsoft YaHei"), QStringLiteral("sans-serif")});
 #ifdef Q_OS_WIN
-    // Windows 中文优先微软雅黑 UI，普通微软雅黑兜底；保留字号和字重，其他平台不变。
+    // Windows 中文优先微软雅黑 UI，普通微软雅黑兜底；字号减 1 pt，字重和其他平台不变。
+    --pt;
     QStringList families = f.families();
     families.removeAll(QStringLiteral("Microsoft YaHei"));
     families.prepend(QStringLiteral("Microsoft YaHei"));

@@ -24,7 +24,6 @@ class PlaylistWindow;
 class EqWindow;
 class LyricWindow;
 class CoverWindow;
-class QueueWindow;
 class SkinDock;
 class QFileSystemWatcher;
 class QTimer;
@@ -80,7 +79,6 @@ public:
     void toggleEqPanel();
     void toggleLyricPanel();
     void toggleCoverPanel();
-    void toggleQueuePanel();
     void applyPinTop(bool on) { togglePinTop(on); } // 探针：驱动真实「置顶整组」逻辑
     int probeGroupVisible() const;                  // 当前可见的整组窗数（含主窗）
     int probeGroupPinned() const;                   // 其中带 stays-on-top 的数
@@ -104,6 +102,7 @@ private:
          m_saveAfterRestore = false;
     uint64_t m_restoreGeneration = 0;
     QStringList m_deferredImports;
+    QHash<QString, QJsonObject> m_deferredRadioEdits;
     std::shared_ptr<std::atomic<bool>> m_restoreCancel;
     std::shared_ptr<std::atomic<bool>> m_watchCancel;
     uint64_t m_watchGeneration = 0;
@@ -114,8 +113,9 @@ private:
     friend class RegressionTests;
     void openFiles();
     void openFolder(); // 播放列表右键「添加文件夹…」：选目录后整棵导入
-    void addRadioPrompt(); // 右键「添加网络电台…」：问地址→走同一条 loadPaths 通路建成 radio Track
-    void loadDirOrFiles(const QStringList &paths);
+    void addRadioPrompt(); // 地址与显示信息一起填，仍走统一后台导入通路。
+    void editRadioPrompt(const Track &track);
+    void loadDirOrFiles(const QStringList &paths, const QHash<QString, QJsonObject> &radioEdits = {});
     void syncNowPlaying();
     void syncState();
     void applyVolume();
@@ -160,7 +160,6 @@ private:
     EqWindow *m_eqWindow = nullptr;       // 懒建
     LyricWindow *m_lyricWindow = nullptr; // 懒建
     CoverWindow *m_coverWindow = nullptr; // 懒建（点封面格开合）
-    QueueWindow *m_queueWindow = nullptr; // 懒建（待播队列面板，F03）
 
     SkinDock *m_dock = nullptr; // 主窗锚点 + 列表/均衡器/歌词自由拖动、靠近才磁吸
     bool m_dockReady = false;

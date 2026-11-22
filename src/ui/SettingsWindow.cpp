@@ -33,7 +33,7 @@ TTButton *mkTextBtn(const QString &t, QWidget *parent) {
 } // namespace
 
 SettingsWindow::SettingsWindow(MainWindow *main, QWidget *parent)
-    : SkinWindow(QStringLiteral("设置"), false, parent), m_main(main) {
+    : SkinWindow(QStringLiteral("设置"), TitleButtons::Close, parent), m_main(main) {
     // 设置窗不跟随半透明：拖透明度滑块时自身始终读得清，只有四个主面板变化。
     setGlassTransparencyFollows(false);
     resize(480, 440 + 30); // 高度补上自绘标题条（~30）

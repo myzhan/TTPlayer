@@ -20,7 +20,6 @@
 #include <QJsonObject>
 #include <QList>
 #include <QMap>
-#include <QPair>
 #include <QString>
 #include <QStringList>
 #include <array>
@@ -79,14 +78,14 @@ struct Loaded {
     QList<RadioCategory> radioCategories;     // 用户建的分类，按创建顺序
     QHash<QString, QString> radioAssignments; // 地址 → 分类 id（未分类不占位）
     // R03 播放现场恢复：旧档缺这些键 → 无现场（全默认）。
-    // resumeQueue 每条 = (token, QueueSource 整型 0=Basic/1=Later/2=Next)，token 由 Collections::resolveToken 还原。
+    // resumeQueue 是基础播放序列的 token；旧来源只在读档适配器中处理。
     bool resumeValid = false;        // 上次确实停在一个播放上下文上
     QString resumeTrackKey;          // 正在播那条的 token（冗余保存，便于诊断/兜底）
     double resumePosition = 0;       // 段内秒
     bool resumeWasPlaying = false;   // 关机瞬间是否在播（配合 autoResumePlay 才决定开不开声）
     int resumeCursor = -1;           // 游标下标（-1 = 无）
     QList<int> resumeHistoryIndexes; // 随机回退栈（指向 resumeQueue 的下标）
-    QList<QPair<QString, int>> resumeQueue;
+    QStringList resumeQueue;
 };
 
 /// 旧 JSON 存档路径（QStandardPaths::AppDataLocation / state.json）。
@@ -108,7 +107,7 @@ Loaded load();
 /// 把 Loaded 写入库（settings / 列表 / 现场全量替换，事务内完成）
 bool save(const Loaded &values);
 
-/// 只写播放现场（队列+游标+历史+位置）：每 5 秒一次的路径，不动设置与列表
+/// 只写播放现场（基础序列+游标+历史+位置）：每 5 秒一次，不动设置与列表
 bool saveResume(const Loaded &values);
 
 /// 关闭当前线程的库连接。删库 / 换档 / 自检重建前必须先关，

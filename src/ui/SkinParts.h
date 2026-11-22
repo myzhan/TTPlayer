@@ -36,6 +36,8 @@ enum class Glyph {
     EQ,
     Lyric,
     Search,
+    HeartOutline,
+    HeartFilled,
     Add, // 面板入口
     Check,
     Volume,

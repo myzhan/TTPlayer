@@ -37,7 +37,8 @@ constexpr int kSearchDebounceMs = 120;
 } // namespace
 
 PlaylistWindow::PlaylistWindow(PlayerController *controller, Collections *collections, QWidget *parent)
-    : SkinWindow(QStringLiteral("播放列表"), true, parent), m_controller(controller), m_collections(collections) {
+    : SkinWindow(QStringLiteral("播放列表"), TitleButtons::None, parent), m_controller(controller),
+      m_collections(collections) {
     resize(460, 380 + 30); // 与主窗/均衡器同一紧凑默认宽（+30 为标题条高度）
 
     auto *root = new QHBoxLayout(body());
@@ -85,7 +86,7 @@ PlaylistWindow::PlaylistWindow(PlayerController *controller, Collections *collec
     connect(m_searchToggle, &QWidget::customContextMenuRequested, this,
             [formats](const QPoint &) { formats->click(); });
     connect(formats, &TTButton::clicked, this, [this, formats] {
-        QMenu menu(this);
+        SkinMenu menu(this);
         for (const QString &format : TrackFilter::formatOptions(m_collections->allTracks())) {
             QAction *action = menu.addAction(format);
             action->setCheckable(true);
@@ -176,7 +177,7 @@ PlaylistWindow::PlaylistWindow(PlayerController *controller, Collections *collec
         if (!isRadio && !isCat) return; // 分类入口只在电台页上给，别处不给（会让人以为能往任意页建）
         const QString catId = isCat ? Collections::radioCatIdOf(viewId) : QString();
         const bool realCat = isCat && catId != RadioStations::uncategorizedID;
-        QMenu menu(this);
+        SkinMenu menu(this);
         QAction *newCat = menu.addAction(QStringLiteral("新建电台分类…"));
         QAction *renameCat = nullptr, *delCat = nullptr;
         if (realCat) {
@@ -234,7 +235,6 @@ PlaylistWindow::PlaylistWindow(PlayerController *controller, Collections *collec
     connect(m_view, &PlaylistView::addFilesRequested, this, &PlaylistWindow::addRequested);
     connect(m_view, &PlaylistView::addFolderRequested, this, &PlaylistWindow::addFolderRequested);
     connect(m_view, &PlaylistView::addRadioRequested, this, &PlaylistWindow::radioRequested);
-    connect(m_view, &PlaylistView::queueRequested, this, &PlaylistWindow::queueRequested);
     connect(m_view, &PlaylistView::sortRequested, this, [this](int key) { sortView(key); });
     // 右键「歌单」子菜单：视图建菜单，内容由本窗按当前页现填
     connect(m_view, &PlaylistView::playlistMenuRequested, this, &PlaylistWindow::buildListMenu);
@@ -253,22 +253,6 @@ PlaylistWindow::PlaylistWindow(PlayerController *controller, Collections *collec
     // 拖拽重排当前页
     connect(m_view, &PlaylistView::reorderRequested, this, &PlaylistWindow::reorderCurrentView);
 
-    // 右键播放类：直接走控制器的队列 API（不打断当前曲），多选按选区升序整段入队
-    connect(m_view, &PlaylistView::enqueueNextRequested, this, [this](const QList<int> &rows) {
-        const QList<Track> cur = m_controller->tracks();
-        QList<Track> picked;
-        for (const int row : rows)
-            if (row >= 0 && row < cur.size()) picked.append(cur[row]);
-        if (!picked.isEmpty()) m_controller->enqueueNext(picked);
-    });
-    connect(m_view, &PlaylistView::enqueueLaterRequested, this, [this](const QList<int> &rows) {
-        const QList<Track> cur = m_controller->tracks();
-        QList<Track> picked;
-        for (const int row : rows)
-            if (row >= 0 && row < cur.size()) picked.append(cur[row]);
-        if (!picked.isEmpty()) m_controller->enqueueLater(picked);
-    });
-
     // 右键集合类：加入指定页（@fav 或自建歌单），已在页内不重复加（addKeys/toggle 自带去重）
     connect(m_view, &PlaylistView::addToListRequested, this, [this](const QList<int> &rows, const QString &listId) {
         const QList<Track> cur = m_controller->tracks();
@@ -285,16 +269,10 @@ PlaylistWindow::PlaylistWindow(PlayerController *controller, Collections *collec
         if (m_collections->viewId() == listId && !m_searchOpen) showPage(listId);
         emit collectionsChanged();
     });
-    connect(m_view, &PlaylistView::toggleFavoriteRequested, this, [this](const QList<int> &rows) {
-        const QList<Track> cur = m_controller->tracks();
-        bool any = false;
-        for (const int row : rows)
-            if (row >= 0 && row < cur.size()) {
-                m_collections->toggleFavorite(cur[row].identityKey());
-                any = true;
-            }
-        if (!any) return;
-        if (m_collections->viewId() == Collections::kFavViewId && !m_searchOpen) showPage(Collections::kFavViewId);
+    connect(m_view, &PlaylistView::toggleFavoriteRequested, this, [this](const QString &key) {
+        if (key.isEmpty()) return;
+        m_collections->toggleFavorite(key);
+        refreshFavorites();
         emit collectionsChanged();
     });
 
@@ -433,6 +411,20 @@ void PlaylistWindow::refreshGroups() {
     m_groups->setCurrentRow(wantRow >= 0 ? wantRow : fallbackRow);
     // 同步当前页的空提示（启动/重扫可能没走过 showPage）
     m_view->setEmptyHint(Collections::emptyHintFor(m_collections->viewId()));
+}
+
+void PlaylistWindow::refreshFavorites() {
+    const auto currentScene = m_view->scene();
+    refreshGroups();
+    if (m_beforeSearch) {
+        m_debounce->stop();
+        applySearch();
+    } else {
+        m_controller->setTracks(m_collections->currentTracks());
+        updateInfo();
+    }
+    m_view->restoreScene(currentScene);
+    m_view->viewport()->update();
 }
 
 void PlaylistWindow::showPage(const QString &viewId) {

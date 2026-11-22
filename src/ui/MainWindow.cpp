@@ -7,7 +7,6 @@
 #include "EqWindow.h"
 #include "LyricWindow.h"
 #include "CoverWindow.h"
-#include "QueueWindow.h"
 #include "PropertyWindow.h"
 #include "ConvertWindow.h"
 #include "SkinDock.h"
@@ -41,6 +40,9 @@
 #include <QLinearGradient>
 #include <QFileDialog>
 #include <QInputDialog>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
 #include <QMessageBox>
 #include <QLineEdit>
 #include <QFileInfo>
@@ -56,7 +58,7 @@
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QWindow>
-#include <QMenu>
+#include "SkinWidgets.h"
 #include <QShortcut>
 #include <QKeySequence>
 #include <functional>
@@ -93,6 +95,52 @@ bool pathWithinRoot(const QString &path, const QString &root) {
     const QString relative = QDir(root).relativeFilePath(path);
     return !QDir::isAbsolutePath(relative) && relative != QLatin1String("..") &&
            !relative.startsWith(QLatin1String("../"));
+}
+
+// 添加与编辑共用一张表单；确认前不改变集合，取消时整组字段一起丢弃。
+std::optional<Track> promptRadioInfo(QWidget *parent, const Track &current = {}) {
+    const bool adding = current.isNull();
+    QDialog dialog(parent);
+    dialog.setObjectName(QStringLiteral("radioInfoDialog"));
+    dialog.setWindowTitle(adding ? QStringLiteral("添加网络电台") : QStringLiteral("编辑显示信息"));
+    auto *root = new QVBoxLayout(&dialog);
+    auto *form = new QFormLayout();
+    auto field = [&](const char *name, const QString &label, const QString &value) {
+        auto *edit = new QLineEdit(value, &dialog);
+        edit->setObjectName(QString::fromLatin1(name));
+        form->addRow(label, edit);
+        return edit;
+    };
+    auto *address = field("radioAddress", QStringLiteral("电台地址（http / https）"),
+                          adding ? QString() : current.url().toString());
+    address->setReadOnly(!adding);
+    auto *title = field("radioTitle", QStringLiteral("标题 / 台名"), adding ? QString() : current.title());
+    title->setMaxLength(RadioStations::aliasLimit);
+    title->setPlaceholderText(QStringLiteral("留空使用内置台名或地址"));
+    auto *artist = field("radioArtist", QStringLiteral("艺术家"), adding ? QString() : current.artist());
+    auto *album = field("radioAlbum", QStringLiteral("专辑"), adding ? QString() : current.album());
+    root->addLayout(form);
+    auto *error = new QLabel(&dialog);
+    error->setObjectName(QStringLiteral("radioAddressError"));
+    error->setWordWrap(true);
+    root->addWidget(error);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    root->addWidget(buttons);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+        if (RadioURL::normalize(address->text()).isEmpty()) {
+            error->setText(QStringLiteral("请输入有效的 HTTP / HTTPS 电台地址"));
+            address->setFocus();
+            return;
+        }
+        dialog.accept();
+    });
+    if (dialog.exec() != QDialog::Accepted) return std::nullopt;
+    Track result = Track::fromRadio(RadioURL::normalize(address->text()));
+    result.setTitle(title->text().trimmed());
+    result.setArtist(artist->text().trimmed());
+    result.setAlbum(album->text().trimmed());
+    return result;
 }
 
 // L/R 电平表：从引擎无锁读本窗峰值，自己做峰保持 + 衰减（参考图右侧那两短条）。
@@ -319,6 +367,7 @@ MainWindow::MainWindow(PlayerController *controller, AudioEnginePtr engine, QWid
     m_pin->setToolTip(QStringLiteral("置顶窗口"));
     connect(m_pin, &QAbstractButton::toggled, this, &MainWindow::togglePinTop);
     auto *hideBtn = new TTButton(titleBar);
+    hideBtn->setObjectName(QStringLiteral("mainMinimize"));
     hideBtn->setGlyph(Skin::Glyph::Minus);
     hideBtn->setFace(TTButton::Face::Glass);
     hideBtn->setPreferredSize({22, 18});
@@ -439,7 +488,7 @@ MainWindow::MainWindow(PlayerController *controller, AudioEnginePtr engine, QWid
 
     // —— 接线 ——
     connect(openBtn, &TTButton::clicked, this, [this, openBtn] {
-        QMenu menu(this);
+        SkinMenu menu(this);
         QAction *openAct = menu.addAction(QStringLiteral("打开文件…"));
         QAction *propAct = menu.addAction(QStringLiteral("媒体文件信息"));
         propAct->setEnabled(!m_controller->currentTrack().isNull());
@@ -564,7 +613,7 @@ MainWindow::~MainWindow() {
     delete m_dock;
     m_dock = nullptr;
     m_dockReady = false;
-    for (QWidget *panel : QList<QWidget *>{m_playlist, m_eqWindow, m_lyricWindow, m_coverWindow, m_queueWindow}) {
+    for (QWidget *panel : QList<QWidget *>{m_playlist, m_eqWindow, m_lyricWindow, m_coverWindow}) {
         if (panel) {
             QObject::disconnect(panel, nullptr, this, nullptr);
             delete panel;
@@ -574,7 +623,6 @@ MainWindow::~MainWindow() {
     m_eqWindow = nullptr;
     m_lyricWindow = nullptr;
     m_coverWindow = nullptr;
-    m_queueWindow = nullptr;
 }
 void MainWindow::toggleMute() {
     m_mute->click();
@@ -589,13 +637,13 @@ void MainWindow::setUserVolume(double volume) {
     saveState();
 }
 
-// Cmd+D：把正在播的那首加入 / 移出收藏（与列表页右键「加入收藏」同一个集合层操作）。
+// Cmd+D 与行内爱心复用集合层及页面刷新，不重建播放上下文。
 void MainWindow::toggleFavoriteCurrent() {
     const Track t = m_controller->currentTrack();
     if (t.isNull()) return;
     m_collections.toggleFavorite(t.identityKey());
+    if (m_playlist) m_playlist->refreshFavorites();
     saveState();
-    if (m_playlist) m_playlist->refreshGroups();
 }
 
 // 标题条播放方式徽章：把当前 PlayMode 映射成中文短标签，包在方括号里。
@@ -655,7 +703,7 @@ void MainWindow::setWindowPinTop(QWidget *w, bool on) {
 // 置顶之后才打开的窗在各自 show 点用 setWindowPinTop 继承当前置顶态（见各按钮 handler）。
 void MainWindow::togglePinTop(bool on) {
     m_pinTop = on; // 先记权威态，置顶后新开的窗据此继承
-    const QList<QWidget *> group = {this, m_playlist, m_eqWindow, m_lyricWindow, m_coverWindow, m_queueWindow};
+    const QList<QWidget *> group = {this, m_playlist, m_eqWindow, m_lyricWindow, m_coverWindow};
     for (QWidget *w : group)
         if (w && w->isVisible()) setWindowPinTop(w, on);
 }
@@ -676,13 +724,11 @@ void MainWindow::togglePlaylistPanel() {
                 if (!m_declinedRadioKeys.contains(key)) m_declinedRadioKeys << key;
             }
         });
-        // 「待播队列」：懒建并开合待播队列面板（浮窗，不进停靠组）
-        connect(m_playlist, &PlaylistWindow::queueRequested, this, [this] { toggleQueuePanel(); });
         // 右键「添加文件…」：开文件对话框（与主窗同一条载入通路）
         connect(m_playlist, &PlaylistWindow::addRequested, this, [this] { openFiles(); });
         // 右键「添加文件夹…」：选目录后整棵导入
         connect(m_playlist, &PlaylistWindow::addFolderRequested, this, [this] { openFolder(); });
-        // 右键「添加网络电台…」：按地址添加网络电台
+        // 右键「添加网络电台…」：同时填写地址与显示信息
         connect(m_playlist, &PlaylistWindow::radioRequested, this, [this] { addRadioPrompt(); });
         // 右键「属性」：开曲目属性窗
         connect(m_playlist, &PlaylistWindow::propertiesRequested, this,
@@ -690,23 +736,7 @@ void MainWindow::togglePlaylistPanel() {
         // 右键「转换为其他格式…」：开转换窗（走内嵌 libav*，不开外部进程）
         connect(m_playlist, &PlaylistWindow::convertRequested, this,
                 [this](const QList<Track> &tracks) { (new ConvertWindow(tracks, this))->show(); });
-        connect(m_playlist, &PlaylistWindow::editRequested, this, [this](const Track &track) {
-            bool ok = false;
-            const QString title = QInputDialog::getText(this, QStringLiteral("编辑显示信息"),
-                                                        QStringLiteral("标题（只保存到播放器，不修改音频文件）"),
-                                                        QLineEdit::Normal, track.title(), &ok);
-            if (!ok) return;
-            const QString artist = QInputDialog::getText(this, QStringLiteral("编辑显示信息"), QStringLiteral("艺术家"),
-                                                         QLineEdit::Normal, track.artist(), &ok);
-            if (!ok) return;
-            const QString album = QInputDialog::getText(this, QStringLiteral("编辑显示信息"), QStringLiteral("专辑"),
-                                                        QLineEdit::Normal, track.album(), &ok);
-            if (!ok) return;
-            m_collections.editTrack(track.identityKey(), title, artist, album);
-            m_controller->setTracks(m_collections.currentTracks());
-            syncNowPlaying();
-            saveState();
-        });
+        connect(m_playlist, &PlaylistWindow::editRequested, this, &MainWindow::editRadioPrompt);
         auto replace = [this](const Track &old, Track replacement) {
             const QString key = old.identityKey();
             if (!m_collections.replaceKey(key, replacement)) {
@@ -721,7 +751,6 @@ void MainWindow::togglePlaylistPanel() {
             m_controller->setGaplessEnabled(false);
             m_controller->setGaplessEnabled(gapless);
             m_controller->setTracks(m_collections.currentTracks());
-            m_controller->queueChanged();
             syncNowPlaying();
             saveState();
         };
@@ -811,20 +840,9 @@ void MainWindow::toggleCoverPanel() {
     m_coverWindow->setVisible(show);
 }
 
-void MainWindow::toggleQueuePanel() {
-    if (!m_queueWindow) m_queueWindow = new QueueWindow(m_controller, panelOwner(this));
-    const bool show = !m_queueWindow->isVisible();
-    if (show) {
-        m_queueWindow->reload();
-        placeFloating(m_queueWindow, 3);
-        setWindowPinTop(m_queueWindow, m_pinTop);
-    }
-    m_queueWindow->setVisible(show);
-}
-
-// 探针：整组 = 主窗 + 5 面板；统计当前可见数与其中带 stays-on-top 的数。
+// 探针：整组 = 主窗 + 4 面板；统计当前可见数与其中带 stays-on-top 的数。
 int MainWindow::probeGroupVisible() const {
-    const QList<const QWidget *> group = {this, m_playlist, m_eqWindow, m_lyricWindow, m_coverWindow, m_queueWindow};
+    const QList<const QWidget *> group = {this, m_playlist, m_eqWindow, m_lyricWindow, m_coverWindow};
     int n = 0;
     for (const QWidget *w : group)
         if (w && w->isVisible()) ++n;
@@ -832,7 +850,7 @@ int MainWindow::probeGroupVisible() const {
 }
 
 int MainWindow::probeGroupPinned() const {
-    const QList<const QWidget *> group = {this, m_playlist, m_eqWindow, m_lyricWindow, m_coverWindow, m_queueWindow};
+    const QList<const QWidget *> group = {this, m_playlist, m_eqWindow, m_lyricWindow, m_coverWindow};
     int n = 0;
     for (const QWidget *w : group) {
         if (!w || !w->isVisible()) continue;
@@ -851,7 +869,7 @@ int MainWindow::probeGroupPinned() const {
     return n;
 }
 
-// R19 后台驻留：整组 = 主窗 + 已懒建的列表/均衡器/歌词/封面/队列面板。
+// R19 后台驻留：整组 = 主窗 + 已懒建的列表/均衡器/歌词/封面面板。
 // 隐藏时只记住当前可见的那几扇，恢复时只弹回它们（不强制打开本来关着的）。
 void MainWindow::hideGroupToBackground() {
     if (m_groupHidden) return;
@@ -861,7 +879,7 @@ void MainWindow::hideGroupToBackground() {
         return;
     }
     m_groupBeforeHide.clear();
-    const QList<QWidget *> group = {this, m_playlist, m_eqWindow, m_lyricWindow, m_coverWindow, m_queueWindow};
+    const QList<QWidget *> group = {this, m_playlist, m_eqWindow, m_lyricWindow, m_coverWindow};
     for (QWidget *w : group)
         if (w && w->isVisible()) {
             m_groupBeforeHide.append(w);
@@ -1001,10 +1019,9 @@ void MainWindow::saveState() {
 }
 
 void MainWindow::captureResume(LibraryStore::Loaded &s) const {
-    // R03 现场：把播放上下文（队列条目+来路+游标+历史+位置+在不在播）快照进档。
-    // 尚未开播的独立待播队列也要保存；恢复时停在首项，不凭空开声。
+    // 基础播放现场：序列、当前游标、实际历史、位置和在播状态。
     const PlayQueue &q = m_controller->queue();
-    if (!q.items().isEmpty()) {
+    if (q.current()) {
         s.resumeValid = true;
         s.resumePosition = m_controller->position();
         s.resumeWasPlaying = m_controller->isPlaying();
@@ -1018,7 +1035,7 @@ void MainWindow::captureResume(LibraryStore::Loaded &s) const {
                     break;
                 }
         for (const QueueItem &it : items) {
-            s.resumeQueue.append({trackToken(it.track), int(it.source)});
+            s.resumeQueue.append(trackToken(it.track));
             if (q.current() && it.id == q.current()->id) s.resumeTrackKey = trackToken(it.track);
         }
     }
@@ -1062,7 +1079,7 @@ void MainWindow::restoreLibrary() {
         m_collections.registerTracks(data.all, false);
         m_scannedKeys = m_collections.libraryKeys();
         m_controller->setTracks(m_collections.currentTracks());
-        // R03 现场消费：把上次停住的播放上下文重建（队列条目+来路+游标+历史+段内位置）。
+        // 重建上次基础播放现场；旧插队来源已在读档适配器过滤。
         // 旧档没这一节 → resumeValid=false，直接跳过（退化成只恢复曲库，不凭空开声）。
         // 条目用 resolveToken 单独还原（不依赖当前浏览页/搜索命中表，R02 分离的正是这个），
         // 解析不出的丢弃并同步 remap，保证游标/历史下标指向重建后的真条目。
@@ -1070,15 +1087,13 @@ void MainWindow::restoreLibrary() {
             QList<QueueItem> items;
             QList<int> remap; // 存档下标 → 重建后下标（-1 = 解析不出，已丢）
             for (int i = 0; i < s.resumeQueue.size(); ++i) {
-                Track t = m_collections.trackForKey(s.resumeQueue[i].first);
+                Track t = m_collections.trackForKey(s.resumeQueue[i]);
                 if (t.isNull()) {
                     remap.append(-1);
                     continue;
                 }
                 QueueItem it;
                 it.track = t;
-                const int source = s.resumeQueue[i].second;
-                it.source = source >= 0 && source <= 2 ? static_cast<QueueSource>(source) : QueueSource::Later;
                 remap.append(items.size());
                 items.append(it);
             }
@@ -1105,7 +1120,8 @@ void MainWindow::restoreLibrary() {
         if (std::exchange(m_seedAfterRestore, false)) seedPresetRadios();
         if (std::exchange(m_saveAfterRestore, false)) saveState();
         const auto inputs = std::exchange(m_deferredImports, QStringList{});
-        if (!inputs.isEmpty()) loadDirOrFiles(inputs);
+        const auto radioEdits = std::exchange(m_deferredRadioEdits, QHash<QString, QJsonObject>{});
+        if (!inputs.isEmpty()) loadDirOrFiles(inputs, radioEdits);
         const bool scan =
             std::exchange(m_rescanAfterRestore, false) || (!m_libraryFolders.isEmpty() && s.libraryKeys.isEmpty());
         if (scan) rescanLibrary();
@@ -1121,7 +1137,7 @@ void MainWindow::restoreLibrary() {
         for (const auto &list : s.userLists)
             tokens.append(list.keys);
         for (const auto &item : s.resumeQueue)
-            tokens.append(item.first);
+            tokens.append(item);
         QHash<QString, Track> resolved;
         for (const QString &token : tokens) {
             if (cancel->load()) return data;
@@ -1243,7 +1259,6 @@ QString MainWindow::relocateLibraryRoot(const QString &oldRoot, const QString &n
         if (root == oldRoot) root = to;
     m_scannedKeys = m_collections.libraryKeys();
     m_controller->setTracks(m_collections.currentTracks());
-    emit m_controller->queueChanged();
     updateLibraryWatch();
     saveState();
     return {};
@@ -1499,20 +1514,33 @@ void MainWindow::openFolder() {
     if (!dir.isEmpty()) loadDirOrFiles({dir});
 }
 
-// 右键「添加网络电台…」：问一个 http/https 地址，走与拖拽同一条 loadDirOrFiles 通路（内部按 scheme 判电台）。
+// 显示信息随本次导入结果提交，不提前写台名，避免取消或过期回调留下半成品。
 void MainWindow::addRadioPrompt() {
-    bool ok = false;
-    const QString url =
-        QInputDialog::getText(this, QStringLiteral("添加网络电台"), QStringLiteral("电台地址（http / https）"),
-                              QLineEdit::Normal, QString(), &ok);
-    const QString t = url.trimmed();
-    if (!ok || t.isEmpty()) return;
-    loadDirOrFiles({t});
+    const auto radio = promptRadioInfo(this);
+    if (!radio) return;
+    QHash<QString, QJsonObject> edits;
+    if (!radio->title().isEmpty() || !radio->artist().isEmpty() || !radio->album().isEmpty())
+        edits.insert(radio->identityKey(),
+                     QJsonObject{{"title", radio->title()}, {"artist", radio->artist()}, {"album", radio->album()}});
+    loadDirOrFiles({radio->url().toString()}, edits);
 }
 
-void MainWindow::loadDirOrFiles(const QStringList &paths) {
+void MainWindow::editRadioPrompt(const Track &track) {
+    if (track.isNull() || !track.isRadio()) return;
+    const auto radio = promptRadioInfo(this, track);
+    if (!radio) return;
+    m_collections.editTrack(track.identityKey(), radio->title(), radio->artist(), radio->album());
+    m_controller->setTracks(m_collections.currentTracks());
+    if (m_playlist) m_playlist->refreshGroups();
+    syncNowPlaying();
+    saveState();
+}
+
+void MainWindow::loadDirOrFiles(const QStringList &paths, const QHash<QString, QJsonObject> &radioEdits) {
     if (m_restoringLibrary) {
         m_deferredImports.append(paths);
+        for (auto it = radioEdits.cbegin(); it != radioEdits.cend(); ++it)
+            m_deferredRadioEdits.insert(it.key(), it.value());
         return;
     }
     m_sceneReady = true;
@@ -1523,7 +1551,7 @@ void MainWindow::loadDirOrFiles(const QStringList &paths) {
     m_operationStatus = QStringLiteral("正在导入…");
     m_status->setText(m_operationStatus);
     auto *watcher = new QFutureWatcher<Importer::Result>(this);
-    connect(watcher, &QFutureWatcher<Importer::Result>::finished, this, [this, watcher, generation] {
+    connect(watcher, &QFutureWatcher<Importer::Result>::finished, this, [this, watcher, generation, radioEdits] {
         const auto imported = watcher->result();
         watcher->deleteLater();
         if (generation != m_importGeneration || imported.cancelled) return;
@@ -1534,9 +1562,15 @@ void MainWindow::loadDirOrFiles(const QStringList &paths) {
             if (!imported.problems.isEmpty()) m_status->setText(imported.problems.join(QStringLiteral("；")));
             return;
         }
-        for (const Track &track : tracks)
-            if (track.isRadio() && track.title() != Track::fromRadio(track.url()).title())
+        for (const Track &track : tracks) {
+            if (!track.isRadio()) continue;
+            const auto edit = radioEdits.constFind(track.identityKey());
+            if (edit != radioEdits.cend())
+                m_collections.editTrack(track.identityKey(), edit->value("title").toString(),
+                                        edit->value("artist").toString(), edit->value("album").toString());
+            else if (track.title() != Track::fromRadio(track.url()).title())
                 m_collections.radios().setAlias(track.identityKey(), track.title());
+        }
         m_collections.registerTracks(tracks);
         m_collections.setViewId(Collections::kAllViewId);
         if (m_playlist) m_playlist->refreshGroups();

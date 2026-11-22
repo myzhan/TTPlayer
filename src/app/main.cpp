@@ -29,7 +29,6 @@
 #include "ui/PlaylistView.h"
 #include "ui/PlaylistWindow.h"
 #include "ui/PropertyWindow.h"
-#include "ui/QueueWindow.h"
 #include "ui/SettingsWindow.h"
 #include "ui/SkinDock.h"
 #include "ui/Theme.h"
@@ -649,95 +648,6 @@ static int runMultiSelectProbe(PlayerController &controller, QTextStream &out) {
     return fail;
 }
 
-// 待播队列 API 探针（F03）：只走 PlayQueue / PlayerController 的队列通路，
-// 不开设备、不弹窗——begin 直接用 queue() 建游标，其余走控制器 enqueue/remove/...。
-static int runQueueProbe(PlayerController &controller, QTextStream &out) {
-    int fail = 0;
-    const auto check = [&](const char *name, bool ok) {
-        out << "QUEUE_PROBE " << name << ' ' << (ok ? "PASS" : "FAIL") << '\n';
-        if (!ok) ++fail;
-    };
-    auto mk = [](const QString &path, const QString &title) {
-        Track t(QUrl::fromLocalFile(path));
-        t.setTitle(title);
-        return t;
-    };
-    const Track a = mk("/q/a.mp3", QStringLiteral("A")), b = mk("/q/b.mp3", QStringLiteral("B")),
-                c = mk("/q/c.mp3", QStringLiteral("C")), x = mk("/q/x.mp3", QStringLiteral("X")),
-                y = mk("/q/y.mp3", QStringLiteral("Y"));
-    Q_UNUSED(x);
-    Q_UNUSED(y); // x/y 只作为入参值语义拷贝进队列
-
-    controller.setTracks({a, b, c});
-    controller.setMode(PlayMode::Order);
-    PlayQueue &q = controller.queue();
-    q.begin(controller.tracks(), 0); // 游标=A，待播=B,C（Basic）
-    check("begin_pending", q.pendingCount() == 2);
-    check("current_is_a", q.currentTrack().title() == QStringLiteral("A"));
-
-    check("enqueue_next_count", controller.enqueueNext({x}) == 1);
-    QList<QueueItem> p = q.pending();
-    check("next_after_cursor", p.size() == 3 && p.first().track.title() == QStringLiteral("X"));
-    check("next_source", p.first().playNext());
-
-    controller.enqueueLater({y});
-    p = q.pending();
-    check("later_at_tail", p.last().track.title() == QStringLiteral("Y") && p.last().source == QueueSource::Later);
-
-    // 自然播完先看谁：坐在待播首位且来源是 Next 的那条先吃（pitfall #15 的来路路由）
-    const QueueItem *pk = q.peekOnFinish(PlayMode::Order);
-    check("peek_prefers_next", pk && pk->track.title() == QStringLiteral("X"));
-
-    const auto idOf = [&](const QString &title) {
-        for (const QueueItem &it : q.pending())
-            if (it.track.title() == title) return it.id;
-        return QUuid();
-    };
-
-    // 整段倒序提交 → 首位换成原来的尾条
-    {
-        const QString tailTitle = p.last().track.title();
-        QList<QUuid> order;
-        for (int i = p.size() - 1; i >= 0; --i)
-            order.append(p[i].id);
-        check("reorder_ok", controller.reorderQueued(order));
-        check("reorder_applied", !q.pending().isEmpty() && q.pending().first().track.title() == tailTitle);
-    }
-    // 非现有待播的全排列必须被拒（只交一条）
-    check("reorder_reject_bad", !controller.reorderQueued({idOf(QStringLiteral("X"))}));
-
-    // 移除一条待播
-    controller.removeQueued({idOf(QStringLiteral("X"))});
-    bool xGone = true;
-    for (const QueueItem &it : q.pending())
-        if (it.track.title() == QStringLiteral("X")) xGone = false;
-    check("remove_pending", xGone);
-    // 正在播的那条删不掉（删它等于擅自停播）
-    controller.removeQueued({q.current()->id});
-    check("remove_keeps_current", q.current() && q.currentTrack().title() == QStringLiteral("A"));
-
-    // 把待播尾条移到首位
-    if (q.pendingCount() >= 2) {
-        const int last = q.pendingCount() - 1;
-        const QUuid moveId = q.pending()[last].id;
-        const QString moveTitle = q.pending()[last].track.title();
-        const int firstPos = q.currentIndex().value_or(-1) + 1;
-        check("move_ok", controller.moveQueued(moveId, firstPos));
-        check("move_applied", q.pending().first().track.title() == moveTitle);
-    } else {
-        check("move_ok", false);
-        check("move_applied", false);
-    }
-
-    // 清空待播：当前曲继续留着
-    controller.clearPendingQueue();
-    check("clear_pending", q.pendingCount() == 0);
-    check("clear_keeps_current", q.currentTrack().title() == QStringLiteral("A"));
-
-    out << "QUEUE_PROBE done fail=" << fail << '\n';
-    return fail;
-}
-
 // R02 数据所有权探针：验「停在收藏页 / 搜索态时存盘」不会把主库缩水成子集，
 // 电台 / 收藏 / 上次页跨重启完整。走真实产品入口（MainWindow::requestSave / restoreLibrary）。
 static int runOwnershipProbe(AudioEnginePtr engine, PlayerController &controller, QTextStream &out) {
@@ -1194,7 +1104,7 @@ static int runWatchProbe(AudioEnginePtr engine, PlayerController &controller, QT
     return fail;
 }
 
-// R03 现场恢复探针：走真实 saveState→restoreLibrary 往返，验游标/来源/历史/
+// R03 现场恢复探针：走真实 saveState→restoreLibrary 往返，验游标/顺序/历史/
 // 段身份不被浏览页覆盖，以及「恢复现场但停住」 vs「启用自动续播才开声」两条分支。
 // 靠 dummy 音频：playRowAt 真开流（isPlaying 为真），saveState 据此记 resumeWasPlaying。
 static int runResumeProbe(AudioEnginePtr engine, PlayerController &controller, QTextStream &out) {
@@ -1228,18 +1138,17 @@ static int runResumeProbe(AudioEnginePtr engine, PlayerController &controller, Q
 
     const Track t0 = plain(QStringLiteral("demo01.wav"), QStringLiteral("D1"));
     const Track t2 = plain(QStringLiteral("demo02.wav"), QStringLiteral("D2"));
-    const Track tn = plain(QStringLiteral("art/single.wav"), QStringLiteral("NEXT"));
-    const Track tl = plain(QStringLiteral("art/coverless.wav"), QStringLiteral("LATER"));
+    const Track single = plain(QStringLiteral("art/single.wav"), QStringLiteral("Single"));
+    const Track coverless = plain(QStringLiteral("art/coverless.wav"), QStringLiteral("Coverless"));
+    const QList<Track> scene{t0, seg2, single, t2, coverless};
 
-    // —— Phase A：建现场（当前=cue seg2，游标后一条 Next，尾一条 Later），关自动续播存盘 ——
+    // —— Phase A：从普通列表建立现场，关自动续播存盘 ——
     {
         MainWindow w(&controller, engine);
-        w.collections().registerTracks({t0, seg2, t2}); // 先入媒体库（真实用法：先导入再播）
-        controller.setTracks({t0, seg2, t2});
+        w.collections().registerTracks(scene); // 先导入再播。
+        controller.setTracks(scene);
         controller.setMode(PlayMode::Order);
-        controller.playRowAt(1);       // 从 seg2 开声（dummy）
-        controller.enqueueNext({tn});  // 游标后紧邻插队（Next）
-        controller.enqueueLater({tl}); // 尾部追加（Later）
+        controller.playRowAt(1);       // 从 seg2 开声（dummy）。
         w.setAutoResumePlay(false);    // 关自动续播 → 恢复应停在暂停
         const PlayQueue &q = controller.queue();
         check("phaseA_cursor_cue", q.current() && q.currentTrack().isCueSegment() && q.currentTrack().cueNumber() == 2);
@@ -1259,15 +1168,12 @@ static int runResumeProbe(AudioEnginePtr engine, PlayerController &controller, Q
                                          q.currentTrack().cueNumber() == 2 &&
                                          qAbs(q.currentTrack().playStart() - 4.0) < 0.05);
         check("restored_not_playing", !controller.isPlaying()); // autoResumePlay=false 不开声
-        bool hasNext = false, hasLater = false;
-        // resume 只存 token（不存标题，恢复时按文件名/探针重定），故按来源 + url 子串认定
-        for (const QueueItem &it : q.items()) {
-            const QString u = it.track.url().toString();
-            if (it.source == QueueSource::Next && u.contains(QStringLiteral("single.wav"))) hasNext = true;
-            if (it.source == QueueSource::Later && u.contains(QStringLiteral("coverless.wav"))) hasLater = true;
-        }
-        check("restored_next_source", hasNext);
-        check("restored_later_source", hasLater);
+        bool ordered = q.count() == scene.size();
+        for (int i = 0; ordered && i < scene.size(); ++i)
+            ordered &= q.items()[i].track.identityKey() == scene[i].identityKey();
+        check("restored_base_order", ordered && q.cursor() == 1);
+        const auto *next = controller.queue().peekOnFinish(PlayMode::Order);
+        check("restored_next_identity", next && next->track.identityKey() == single.identityKey());
     }
 
     // —— Phase C：开自动续播、播着存盘 → 重启后应开声 ——
@@ -1515,15 +1421,6 @@ int main(int argc, char *argv[]) {
         return failed == 0 ? 0 : 1;
     }
 
-    // 待播队列 API 探针：验完即退
-    if (qEnvironmentVariableIsSet("TTPLAYER_QT_QUEUE_PROBE")) {
-        QTextStream out(stdout);
-        const int failed = runQueueProbe(controller, out) + runQueueCoverage(out);
-        out.flush();
-
-        return failed == 0 ? 0 : 1;
-    }
-
     // R15b 多选选区探针（构造 PlaylistView，offscreen 不弹窗，验完即退）
     if (qEnvironmentVariableIsSet("TTPLAYER_QT_MULTI_PROBE")) {
         QTextStream out(stdout);
@@ -1740,31 +1637,6 @@ int main(int argc, char *argv[]) {
             const bool ok = lw->grab().save(QString::fromLocal8Bit(lyricShot));
             QTextStream out(stdout);
             out << "SHOT_LYRIC " << (ok ? "ok " : "fail ") << lyricShot << "\n";
-            out.flush();
-            app.quit();
-        });
-    }
-
-    // 待播队列面板单独截图（造一段播放现场：3 条建上下文 + 插队/追队各一条）。
-    const QByteArray queueShot = qgetenv("TTPLAYER_QT_SHOT_QUEUE");
-    if (!queueShot.isEmpty()) {
-        auto mkf = [](const QString &p, const QString &ti) {
-            Track t(QUrl::fromLocalFile(p));
-            t.setTitle(ti);
-            return t;
-        };
-        controller.setTracks({mkf("testlib/demo01.wav", QStringLiteral("Demo One")),
-                              mkf("testlib/demo02.wav", QStringLiteral("Demo Two")),
-                              mkf("testlib/art/single.wav", QStringLiteral("Single"))});
-        controller.queue().begin(controller.tracks(), 0);
-        controller.enqueueNext({mkf("testlib/cover.flac", QStringLiteral("Cover FLAC"))});
-        controller.enqueueLater({mkf("testlib/demo_ape.ape", QStringLiteral("Old Ape"))});
-        auto *qw = new QueueWindow(&controller);
-        qw->show();
-        QTimer::singleShot(250, [qw, queueShot, &app] {
-            const bool ok = qw->grab().save(QString::fromLocal8Bit(queueShot));
-            QTextStream out(stdout);
-            out << "SHOT_QUEUE " << (ok ? "ok " : "fail ") << queueShot << "\n";
             out.flush();
             app.quit();
         });

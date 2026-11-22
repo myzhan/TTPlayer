@@ -227,6 +227,24 @@ void drawGlyph(QPainter *p, Glyph g, const QRectF &rect, const QColor &color, qr
         p->drawLine(a, QPointF(box.right(), box.bottom()));
         break;
     }
+    case Glyph::HeartOutline:
+    case Glyph::HeartFilled: {
+        // 同一矢量轮廓分别描边/填充，不依赖平台字体里的爱心字符。
+        path.moveTo(box.center().x(), box.top() + s * 0.25);
+        path.cubicTo(box.left() + s * 0.15, box.top() - s * 0.05, box.left() - s * 0.10, box.top() + s * 0.35,
+                     box.left() + s * 0.12, box.top() + s * 0.58);
+        path.lineTo(box.center().x(), box.bottom() - s * 0.03);
+        path.lineTo(box.right() - s * 0.12, box.top() + s * 0.58);
+        path.cubicTo(box.right() + s * 0.10, box.top() + s * 0.35, box.right() - s * 0.15, box.top() - s * 0.05,
+                     box.center().x(), box.top() + s * 0.25);
+        path.closeSubpath();
+        if (g == Glyph::HeartOutline) {
+            p->setBrush(Qt::NoBrush);
+            p->setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        }
+        p->drawPath(path);
+        break;
+    }
     case Glyph::Add: {
         p->setBrush(Qt::NoBrush);
         QPen pen(color, qMax(1.4, s * 0.12));

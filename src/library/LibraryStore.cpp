@@ -12,6 +12,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSet>
+#include <QPair>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -149,6 +150,36 @@ QList<RadioCategory> jsonToRadioCategories(const QJsonValue &v) {
     return out;
 }
 
+// 旧来源仅在此适配：保留基础项和真实当前曲，其他插队项不再恢复。
+void normalizeResume(LibraryStore::Loaded &out, const QList<QPair<QString, int>> &legacy) {
+    const int oldCursor = out.resumeCursor;
+    QList<int> remap;
+    for (int i = 0; i < legacy.size(); ++i) {
+        const auto &entry = legacy[i];
+        const bool current = out.resumeValid && i == oldCursor && !out.resumeTrackKey.isEmpty() &&
+                             entry.first == out.resumeTrackKey && (entry.second == 1 || entry.second == 2);
+        if (entry.first.isEmpty() || (entry.second != 0 && !current)) {
+            remap.append(-1);
+            continue;
+        }
+        remap.append(out.resumeQueue.size());
+        out.resumeQueue.append(entry.first);
+    }
+    out.resumeCursor = oldCursor >= 0 && oldCursor < remap.size() ? remap[oldCursor] : -1;
+    QList<int> history;
+    for (int index : std::as_const(out.resumeHistoryIndexes))
+        if (index >= 0 && index < remap.size() && remap[index] >= 0) history.append(remap[index]);
+    out.resumeHistoryIndexes = history;
+    out.resumeValid = out.resumeValid && out.resumeCursor >= 0;
+    if (!std::isfinite(out.resumePosition) || out.resumePosition < 0) out.resumePosition = 0;
+    if (!out.resumeValid) {
+        out.resumeTrackKey.clear();
+        out.resumePosition = 0;
+        out.resumeWasPlaying = false;
+        out.resumeHistoryIndexes.clear();
+    }
+}
+
 /// 旧 load() 的逐字段解析（文件 I/O 与 resume.json 合并已在迁移入口做过）
 LibraryStore::Loaded fromJsonObject(const QJsonObject &o) {
     using LibraryStore::Loaded;
@@ -197,6 +228,7 @@ LibraryStore::Loaded fromJsonObject(const QJsonObject &o) {
     out.radioCategories = jsonToRadioCategories(o.value(kKeyRadioCategories));
     out.radioAssignments = jsonToStringHash(o.value(kKeyRadioAssignments));
 
+    QList<QPair<QString, int>> legacy;
     if (o.contains(QStringLiteral("resumeQueue"))) {
         out.resumeValid = o.value(QStringLiteral("resumeValid")).toBool(false);
         out.resumeTrackKey = o.value(QStringLiteral("resumeTrackKey")).toString();
@@ -205,17 +237,14 @@ LibraryStore::Loaded fromJsonObject(const QJsonObject &o) {
         out.resumeCursor = o.value(QStringLiteral("resumeCursor")).toInt(-1);
         if (o.value(QStringLiteral("resumeHistoryIndexes")).isArray())
             for (const auto &v : o.value(QStringLiteral("resumeHistoryIndexes")).toArray())
-                out.resumeHistoryIndexes.append(v.toInt());
+                out.resumeHistoryIndexes.append(v.toInt(-1));
         for (const auto &v : o.value(QStringLiteral("resumeQueue")).toArray()) {
             const QJsonObject it = v.toObject();
-            out.resumeQueue.append({it.value(QStringLiteral("k")).toString(), it.value(QStringLiteral("s")).toInt(0)});
+            const int source = it.contains(QStringLiteral("s")) ? it.value(QStringLiteral("s")).toInt(-1) : 0;
+            legacy.append({it.value(QStringLiteral("k")).toString(), source});
         }
     }
-    if (!std::isfinite(out.resumePosition) || out.resumePosition < 0) out.resumePosition = 0;
-    if (!out.resumeQueue.isEmpty()) out.resumeCursor = std::clamp(out.resumeCursor, 0, int(out.resumeQueue.size()) - 1);
-    out.resumeHistoryIndexes.removeIf([&out](int index) { return index < 0 || index >= out.resumeQueue.size(); });
-    for (auto &entry : out.resumeQueue)
-        if (entry.second < 0 || entry.second > 2) entry.second = int(QueueSource::Later);
+    normalizeResume(out, legacy);
     return out;
 }
 
@@ -535,19 +564,24 @@ LibraryStore::Loaded readSnapshot(QSqlDatabase &db) {
     out.resumePosition = number("resumePosition", 0);
     out.resumeWasPlaying = flag("resumeWasPlaying", false);
     out.resumeCursor = integer("resumeCursor", -1);
+    QList<QPair<QString, int>> legacy;
     {
         QSqlQuery q(db);
         if (q.exec(QStringLiteral("SELECT key, source FROM v1_resume_queue ORDER BY position")))
-            while (q.next())
-                out.resumeQueue.append({q.value(0).toString(), q.value(1).toInt()});
+            while (q.next()) {
+                bool valid = false;
+                const int source = q.value(1).toInt(&valid);
+                legacy.append({q.value(0).toString(), valid ? source : -1});
+            }
         QSqlQuery hist(db);
         if (hist.exec(QStringLiteral("SELECT idx FROM v1_resume_history ORDER BY position")))
-            while (hist.next())
-                out.resumeHistoryIndexes.append(hist.value(0).toInt());
+            while (hist.next()) {
+                bool valid = false;
+                const int index = hist.value(0).toInt(&valid);
+                if (valid) out.resumeHistoryIndexes.append(index);
+            }
     }
-    if (!std::isfinite(out.resumePosition) || out.resumePosition < 0) out.resumePosition = 0;
-    if (!out.resumeQueue.isEmpty()) out.resumeCursor = std::clamp(out.resumeCursor, 0, int(out.resumeQueue.size()) - 1);
-    out.resumeHistoryIndexes.removeIf([&out](int index) { return index < 0 || index >= out.resumeQueue.size(); });
+    normalizeResume(out, legacy);
     return out;
 }
 
@@ -603,8 +637,8 @@ bool writeResume(QSqlDatabase &db, const LibraryStore::Loaded &v) {
         q.prepare(QStringLiteral("INSERT INTO v1_resume_queue (position, key, source) VALUES (?, ?, ?)"));
         for (qsizetype i = 0; i < v.resumeQueue.size(); ++i) {
             q.bindValue(0, qint64(i));
-            q.bindValue(1, encodeText(v.resumeQueue[i].first));
-            q.bindValue(2, v.resumeQueue[i].second);
+            q.bindValue(1, encodeText(v.resumeQueue[i]));
+            q.bindValue(2, 0); // v1 兼容列，新现场不再携带来源。
             if (!q.exec()) return false;
         }
     }

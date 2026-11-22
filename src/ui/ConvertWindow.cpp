@@ -29,7 +29,7 @@ QLabel *hintLabel(QWidget *parent, const QString &text = QString()) {
 } // namespace
 
 ConvertWindow::ConvertWindow(const QList<Track> &tracks, QWidget *parent)
-    : SkinWindow(QStringLiteral("格式转换"), false, parent) {
+    : SkinWindow(QStringLiteral("格式转换"), TitleButtons::Close, parent) {
     setAttribute(Qt::WA_DeleteOnClose);
     // 辅助窗不跟随半透明：参数行压在播放列表上时不串底。
     setGlassTransparencyFollows(false);
