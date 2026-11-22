@@ -5,6 +5,9 @@
 #include "media/AudioConvert.h"
 #include "media/Archive.h"
 #include "media/FFmpeg.h"
+#include "media/MidiSequence.h"
+#include "media/SequencedAudioSource.h"
+#include <thread>
 #include "ui/MainWindow.h"
 #include "ui/PlaylistWindow.h"
 #include "ui/PlaylistView.h"
@@ -322,6 +325,268 @@ public:
             QThread::msleep(1);
         }
         return condition();
+    }
+    int sequences(const QString &suite) {
+        const bool isMidi = suite == QLatin1String("MIDI");
+        const QString root = qEnvironmentVariable("TTPLAYER_TESTDIR") + "/sequences/";
+        const auto benchmark = [&](int seconds) {
+            QElapsedTimer timer;
+            timer.start();
+            auto decoder = Decoder::openFile(root + QStringLiteral("long%1.mid").arg(seconds));
+            const double openMs = timer.nsecsElapsed() / 1000000.0;
+            std::array<float, 1024> left{}, right{};
+            const int first = decoder ? decoder->read(left.data(), right.data(), 1024, 0) : 0;
+            const double firstFrameMs = timer.nsecsElapsed() / 1000000.0;
+            timer.restart();
+            const int got = decoder ? decoder->read(left.data(), right.data(), 1024, int64_t(seconds - 1) * 48000) : 0;
+            out << "SEQUENCE_BENCH seconds=" << seconds << " open_ms=" << openMs << " first_frame_ms=" << firstFrameMs
+                << " cold_seek_ms=" << timer.nsecsElapsed() / 1000000.0 << " frames=" << got << '\n';
+            check(qPrintable(QStringLiteral("MIDI_benchmark_%1").arg(seconds)), first == 1024 && got == 1024);
+        };
+        // 独立进程仅测一个长度，避免完整回归的历史分配干扰峰值内存口径。
+        const int benchmarkOnly = qEnvironmentVariableIntValue("TTPLAYER_SEQUENCE_BENCH_ONLY");
+        if (isMidi && (benchmarkOnly == 300 || benchmarkOnly == 1800)) {
+            benchmark(benchmarkOnly);
+            return failed;
+        }
+        const QStringList names = isMidi ? QStringList{QStringLiteral("旋律.MID"),
+                                                       "tempo.midi",
+                                                       "words.kar",
+                                                       "rmid.mid",
+                                                       "smpte24.mid",
+                                                       "smpte25.mid",
+                                                       "smpte29.mid",
+                                                       "smpte30.mid",
+                                                       "running.mid",
+                                                       "piano.mid",
+                                                       "strings.mid",
+                                                       "drums.mid",
+                                                       "bank.mid"}
+                                         : QStringList{"sample.mod", "sample.xm", "sample.s3m", "sample.it"};
+        const auto label = [&](const QString &name) { return (suite + "_" + name).toUtf8(); };
+        const auto bytes = [](const QString &path) {
+            QFile file(path);
+            return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+        };
+        QHash<QString, std::vector<float>> signatures;
+        for (const QString &name : names) {
+            QString error;
+            QElapsedTimer timer;
+            timer.start();
+            auto decoder = Decoder::openFile(root + name, {}, &error);
+            check(label("open_" + name).constData(), bool(decoder));
+            if (!decoder) {
+                out << "SEQUENCE_ERROR " << name << " " << error << '\n';
+                continue;
+            }
+            const double openMs = timer.nsecsElapsed() / 1000000.0;
+            check(label("metadata_" + name).constData(),
+                  decoder->channelCount() == 2 && decoder->sampleRate() == 48000 && decoder->bitRateKbps() == 0 &&
+                      decoder->formatName() == (isMidi ? QStringLiteral("MIDI") : QFileInfo(name).suffix().toUpper()));
+            const int64_t frames = decoder->totalFrames();
+            if (frames <= 48000 || frames >= int64_t(48000) * 10) {
+                check(label("bounded_fixture_" + name).constData(), false);
+                continue;
+            }
+            std::vector<float> left(size_t(frames), 0), right(size_t(frames), 0);
+            double firstFrameMs = 0;
+            int64_t pos = 0;
+            while (pos < frames) {
+                const int got = decoder->read(left.data() + pos, right.data() + pos,
+                                              int(std::min<int64_t>(1024, frames - pos)), pos);
+                if (!got) break;
+                if (pos == 0) firstFrameMs = timer.nsecsElapsed() / 1000000.0;
+                pos += got;
+            }
+            double power = 0;
+            for (const float value : left)
+                power += value * value;
+            for (const float value : right)
+                power += value * value;
+            check(label("finite_pcm_" + name).constData(), frames > 48000 && frames < int64_t(48000) * 10 &&
+                                                               pos == frames && std::isfinite(power) && power > 0.01);
+            std::array<float, 1024> seekL{}, seekR{};
+            check(label("single_pass_eof_" + name).constData(),
+                  decoder->read(seekL.data(), seekR.data(), 1024, frames) == 0);
+            bool exact = true;
+            for (const int64_t target : {int64_t(36000), int64_t(12000), int64_t(60000), int64_t(0)}) {
+                if (target + 1024 > pos) {
+                    exact = false;
+                    break;
+                }
+                const int got = decoder->read(seekL.data(), seekR.data(), 1024, target);
+                if (got != 1024) {
+                    exact = false;
+                    break;
+                }
+                for (int i = 0; i < got; ++i)
+                    exact &= std::abs(seekL[size_t(i)] - left[size_t(target + i)]) < 0.00001f &&
+                             std::abs(seekR[size_t(i)] - right[size_t(target + i)]) < 0.00001f;
+            }
+            check(label("seek_sustain_pcm_" + name).constData(), exact);
+            signatures.insert(name,
+                              std::vector<float>(left.begin(), left.begin() + std::min<size_t>(left.size(), 48000)));
+            if (name == QStringLiteral("旋律.MID") || name == QLatin1String("rmid.mid"))
+                check(label("duration_" + name).constData(), frames == 168000);
+            if (name == QLatin1String("tempo.midi")) check("MIDI_tempo_map", frames == 216000);
+            if (name.startsWith("smpte")) {
+                const int64_t expected = name == "smpte29.mid" ? 142446 : 144000;
+                check(label("timebase_" + name).constData(), std::abs(frames - expected) <= 1);
+            }
+            out << "SEQUENCE_METRIC " << name << " open_ms=" << openMs << " first_frame_ms=" << firstFrameMs
+                << " frames=" << frames << " energy=" << power << '\n';
+        }
+        for (const QString &extension :
+             isMidi ? QStringList{"mid", "midi", "kar"} : QStringList{"mod", "xm", "s3m", "it"})
+            check(label("entry_" + extension).constData(), ff::playableExtensions().contains(extension) &&
+                                                               Importer::fileDialogFilter().contains("*." + extension));
+        const QStringList bad = isMidi ? QStringList{"format2.mid", "truncated.mid",  "badvlq.mid",   "device.mid",
+                                                     "ports.mid",   "eventlimit.mid", "timelimit.mid"}
+                                       : QStringList{"bad.mod", "bad.xm", "bad.s3m", "bad.it"};
+        for (const QString &name : bad) {
+            Track track(QUrl::fromLocalFile(root + name));
+            Importer::probe(track);
+            check(label("reject_" + name).constData(), !track.decodeProblem().isEmpty());
+        }
+        const QStringList archived = Archive::listAudioEntries(root + "sequences.zip");
+        for (const QString &name : isMidi ? QStringList{QStringLiteral("旋律.MID"), "words.kar"} : names) {
+            const QString entry = QStringLiteral("中文/") + name;
+            Track track(Archive::entryUrl(root + "sequences.zip", entry));
+            const QString identity = track.identityKey();
+            Importer::probe(track);
+            check(label("archive_" + name).constData(), archived.contains(entry) && track.decodeProblem().isEmpty() &&
+                                                            track.identityKey() == identity &&
+                                                            !AudioConvert::canConvert(track));
+        }
+        const QString source = root + names.front();
+        const std::atomic<bool> keepGoing{false};
+        QTemporaryDir converted;
+        for (const QString &name : isMidi ? QStringList{names.front(), "words.kar"} : names) {
+            for (const auto codec : {AV_CODEC_ID_PCM_S16LE, AV_CODEC_ID_FLAC, AV_CODEC_ID_MP3}) {
+                EncodeTarget target;
+                target.codecId = codec;
+                target.sampleRate = 44100;
+                target.channels = 2;
+                if (codec == AV_CODEC_ID_MP3) target.encoderName = "libmp3lame";
+                const QString extension = codec == AV_CODEC_ID_PCM_S16LE ? "wav"
+                                          : codec == AV_CODEC_ID_FLAC    ? "flac"
+                                                                         : "mp3";
+                const QString destination = converted.filePath(name + "." + extension);
+                const auto result = AudioEncoder::convert(root + name, destination, target, {}, keepGoing);
+                auto decoder = result.ok ? Decoder::openFile(destination) : nullptr;
+                std::array<float, 1024> left{}, right{};
+                const int got = decoder ? decoder->read(left.data(), right.data(), 1024, 4410) : 0;
+                check(label("convert_" + name + "_" + extension).constData(),
+                      result.ok && decoder && decoder->sampleRate() == 44100 && got == 1024);
+            }
+        }
+        if (isMidi) {
+            check("MIDI_program_changes_timbre", signatures.value("piano.mid") != signatures.value("strings.mid"));
+            check("MIDI_channel10_drums", signatures.value("piano.mid") != signatures.value("drums.mid"));
+            check("MIDI_missing_bank_GM_fallback", !signatures.value("bank.mid").empty() &&
+                                                       signatures.value("bank.mid") == signatures.value("piano.mid"));
+            Track kar(QUrl::fromLocalFile(root + "words.kar"));
+            Importer::probe(kar);
+            const Lyric words = Lyric::loadForTrack(kar);
+            check("MIDI_KAR_timed_embedded_priority",
+                  words.lines().size() == 2 && words.lines()[0].text == QStringLiteral("第一句") &&
+                      words.lines()[1].text == QStringLiteral("第二句") &&
+                      std::abs(words.lines()[1].time - 0.5) < 0.001 && kar.artist().isEmpty());
+            Track plain(QUrl::fromLocalFile(source));
+            Importer::probe(plain);
+            const Lyric external = Lyric::loadForTrack(plain);
+            check("MIDI_external_lyrics_fallback",
+                  external.isTimed() && external.lines()[0].text == QStringLiteral("外置回退"));
+            MidiSequence sequence;
+            QString error;
+            QByteArray oversized(MidiSequence::kMaxBytes + 1, '\0');
+            check("MIDI_size_limit", !MidiSequence::parse(oversized, sequence, error) && error.contains("32 MiB"));
+            const std::atomic<bool> cancelled{true};
+            check("MIDI_parser_cancel", !MidiSequence::parse(bytes(source), sequence, error, &cancelled));
+            bool truncations = true;
+            const QByteArray original = bytes(source);
+            for (qsizetype size = 0; size < original.size(); ++size)
+                truncations &= !MidiSequence::parse(original.left(size), sequence, error);
+            check("MIDI_all_truncations_rejected", truncations);
+            check("MIDI_stable_track_event_order",
+                  MidiSequence::parse(bytes(root + "stable.mid"), sequence, error) && sequence.events.size() == 2 &&
+                      sequence.events[0].status == 0xc0 && sequence.events[1].status == 0x90);
+            check("MIDI_GM_GS_XG_unknown_sysex",
+                  MidiSequence::parse(bytes(root + "reset.mid"), sequence, error) && sequence.events.size() == 3 &&
+                      std::all_of(sequence.events.begin(), sequence.events.end(),
+                                  [](const MidiEvent &event) { return event.status == 0xf0; }));
+            const bool legacyParsed = MidiSequence::parse(bytes(root + "legacy.kar"), sequence, error);
+            const Lyric legacy = Lyric::parseEmbedded(sequence.tags.value("lyrics"));
+            check("MIDI_KAR_legacy_encoding_long_time",
+                  legacyParsed && sequence.tags.value("title") == "Legacy" && legacy.lines().size() == 2 &&
+                      legacy.lines()[0].text == QStringLiteral("中文") && legacy.lines()[1].time == 6000);
+            std::atomic<bool> abort{false};
+            Importer::Result imported;
+            std::thread importWorker([&] { imported = Importer::read({source}, true, &abort); });
+            QThread::msleep(5);
+            abort.store(true);
+            importWorker.join();
+            check("MIDI_import_initialization_cancel", imported.cancelled && imported.tracks.empty());
+            abort.store(false);
+            AudioEncoder::Result encoded;
+            EncodeTarget target;
+            target.codecId = AV_CODEC_ID_PCM_S16LE;
+            const QString output = converted.filePath("cancel.wav");
+            std::thread convertWorker(
+                [&] { encoded = AudioEncoder::convert(root + "long1800.mid", output, target, {}, abort); });
+            QThread::msleep(5);
+            abort.store(true);
+            convertWorker.join();
+            check("MIDI_convert_initialization_cancel_cleanup", encoded.cancelled && !QFileInfo::exists(output));
+        } else {
+            QString error;
+            auto stream = SequencedAudioSource::openFile(source, error, {});
+            const auto length = stream ? stream->seek(0, AVSEEK_SIZE) : 0;
+            check("MODULE_virtual_size_seek_bounds",
+                  stream && length > 80 && stream->seek(0, SEEK_END) == length && stream->seek(1, SEEK_END) < 0 &&
+                      stream->seek(-1, SEEK_SET) < 0 && stream->seek(0, SEEK_SET) == 0);
+            QFile oversized(converted.filePath("oversized.it"));
+            const bool created = oversized.open(QIODevice::WriteOnly) && oversized.write("IMPM", 4) == 4 &&
+                                 oversized.resize(64 * 1024 * 1024 + 1);
+            oversized.close();
+            auto rejected = Decoder::openFile(oversized.fileName(), {}, &error);
+            check("MODULE_size_limit", created && !rejected && error.contains("64 MiB"));
+        }
+        // producer 真实合成/冷定位期间 stop 和切歌；旧 EOF 不得重新点亮新曲。
+        bool cancellation = true;
+        auto engine = AudioEngine::create();
+        int finished = 0;
+        engine->onFinished = [&] { ++finished; };
+        for (int attempt = 0; attempt < 30; ++attempt) {
+            auto decoder = Decoder::openFile(isMidi ? root + "long1800.mid" : source);
+            if (!decoder) {
+                cancellation = false;
+                break;
+            }
+            cancellation &= engine->play(std::move(decoder), 0, -1, false);
+            std::shared_ptr<Decoder> observer;
+            {
+                const std::lock_guard lock(engine->m_mutex);
+                observer = engine->m_decoder;
+            }
+            cancellation &= engine->seekSeconds(isMidi ? 1799 : 2.5) && engine->resume();
+            QThread::msleep(2);
+            cancellation &= engine->seekSeconds(0.25);
+            engine->stop();
+            cancellation &= observer && observer->isCancelled();
+            auto next = Decoder::openFile(qEnvironmentVariable("TTPLAYER_TESTDIR") + "/demo01.wav");
+            cancellation &= bool(next) && engine->play(std::move(next), 0, -1, false);
+            QCoreApplication::processEvents();
+            cancellation &= !engine->isPlaying() && engine->durationSeconds() > 10 && finished == 0;
+            engine->stop();
+        }
+        engine.reset();
+        check(label("cancel_seek_stop_switch_owner_30").constData(), cancellation);
+        if (isMidi && qEnvironmentVariableIntValue("TTPLAYER_SEQUENCE_BENCH") != 0) {
+            for (const int seconds : {300, 1800})
+                benchmark(seconds);
+        }
+        return failed;
     }
     // 内嵌歌词真实探针：复用已有后台开流/预取，不改源文件或用户存档。
     void embeddedLyrics() {
@@ -3965,6 +4230,7 @@ int runRegressionSuite(const QString &suite, QTextStream &out) {
     RegressionTests tests{out};
     if (suite == "REVIEW") return tests.edges();
     if (suite == "CONVERT") return tests.convert();
+    if (suite == "MIDI" || suite == "MODULE") return tests.sequences(suite);
     if (QStringList{"DECODER", "FORMAT", "GAPLESS", "GAIN", "SPECTRUM", "PLAYBACK", "SCENE", "DEVICE", "SLEEP"}
             .contains(suite))
         return tests.audio(suite);
@@ -3972,7 +4238,7 @@ int runRegressionSuite(const QString &suite, QTextStream &out) {
 }
 
 QStringList regressionSuites() {
-    return {"REVIEW", "CONVERT", "DECODER", "FORMAT",  "GAPLESS", "GAIN",  "SPECTRUM", "PLAYBACK",
-            "SCENE",  "DEVICE",  "SLEEP",   "LIBRARY", "IMPORT",  "COVER", "SEARCH",   "UI",
-            "PERF",   "SYSTEM",  "ARCHIVE", "CUE",     "LISTS",   "SHIFT", "PLAYLIST"};
+    return {"MIDI",     "MODULE", "REVIEW",  "CONVERT", "DECODER", "FORMAT", "GAPLESS", "GAIN",   "SPECTRUM",
+            "PLAYBACK", "SCENE",  "DEVICE",  "SLEEP",   "LIBRARY", "IMPORT", "COVER",   "SEARCH", "UI",
+            "PERF",     "SYSTEM", "ARCHIVE", "CUE",     "LISTS",   "SHIFT",  "PLAYLIST"};
 }

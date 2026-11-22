@@ -28,3 +28,9 @@
 [submodule "3rd/bzip2"]
 	path = 3rd/bzip2
 	url = https://github.com/libarchive/bzip2.git
+[submodule "3rd/fluidlite"]
+	path = 3rd/fluidlite
+	url = https://github.com/divideconcept/FluidLite.git
+[submodule "3rd/libxmp"]
+	path = 3rd/libxmp
+	url = https://github.com/libxmp/libxmp.git

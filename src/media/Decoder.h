@@ -51,13 +51,15 @@ public:
     };
 
     /// 打开失败抛不出来（C++ 无异常习惯这里用工厂 + error()）
-    static std::unique_ptr<Decoder> openFile(const QString &path, std::shared_ptr<std::atomic<bool>> cancel = {});
+    static std::unique_ptr<Decoder> openFile(const QString &path, std::shared_ptr<const std::atomic<bool>> cancel = {},
+                                             QString *error = nullptr);
     /// 从自定义字节流打开（电台 / 归档条目）；displayName 仅用于错误日志。
     /// 传 shared_ptr：电台可在开流（find_stream_info）被搬到后台线程后，由发起方持有
     /// 同一份引用随时 cancel()（唤醒卡住的 IO）而不会与 Decoder 争所有权 / 悬垂。
     static std::unique_ptr<Decoder> openStream(std::shared_ptr<StreamSource> src,
                                                const QString &displayName = QString(),
-                                               std::shared_ptr<std::atomic<bool>> cancel = {});
+                                               std::shared_ptr<const std::atomic<bool>> cancel = {},
+                                               QString *error = nullptr);
 
     ~Decoder();
     Decoder(const Decoder &) = delete;
@@ -149,7 +151,7 @@ private:
     int64_t m_discardUntil = -1; // seek 后要丢到的目标帧（-1 = 无需丢弃）
     bool m_flushSent = false;
 
-    std::shared_ptr<std::atomic<bool>> m_externalCancel;
+    std::shared_ptr<const std::atomic<bool>> m_externalCancel;
     std::atomic<bool> m_abort{false}; // R08：取消 IO（跨线程读，FFmpeg 中断回调 + read 循环判）
 
     static constexpr int64_t kNoPTS = INT64_MIN;

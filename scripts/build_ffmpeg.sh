@@ -26,7 +26,7 @@ if [[ ! -f "$SRC/configure" ]]; then
 fi
 
 require_frozen_ffmpeg "$SRC"
-COMMIT=$(git -C "$SRC" rev-parse HEAD)
+COMMIT=$(source_revision "$SRC")
 
 # 目标架构列表：默认本机；发版可传多架构
 ARCHS=(native)

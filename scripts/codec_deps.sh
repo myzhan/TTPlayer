@@ -26,14 +26,14 @@ else
     CODEC_3RD="$(pwd)/3rd"
 fi
 CODEC_PREFIX="$CODEC_3RD/codec-build"
-CODEC_LIBS=(ogg vorbis vorbisenc opus mp3lame)
+CODEC_LIBS=(ogg vorbis vorbisenc vorbisfile opus mp3lame)
 CODEC_SOURCES=(ogg vorbis opus lame)
 
 # 构建指纹用：四个源码子模块各自的 commit。
 codec_sources_commit() {
     local name commit
     for name in "${CODEC_SOURCES[@]}"; do
-        commit="$(git -C "$CODEC_3RD/$name" rev-parse HEAD 2>/dev/null || echo missing)"
+        commit="$(source_revision "$CODEC_3RD/$name")"
         printf '%s=%s;' "$name" "$commit"
     done
 }

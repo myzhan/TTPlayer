@@ -24,7 +24,7 @@ QString Importer::fileDialogFilter() {
     return filter;
 }
 
-void Importer::probe(Track &t, std::shared_ptr<std::atomic<bool>> cancel) {
+void Importer::probe(Track &t, std::shared_ptr<const std::atomic<bool>> cancel) {
     if (t.isNull() || t.isRadio()) return;
     t.setEmbeddedLyrics({});
     QString archive, entry;
@@ -34,12 +34,14 @@ void Importer::probe(Track &t, std::shared_ptr<std::atomic<bool>> cancel) {
         t.setDecodeProblem(file.exists() ? QStringLiteral("文件不可读，请检查权限") : QStringLiteral("文件不存在"));
         return;
     }
-    auto decoder =
-        archived ? Decoder::openStream(std::make_shared<ArchiveEntrySource>(archive, entry), t.url().toString(), cancel)
-                 : Decoder::openFile(t.url().toLocalFile(), cancel);
+    QString error;
+    auto decoder = archived ? Decoder::openStream(std::make_shared<ArchiveEntrySource>(archive, entry),
+                                                  t.url().toString(), cancel, &error)
+                            : Decoder::openFile(t.url().toLocalFile(), cancel, &error);
     if (!decoder) {
-        t.setDecodeProblem(archived ? QStringLiteral("归档音频条目无法读取或解码")
-                                    : QStringLiteral("音频解码失败（文件损坏、格式不支持或无可用音频流）"));
+        const QString summary = archived ? QStringLiteral("归档音频条目无法读取或解码")
+                                         : QStringLiteral("音频解码失败（文件损坏、格式不支持或无可用音频流）");
+        t.setDecodeProblem(error.isEmpty() ? summary : summary + QStringLiteral("：") + error);
         return;
     }
     auto &d = *decoder;
@@ -75,7 +77,12 @@ Importer::Result Importer::read(const QStringList &paths, bool metadata, const s
             continue;
         }
         if (metadata) {
-            probe(t);
+            // probe 同步完成并销毁 Decoder；借用标志不超出 read 的调用栈。
+            probe(t, std::shared_ptr<const std::atomic<bool>>(cancel, [](const std::atomic<bool> *) {}));
+            if (cancel && cancel->load()) {
+                result.cancelled = true;
+                break;
+            }
             if (!t.decodeProblem().isEmpty()) {
                 result.problems << key + QStringLiteral("：") + t.decodeProblem();
                 continue;

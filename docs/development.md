@@ -7,7 +7,7 @@
 
 - 产品代码在 `src/`，构建入口是仓库根的 `CMakeLists.txt`，语言标准由顶层固定为 C++20。
 - 第三方依赖以 git submodule 冻结在 `3rd/`，默认从源码静态编译，不依赖系统包：
-  `ffmpeg`、`zlib`、`xz`(liblzma)、`libarchive`、`bzip2`、`sdl3`、`ogg`、`vorbis`、`opus`、`lame`。
+  `ffmpeg`、`zlib`、`xz`(liblzma)、`libarchive`、`bzip2`、`sdl3`、`ogg`、`vorbis`、`opus`、`lame`、`fluidlite`、`libxmp`。
 - 两个脚本产物目录不入仓：
   - `3rd/ffmpeg-build/`：`scripts/build_ffmpeg*.sh` 编出的静态 FFmpeg（含 `lib/`、`include/`）。
   - `3rd/codec-build/`：`scripts/codec_deps.sh` 编出的 mp3 / vorbis / opus 静态库。
@@ -39,6 +39,50 @@ git submodule update --init --recursive --depth 1
 
 `bzip2` 必须保留：libarchive 找不到内置 bzlib 时会退回外部 `bzip2 -d` 程序过滤器，
 在 Windows 管道上会卡死。顶层 CMake 已在 configure 阶段对 `HAVE_BZLIB_H` 做硬校验。
+
+### 序列音乐与默认音色
+
+`MidiSequence` 有界解析 SMF 0/1、RMID、PPQN/tempo 与 SMPTE 时间基，将 KAR meta 词转成 LRC。
+`SequencedAudioSource` 独占 FluidLite 或 xmp-lite 上下文，按需给出 48 kHz 双声道 Float32 RF64 字节流，
+由 `Decoder` 原来的 FFmpeg PCM/swr 路径输出。七后缀共用格式白名单，不开放 libxmp 其余加载器。
+随机定位从头重置、按不超过 1024 帧合成丢弃；冷定位成本随目标位置增长，长度查询不做渲染。
+源数据限 MIDI 32 MiB/100 万事件/24 小时、模块 64 MiB；MIDI 尾音固定 2 秒，模块只播首个有效 sequence 一遍。
+合成和样本加载都在原有后台 owner 中，音频设备回调不做 IO 或合成；初始化取消传入只读原子标志。
+
+FluidLite 固定 `4a01cf1c67419e71da971d209f2855bbf4f3bab8`（LGPL-2.1-or-later），
+libxmp 固定 `5d4f6aa2c7dcdf8e9cd8129fe579d45b36a302da`（4.7.4，MIT），只链接 lite 静态目标。
+SF3 开启、stb_vorbis 关闭，vorbisfile/vorbis/ogg 必须来自现有 `codec-build` 的同构型产物。
+默认音色是 FluidR3Mono_GM.sf3 v2.315（MIT），`prepare_soundfont.py` 校验 Debian 数据包的固定大小及
+SHA-256 后，只提取音色和版权文件；不安装软件包、不跟随链接。首次 CMake 配置需联网下载约 18.7 MB，
+已校验的 `build/assets/` 可离线复用；损坏缓存明确报错。Qt BIG_RESOURCES 将音色嵌入主程序，运行时无下载。
+
+精准自检使用 `./scripts/selftest.sh MIDI MODULE DECODER FORMAT ARCHIVE CONVERT LYRIC GAPLESS PLAYBACK`，
+加 `release` 验证 Release。MIDI 档包含 30 次独立音色初始化及真实 producer 定位/停止/换曲，超时预算 600 秒；
+`TTPLAYER_SEQUENCE_BENCH=1` 额外记录 5/30 分钟冷定位，普通回归不付这笔成本。
+
+### 许可证与静态库重链接
+
+安装目录的 `legal/`（Windows）、`share/ttplayer/legal/`（Linux）、
+`ttplayer.app/Contents/Resources/legal/`（macOS）包含 FluidLite 的版权声明、LGPL 2.1 全文、
+libxmp/音色 MIT 许可、构建信息和 `corresponding-source.tar.gz`。程序自身 MIT 许可不替代第三方许可。
+用户可修改这些库、为调试这些修改进行逆向工程，并用修改版重建/重链接本程序。
+
+源码包包含此次工作树对应的全部产品及静态依赖源码、构建脚本、音色数据包缓存和逐文件 SHA-256 清单；
+不包含用户存档、Git 历史、Qt SDK 或构建缓存。采用 LGPL 2.1 §6(a) 的源代码重链接方式，而非只给下载链接。
+`build-info.json` 的 `binary_sha256` 按 `binary_sha256_scope` 说明记录链接产物；Qt 部署与代码签名在安装之后
+改写主程序字节，重建产物与发布包本就不逐位相同，该哈希只用于识别对应的源码世代。
+解开压缩包后进入 `TTPlayer/`，无需再初始化子模块，按本文的平台章节安装 Qt/编译器/CMake 等工具并构建：
+
+1. 修改 `3rd/fluidlite/`（或其他静态依赖）源码；各目录内 `.source-revision` 记录对应版本。
+2. macOS 执行 `zsh scripts/build_ffmpeg.sh --force`；Linux 用 `bash scripts/build_ffmpeg_linux.sh --force`；
+   Windows 在 MSVC developer 环境的 MSYS2 shell 执行 `bash scripts/build_ffmpeg_msvc.sh --force`。
+3. 执行 `cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=<Qt路径>`，
+   再执行 `cmake --build build/release --config Release -j 4`，即把修改后的 FluidLite/xmp 静态重链接进程序。
+4. 需要可搬动包时按本文打包章节执行；macOS 自建 bundle 需重新 adhoc 签名，不要求开发者签名凭证。
+
+源码包已经包含默认音色缓存，因此音色准备不需要再次联网；Qt 与构建工具仍由开发者环境提供。
+从源码包构建时脚本读取 `.source-revision`，修改后使用 `--force` 避免复用旧静态依赖。
+发布前必须检查这些材料随二进制一同分发，并实际从源码包重建，不能用许可证文字代替重链接材料。
 
 ## 2. 三平台通用要求
 

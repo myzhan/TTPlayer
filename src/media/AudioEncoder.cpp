@@ -64,8 +64,15 @@ AudioEncoder::Result encode(const QString &input, const QString &output, const E
         target.encoderName ? avcodec_find_encoder_by_name(target.encoderName) : avcodec_find_encoder(target.codecId);
     if (!codec) return fail(QStringLiteral("当前构建没有这个编码器"), AVERROR_ENCODER_NOT_FOUND);
 
-    std::unique_ptr<Decoder> dec = Decoder::openFile(input);
-    if (!dec) return fail(QStringLiteral("打开源文件失败"), AVERROR_INVALIDDATA);
+    // 同步调用内借用取消标志，Decoder 先于调用栈退出销毁。
+    const std::shared_ptr<const std::atomic<bool>> cancellation(&cancel, [](const std::atomic<bool> *) {});
+    QString decodeError;
+    std::unique_ptr<Decoder> dec = Decoder::openFile(input, cancellation, &decodeError);
+    if (cancel.load()) {
+        result.cancelled = true;
+        return result;
+    }
+    if (!dec) return fail(QStringLiteral("打开源文件失败：") + decodeError, AVERROR_INVALIDDATA);
     if (dec->sampleRate() <= 0) return fail(QStringLiteral("源文件采样率不可用"), AVERROR_INVALIDDATA);
 
     // 用源采样率统一换算边界，不能用输出率或容器估计时长来截断 CUE 末轨。

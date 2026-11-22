@@ -1,4 +1,5 @@
 #include "FFmpeg.h"
+#include "SequencedAudioSource.h"
 
 #include <cstdio>
 #include <cstdarg>
@@ -199,6 +200,7 @@ const QSet<QString> &playableExtensions() {
             s.insert(e);
         for (const QString &e : floor)
             s.insert(e);
+        s.unite(SequencedAudioSource::extensions());
         return s;
     }();
     return set;

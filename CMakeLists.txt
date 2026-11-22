@@ -252,7 +252,7 @@ endforeach()
 # 这些库又都是 libavcodec 里 libmp3lame/libvorbis/libopus 编码器的下游。
 set(CODEC_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/3rd/codec-build CACHE PATH "prebuilt external codec libs root")
 set(CODEC_LINK_LIBRARIES)
-foreach(_codec vorbisenc vorbis ogg opus mp3lame)
+foreach(_codec vorbisenc vorbisfile vorbis ogg opus mp3lame)
   find_library(CODEC_${_codec} NAMES ${_codec} PATHS "${CODEC_ROOT}/lib" NO_DEFAULT_PATH REQUIRED)
   if(MSVC)
     # Debug 必须匹配 /MDd，不能拿 Release 的 CRT 静态对象与 Qt Debug 混链。
@@ -261,6 +261,53 @@ foreach(_codec vorbisenc vorbis ogg opus mp3lame)
     list(APPEND CODEC_LINK_LIBRARIES "${CODEC_${_codec}}")
   endif()
 endforeach()
+
+# 序列音乐后端始终从固定子模块静态构建；局部选项不污染其他第三方项目。
+function(ttplayer_sequence_dependencies)
+  set(CMAKE_AUTOMOC OFF)
+  set(CMAKE_AUTORCC OFF)
+  set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
+  set(FLUIDLITE_BUILD_STATIC ON)
+  set(FLUIDLITE_BUILD_SHARED OFF)
+  set(ENABLE_SF3 ON)
+  set(STB_VORBIS OFF)
+  set(WITH_FLOAT ON)
+  # 已核对的同构型库替代上游 find_package，不探测系统动态库。
+  add_library(Vorbis::vorbisfile INTERFACE IMPORTED GLOBAL)
+  set_property(TARGET Vorbis::vorbisfile PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${CODEC_ROOT}/include")
+  foreach(_codec vorbisfile vorbis ogg)
+    if(MSVC)
+      target_link_libraries(Vorbis::vorbisfile INTERFACE
+        "$<IF:$<CONFIG:Debug>,${CODEC_ROOT}/debug/lib/${_codec}.lib,${CODEC_${_codec}}>")
+    else()
+      target_link_libraries(Vorbis::vorbisfile INTERFACE "${CODEC_${_codec}}")
+    endif()
+  endforeach()
+  set(CMAKE_DISABLE_FIND_PACKAGE_Vorbis TRUE)
+  add_subdirectory(3rd/fluidlite EXCLUDE_FROM_ALL)
+  set(BUILD_STATIC ON)
+  set(BUILD_SHARED OFF)
+  set(BUILD_LITE ON)
+  set(WITH_UNIT_TESTS OFF)
+  set(LIBXMP_DISABLE_DEPACKERS ON)
+  set(LIBXMP_DISABLE_PROWIZARD ON)
+  set(LIBXMP_DISABLE_IT OFF)
+  set(LIBXMP_PIC ON)
+  add_subdirectory(3rd/libxmp EXCLUDE_FROM_ALL)
+  foreach(_target fluidlite-static xmp_lite_static)
+    if(MSVC)
+      target_compile_options(${_target} PRIVATE /w)
+    else()
+      target_compile_options(${_target} PRIVATE -w)
+    endif()
+  endforeach()
+endfunction()
+ttplayer_sequence_dependencies()
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(TTPLAYER_SOUNDFONT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/assets")
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/prepare_soundfont.py"
+  --output "${TTPLAYER_SOUNDFONT_DIR}" COMMAND_ERROR_IS_FATAL ANY)
 
 qt_add_executable(ttplayer
   # 进程外壳：入口 / 崩溃落盘 / 单实例
@@ -277,6 +324,8 @@ qt_add_executable(ttplayer
   # 媒体字节层：解码 / 归档 / 编码 / CUE·歌词·封面·歌单解析
   src/media/FFmpeg.cpp
   src/media/Decoder.cpp
+  src/media/MidiSequence.cpp
+  src/media/SequencedAudioSource.cpp
   src/media/Archive.cpp
   src/media/AudioEncoder.cpp
   src/media/AudioConvert.cpp
@@ -320,6 +369,11 @@ qt_add_executable(ttplayer
   src/ui/SettingsWindow.cpp
   src/ui/MainWindow.cpp
 )
+qt_add_resources(ttplayer gm_soundfont BIG_RESOURCES
+  PREFIX "/soundfont" BASE "${TTPLAYER_SOUNDFONT_DIR}"
+  FILES "${TTPLAYER_SOUNDFONT_DIR}/FluidR3Mono_GM.sf3" "${TTPLAYER_SOUNDFONT_DIR}/FluidR3Mono-LICENSE.txt"
+  OPTIONS -no-compress)
+
 target_include_directories(ttplayer PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${FFMPEG_ROOT}/include
@@ -336,6 +390,7 @@ target_link_libraries(ttplayer PRIVATE
   ${ARCHIVE_LIBRARY}
   # 静态链接顺序按依赖
   ${FFMPEG_LINK_LIBRARIES}
+  fluidlite-static xmp_lite_static
   # avcodec 的外部编码器（mp3/vorbis/opus）在运行时引用这些库
   ${CODEC_LINK_LIBRARIES}
 )
@@ -480,6 +535,20 @@ if(WIN32)
 else()
   install(TARGETS ttplayer BUNDLE DESTINATION . RUNTIME DESTINATION bin)
 endif()
+# LGPL 静态组件随包提供完整对应源码（含本程序源码），可直接修改并重建/重链接。
+if(APPLE AND TTPLAYER_BUNDLE)
+  set(_tt_legal_dir "ttplayer.app/Contents/Resources/legal")
+elseif(WIN32)
+  set(_tt_legal_dir "legal")
+else()
+  set(_tt_legal_dir "share/ttplayer/legal")
+endif()
+install(CODE "execute_process(COMMAND \"${Python3_EXECUTABLE}\" \"${CMAKE_CURRENT_SOURCE_DIR}/scripts/package.py\"
+  --source-materials \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${_tt_legal_dir}\"
+  --binary \"$<TARGET_FILE:ttplayer>\"
+  --build-info \"${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} Qt ${Qt6_VERSION} $<CONFIG> ${CMAKE_SYSTEM_PROCESSOR}\"
+  COMMAND_ERROR_IS_FATAL ANY)")
+install(FILES docs/development.md DESTINATION "${_tt_legal_dir}")
 if(UNIX AND NOT APPLE)
   set(_tt_linux_icon "${CMAKE_CURRENT_BINARY_DIR}/icons/$<CONFIG>/ttplayer.png")
   add_custom_command(OUTPUT "${_tt_linux_icon}"
@@ -595,4 +664,8 @@ foreach(_p IN LISTS QT_TEST_PROBES)
     FIXTURES_REQUIRED audio_samples
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;SDL_AUDIODRIVER=dummy;TTPLAYER_SELFTEST=1;TTPLAYER_TESTDIR=${CMAKE_CURRENT_BINARY_DIR}/fixtures;TTPLAYER_SILENT_OUTPUT=1;TTPLAYER_QT_STATE=${CMAKE_CURRENT_BINARY_DIR}/selftest-ctest/${_p}.json;TTPLAYER_QT_${_p}_PROBE=1"
     TIMEOUT 120)
+  if(_p STREQUAL "MIDI")
+    # 30 次独立 SF3 初始化/取消，消毒器与 Debug 构型需要额外预算。
+    set_tests_properties(qt.${_p} PROPERTIES TIMEOUT 600)
+  endif()
 endforeach()

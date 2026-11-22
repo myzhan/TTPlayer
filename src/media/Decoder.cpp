@@ -1,5 +1,6 @@
 #include "Decoder.h"
 #include "FFmpeg.h"
+#include "SequencedAudioSource.h"
 extern "C" {
 #include <libswresample/swresample.h>
 }
@@ -7,18 +8,25 @@ extern "C" {
 #include <algorithm>
 #include <cstring>
 
-std::unique_ptr<Decoder> Decoder::openFile(const QString &path, std::shared_ptr<std::atomic<bool>> cancel) {
+std::unique_ptr<Decoder> Decoder::openFile(const QString &path, std::shared_ptr<const std::atomic<bool>> cancel,
+                                           QString *error) {
+    if (error) error->clear();
     std::unique_ptr<Decoder> d(new Decoder());
     d->m_externalCancel = std::move(cancel);
-    if (!d->init(path)) d.reset();
+    if (!d->init(path)) {
+        if (error) *error = d->m_error;
+        d.reset();
+    }
     return d;
 }
 
 std::unique_ptr<Decoder> Decoder::openStream(std::shared_ptr<StreamSource> src, const QString &displayName,
-                                             std::shared_ptr<std::atomic<bool>> cancel) {
+                                             std::shared_ptr<const std::atomic<bool>> cancel, QString *error) {
+    if (error) error->clear();
     std::unique_ptr<Decoder> d(new Decoder());
     d->m_externalCancel = std::move(cancel);
     if (!d->initStream(std::move(src))) {
+        if (error) *error = d->m_error;
         if (!displayName.isEmpty()) qWarning("[decoder] open stream failed: %s", displayName.toUtf8().constData());
         d.reset();
     }
@@ -108,12 +116,20 @@ bool Decoder::openFormat(const QString *path) {
 }
 
 bool Decoder::init(const QString &path) {
+    auto sequence = SequencedAudioSource::openFile(path, m_error, m_externalCancel);
+    if (sequence) return initStream(std::move(sequence));
+    if (!m_error.isEmpty()) return false;
     if (!openFormat(&path)) return false;
     return finishInit();
 }
 
 bool Decoder::initStream(std::shared_ptr<StreamSource> src) {
     if (!src) return false;
+    if (!std::dynamic_pointer_cast<SequencedAudioSource>(src)) {
+        auto sequence = SequencedAudioSource::openStream(src, m_error, m_externalCancel);
+        if (!m_error.isEmpty()) return false;
+        if (sequence) src = std::move(sequence);
+    }
     ff::ensureInit();
     m_streamSrc = std::move(src);
     m_fmt = avformat_alloc_context();
@@ -221,6 +237,12 @@ bool Decoder::finishInit() {
     } else {
         const QString container = m_fmt->iformat ? QString::fromUtf8(m_fmt->iformat->name) : QString();
         m_formatName = ff::codecName(par->codec_id, par->profile, container);
+    }
+
+    if (const auto sequence = std::dynamic_pointer_cast<SequencedAudioSource>(m_streamSrc)) {
+        m_formatName = sequence->format();
+        m_bitRateKbps = 0;
+        m_tags = sequence->tags();
     }
 
     // 总时长：流 duration → 容器 duration → nb_frames

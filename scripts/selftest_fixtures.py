@@ -48,7 +48,153 @@ def dsd_samples(target):
     (target / "dsd.dff").write_bytes(b"FRM8" + struct.pack(">Q", len(payload)) + payload)
 
 
-def generate(folder: Path, matrix: bool, lyrics: bool = False):
+def sequence_samples(folder):
+    """现场生成 SMF 与四种各自有真实采样的模块，不依赖外部曲目或改后缀。"""
+    folder.mkdir(parents=True, exist_ok=True)
+
+    def vlq(number):
+        data = [number & 127]
+        while number > 127:
+            number >>= 7
+            data.insert(0, (number & 127) | 128)
+        return bytes(data)
+
+    def event(delta, data):
+        return vlq(delta) + data
+
+    def meta(delta, kind, data):
+        return event(delta, bytes([255, kind]) + vlq(len(data)) + data)
+
+    def smf(tracks, division=480, fmt=None):
+        return (b"MThd" + struct.pack(">IHHH", 6, int(len(tracks) > 1) if fmt is None else fmt, len(tracks), division)
+                + b"".join(b"MTrk" + struct.pack(">I", len(track)) + track for track in tracks))
+
+    end = meta(0, 47, b"")
+    notes = (meta(0, 3, "序列测试".encode()) + event(0, b"\xc0\x00")
+             + event(0, b"\xb0\x0a\x10") + event(0, b"\x90\x3c\x64")
+             + event(240, b"\xb0\x40\x7f") + event(240, b"\x80\x3c\x00")
+             + event(480, b"\xb0\x40\x00") + event(480, b"\x90\x40\x00") + end)
+    midi = smf([notes])
+    (folder / "旋律.MID").write_bytes(midi)
+    tempo = meta(0, 81, bytes.fromhex("07a120")) + meta(480, 81, bytes.fromhex("0f4240")) + meta(960, 47, b"")
+    (folder / "tempo.midi").write_bytes(smf([tempo, notes]))
+    for fps in (24, 25, 29, 30):
+        track = event(0, b"\x90\x3c\x64") + event(fps * 40, b"\x80\x3c\x00") + end
+        (folder / f"smpte{fps}.mid").write_bytes(smf([track], ((256 - fps) << 8) | 40))
+    words = (meta(0, 1, b"@KMIDI KARAOKE FILE") + meta(0, 5, "/第一句".encode())
+             + meta(480, 5, "/第二句".encode()) + meta(960, 47, b""))
+    (folder / "words.kar").write_bytes(smf([notes, words]))
+    body = b"RMIDdata" + struct.pack("<I", len(midi)) + midi + (b"\0" if len(midi) & 1 else b"")
+    (folder / "rmid.mid").write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
+    (folder / "running.mid").write_bytes(smf([event(0, b"\x90\x3c\x64") + event(480, b"\x3c\x00") + end]))
+    for name, channel, program, bank in (("piano", 0, 0, 0), ("strings", 0, 48, 0),
+                                         ("drums", 9, 0, 0), ("bank", 0, 0, 1)):
+        track = (event(0, bytes([0xb0 | channel, 0, bank])) + event(0, bytes([0xc0 | channel, program]))
+                 + event(0, bytes([0x90 | channel, 60, 100])) + event(960, bytes([0x80 | channel, 60, 0])) + end)
+        (folder / f"{name}.mid").write_bytes(smf([track]))
+    for seconds in (300, 1800):
+        track = (event(0, b"\xc0\x30") + event(0, b"\x90\x3c\x64")
+                 + event(seconds * 960, b"\x80\x3c\0") + end)
+        (folder / f"long{seconds}.mid").write_bytes(smf([track]))
+    (folder / "format2.mid").write_bytes(smf([notes], fmt=2))
+    (folder / "truncated.mid").write_bytes(midi[:-3])
+    (folder / "badvlq.mid").write_bytes(smf([b"\x81\x81\x81\x81\x00\x90\x3c\x64" + end]))
+    (folder / "device.mid").write_bytes(smf([event(0, b"\xf0\x04\x41\x10\x16\xf7") + end]))
+    (folder / "ports.mid").write_bytes(smf([meta(0, 33, b"\x01") + end]))
+    (folder / "eventlimit.mid").write_bytes(smf([event(0, b"\xc0\0") * 1000000 + end]))
+    (folder / "timelimit.mid").write_bytes(smf([event(0x0fffffff, b"\x90\x3c\x64") + end], division=1))
+    (folder / "stable.mid").write_bytes(smf([event(0, b"\xc0\x30") + end, event(0, b"\x90\x3c\x64") + end]))
+    resets = b"".join(event(0, b"\xf0" + vlq(len(payload)) + payload) for payload in
+                      (bytes.fromhex("7e7f0901f7"), bytes.fromhex("4110421240007f0041f7"),
+                       bytes.fromhex("43104c00007e00f7"), bytes.fromhex("7d01f7")))
+    (folder / "reset.mid").write_bytes(smf([resets + end]))
+    (folder / "legacy.kar").write_bytes(smf([meta(0, 1, b"@TLegacy")
+                                            + meta(0, 1, "/中文".encode("gb18030"))
+                                            + meta(6000 * 960, 1, "/晚句".encode("gb18030")) + end]))
+    (folder / "旋律.lrc").write_text("[00:00.10]外置回退\n", encoding="utf-8")
+    (folder / "words.lrc").write_text("[00:00.10]不应覆盖内嵌词\n", encoding="utf-8")
+
+    sample = bytes(int(70 * math.sin(i * 2 * math.pi / 32)) & 255 for i in range(256))
+    mod = bytearray(1084 + 1024)
+    mod[:20] = b"Generated MOD".ljust(20, b"\0")
+    mod[20:50] = b"sine".ljust(22, b"\0") + struct.pack(">HBBHH", 128, 0, 64, 0, 128)
+    mod[950], mod[951] = 1, 127
+    mod[1080:1084] = b"M.K."
+    for row, period in ((0, 428), (16, 339)):
+        mod[1084 + row * 16:1088 + row * 16] = bytes([period >> 8, period & 255, 0x10, 0])
+    mod[1084 + 32 * 16:1088 + 32 * 16] = b"\0\0\x0b\0"
+    (folder / "sample.mod").write_bytes(mod + sample)
+
+    xm = (b"Extended Module: " + b"Generated XM".ljust(20, b"\0") + b"\x1a"
+          + b"TTPlayer fixture".ljust(20, b"\0") + struct.pack("<HI8H", 0x104, 276, 1, 0, 2, 1, 1, 1, 6, 125)
+          + bytes(256))
+    pattern = bytearray(32 * 2 * 5)
+    pattern[:5] = bytes([49, 1, 0, 0, 0])
+    pattern[160:165] = bytes([53, 1, 0, 0, 0])
+    instrument = bytearray(263)
+    struct.pack_into("<I", instrument, 0, 263)
+    instrument[4:26] = b"sine".ljust(22, b"\0")
+    struct.pack_into("<HI", instrument, 27, 1, 40)
+    sample_header = struct.pack("<IIIBbBBbB", 256, 0, 256, 64, 0, 1, 128, 0, 0) + b"sine".ljust(22, b"\0")
+    delta = bytes((value - (sample[i - 1] if i else 0)) & 255 for i, value in enumerate(sample))
+    (folder / "sample.xm").write_bytes(xm + struct.pack("<IBHH", 9, 0, 32, len(pattern))
+                                        + pattern + instrument + sample_header + delta)
+
+    s3m = bytearray(192)
+    s3m[:28] = b"Generated S3M".ljust(28, b"\0")
+    s3m[28:32] = b"\x1a\x10\0\0"
+    struct.pack_into("<6H", s3m, 32, 2, 1, 1, 0, 0x1320, 1)
+    s3m[44:48] = b"SCRM"
+    s3m[48:54] = bytes([64, 6, 125, 0xb0, 0, 0])
+    s3m[64:96] = bytes([0, 8] + [255] * 30)
+    s3m[96:98] = bytes([0, 255])
+    struct.pack_into("<HH", s3m, 98, 7, 12)
+    packed = bytearray()
+    for row in range(64):
+        if row in (0, 16): packed += bytes([0x20, 0x40 if row == 0 else 0x44, 1])
+        if row == 32: packed += bytes([0x80, 2, 0])
+        packed += b"\0"
+    s3m += struct.pack("<H", len(packed) + 2) + packed
+    s3m += bytes((-len(s3m)) % 16)
+    sample_pos = len(s3m)
+    s3m[112] = 1
+    struct.pack_into("<H", s3m, 126, sample_pos // 16)
+    struct.pack_into("<III", s3m, 128, 256, 0, 256)
+    s3m[140], s3m[143] = 64, 1
+    struct.pack_into("<I", s3m, 144, 8363)
+    s3m[160:188] = b"sine".ljust(28, b"\0")
+    s3m[188:192] = b"SCRS"
+    (folder / "sample.s3m").write_bytes(s3m + sample)
+
+    it = bytearray(288)
+    it[:4] = b"IMPM"
+    it[4:30] = b"Generated IT".ljust(26, b"\0")
+    struct.pack_into("<8H", it, 32, 2, 0, 1, 1, 0x214, 0x214, 1, 0)
+    it[48:54] = bytes([128, 48, 6, 125, 128, 0])
+    it[64:128] = bytes([16, 48] + [128] * 62)
+    it[128:192] = bytes([64] * 64)
+    it[192:194] = bytes([0, 255])
+    struct.pack_into("<II", it, 194, 208, 288)
+    packed = bytearray()
+    for row in range(64):
+        if row in (0, 16): packed += bytes([0x81, 3, 60 if row == 0 else 64, 1])
+        if row == 32: packed += bytes([0x81, 8, 2, 0])
+        packed += b"\0"
+    it += struct.pack("<HHI", len(packed), 64, 0) + packed
+    it[208:212] = b"IMPS"
+    it[225:228] = bytes([64, 0x11, 64])
+    it[228:254] = b"sine".ljust(26, b"\0")
+    it[254] = 1
+    struct.pack_into("<7I", it, 256, 256, 0, 256, 8363, 0, 0, len(it))
+    (folder / "sample.it").write_bytes(it + sample)
+    for extension in ("mod", "xm", "s3m", "it"):
+        (folder / f"bad.{extension}").write_bytes((folder / f"sample.{extension}").read_bytes()[:50])
+    with zipfile.ZipFile(folder / "sequences.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+        for name in ("旋律.MID", "words.kar", "sample.mod", "sample.xm", "sample.s3m", "sample.it"):
+            archive.write(folder / name, "中文/" + name)
+
+
+def generate(folder: Path, matrix: bool, lyrics: bool = False, sequenced: bool = False):
     """folder 下生成曲库；按需补编码矩阵与内嵌歌词素材。"""
     folder.mkdir(parents=True, exist_ok=True)
     for name, seconds, hz in [("demo01.wav", 12, 880), ("demo02.wav", 10, 440)]:
@@ -126,6 +272,8 @@ def generate(folder: Path, matrix: bool, lyrics: bool = False):
         with zipfile.ZipFile(target / "lyrics.zip", "w", zipfile.ZIP_DEFLATED) as archive:
             archive.write(target / "timed.mp3", "disc/timed.mp3")
 
+    if sequenced:
+        sequence_samples(folder / "sequences")
     if not matrix:
         return
 
@@ -191,6 +339,6 @@ def generate(folder: Path, matrix: bool, lyrics: bool = False):
 
 
 if __name__ == "__main__":
-    generate(Path(sys.argv[1]), True, lyrics=True)
+    generate(Path(sys.argv[1]), True, lyrics=True, sequenced=True)
     for reason in json.loads((Path(sys.argv[1]) / "fixture-skips.json").read_text()):
         print("FIXTURE SKIP", reason)

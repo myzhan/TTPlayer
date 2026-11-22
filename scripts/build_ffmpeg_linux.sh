@@ -22,7 +22,7 @@ if [[ ! -f "$SRC/configure" ]]; then
 fi
 
 require_frozen_ffmpeg "$SRC"
-COMMIT=$(git -C "$SRC" rev-parse HEAD)
+COMMIT=$(source_revision "$SRC")
 
 # ---- 外部编码库（mp3 / vorbis / opus）先于 FFmpeg 编好 ----
 codec_require_sources

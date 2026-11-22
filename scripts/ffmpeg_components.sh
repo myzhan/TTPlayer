@@ -22,6 +22,15 @@
 FFMPEG_RELEASE="9.0"
 FFMPEG_TAG="n$FFMPEG_RELEASE"
 
+# 分发的对应源码包不带 Git 对象库，使用包内记录的源码版本；重编修改版用 --force。
+source_revision() {
+    if [[ -f "$1/.source-revision" ]]; then
+        cat "$1/.source-revision"
+    else
+        git -C "$1" rev-parse HEAD
+    fi
+}
+
 # 校验 3rd/ffmpeg 的 RELEASE 与冻结版本一致；不一致直接失败，
 # 防止 CI / 打包在子模块被换到别的分支时悄悄编出另一个版本。
 require_frozen_ffmpeg() {

@@ -43,11 +43,12 @@ TTPlayer 是一款 Qt 桌面音乐播放器，沿用经典千千静听的独立�
 | 有损音频 | MP1 / MP2 / MP3、AAC、Vorbis、Opus、WMA / WMA Pro / WMA Voice、Musepack SV7 / SV8、AMR-NB / AMR-WB |
 | 无损与高解析音频 | FLAC、Apple Lossless（ALAC）、WavPack、TTA、APE、TAK、Shorten（SHN）、WMA Lossless、PCM WAV / AIFF / CAF / AU / Wave64，以及解码为 PCM 输出的 DSF / DFF |
 | 独立音轨 | AC-3 / E-AC-3、DTS / DTS-HD、MLP / TrueHD；也可读取受支持容器中的相应音频流 |
+| MIDI 与模块音乐 | MID / MIDI / KAR（SMF 0/1，含 RMID 包装）、MOD / XM / S3M / IT；内置默认 GM 音色，无需配置即可播放、定位或转换为普通音频 |
 | 整轨与列表 | CUE 分轨、M3U / M3U8 列表导入与导出 |
 | 归档直听 | ZIP、TAR（含 gzip / bzip2）、7z。直接从归档读取音频，具体格式取决于所用 libarchive |
 | 歌词 | MP3 USLT、常见 `lyrics` 元数据中的 LRC 或纯文本，以及外置 LRC；暂不解析 MP3 SYLT 二进制同步帧 |
 
-新增格式使用 FFmpeg 原生解码，不增加转换输出种类。MP2、DTS Core、AC-3、E-AC-3、MLP、TrueHD 与 AMR-NB 已用现场生成音频验证；WMA Pro / Lossless / Voice、DTS-HD、Musepack、TAK、Shorten、MP1 与 AMR-WB 暂仅核对组件注册，尚缺实际音频样本覆盖。是否可播仍取决于文件里的具体码流；不支持 DRM 加密文件、MIDI / 模块音乐合成或原生 DSD 输出。
+普通音频使用 FFmpeg 解码；MIDI 与模块音乐按需合成为 PCM，不增加转换输出种类。MP2、DTS Core、AC-3、E-AC-3、MLP、TrueHD 与 AMR-NB 已用现场生成音频验证；WMA Pro / Lossless / Voice、DTS-HD、Musepack、TAK、Shorten、MP1 与 AMR-WB 暂仅核对组件注册，尚缺实际音频样本覆盖。是否可播仍取决于文件里的具体码流；不支持 DRM 加密文件或原生 DSD 输出。MIDI 不支持格式 2、MT-32 等专用音源；不保证专有 GS/XG 音色还原。KAR 优先显示内嵌歌词。长 MIDI 冷定位需要重放前段，位置越靠后等待可能越长；不提供 MIDI 编辑、导出或音色选择。
 
 ## 快捷键
 

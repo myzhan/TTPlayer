@@ -8,6 +8,8 @@
 import argparse
 import configparser
 import hashlib
+import io
+import json
 import os
 from pathlib import Path
 import platform
@@ -15,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 
@@ -306,6 +309,85 @@ def _verify_windows(dist):
         print("WINDOWS_RELOCATED_PACKAGE PASS")
 
 
+def source_materials(destination, binary=None, build_info=""):
+    """随分发交付完整对应源码、音色缓存与重建说明，允许替换静态 LGPL 组件后重链接。"""
+    from prepare_soundfont import verified, URL
+
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    assets = ROOT / "build/assets"
+    package = assets / URL.rsplit("/", 1)[-1]
+    if not verified(package):
+        raise RuntimeError("对应源码包缺少已校验的默认音色数据包")
+    licenses = {
+        "FluidLite-NOTICE.txt": ROOT / "3rd/fluidlite/LICENSE",
+        "LGPL-2.1.txt": ROOT / "3rd/ffmpeg/COPYING.LGPLv2.1",
+        "libxmp-MIT.txt": ROOT / "3rd/libxmp/docs/COPYING",
+        "FluidR3Mono-LICENSE.txt": assets / "FluidR3Mono-LICENSE.txt",
+        "TTPlayer-MIT.txt": ROOT / "LICENSE",
+    }
+    for name, source in licenses.items():
+        shutil.copyfile(source, destination / name)
+
+    files = set()
+    revisions = {}
+    snapshot = ROOT / ".source-manifest.json"
+    if snapshot.is_file():
+        previous = json.loads(snapshot.read_text(encoding="utf-8"))
+        files.update(previous["files"])
+        revisions.update(previous["revisions"])
+    else:
+        def collect(repository):
+            revision = subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()
+            relative = repository.relative_to(ROOT).as_posix()
+            revisions[relative] = revision
+            entries = subprocess.check_output(["git", "-C", str(repository), "ls-files", "--stage", "-z"])
+            for entry in entries.split(b"\0"):
+                if not entry:
+                    continue
+                fields, name = entry.split(b"\t", 1)
+                path = repository / os.fsdecode(name)
+                if fields.startswith(b"160000 "):
+                    collect(path)
+                elif path.exists() or path.is_symlink():
+                    files.add(path.relative_to(ROOT).as_posix())
+        collect(ROOT)
+        # 本地未提交的新产品源码也必须包含；不收集任意未跟踪的个人文件。
+        pending = subprocess.check_output(["git", "-C", str(ROOT), "ls-files", "--others", "--exclude-standard", "-z"])
+        for name in pending.split(b"\0"):
+            value = os.fsdecode(name)
+            if value.startswith(("src/", "scripts/", "packaging/")):
+                files.add(value)
+    files.add(package.relative_to(ROOT).as_posix())
+    # 安装后还要跑 Qt 部署工具与代码签名，两者都会改写主程序字节；这里记录的是链接产物的哈希，
+    # 用来识别对应源码，不承诺与分发包内字节逐位相同。
+    metadata = {"revisions": revisions, "build": build_info, "files": {},
+                "binary_sha256": hashlib.sha256(Path(binary).read_bytes()).hexdigest() if binary else None,
+                "binary_sha256_scope": "linked executable, before deployment rewriting and code signing"}
+    with tempfile.TemporaryDirectory(prefix="source-materials-", dir=destination) as temporary:
+        archive_path = Path(temporary) / "corresponding-source.tar.gz"
+        with tarfile.open(archive_path, "w:gz", dereference=False) as archive:
+            def add_bytes(name, content):
+                info = tarfile.TarInfo("TTPlayer/" + name)
+                info.size = len(content)
+                info.mode = 0o644
+                archive.addfile(info, io.BytesIO(content))
+            for name in sorted(files):
+                path = ROOT / name
+                if Path(name).is_absolute() or ".." in Path(name).parts or not path.resolve().is_relative_to(ROOT):
+                    raise RuntimeError(f"对应源码路径越界：{name}")
+                if not path.is_file():
+                    raise RuntimeError(f"对应源码文件缺失：{name}")
+                metadata["files"][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+                archive.add(path, arcname="TTPlayer/" + name, recursive=False)
+            for folder, revision in revisions.items():
+                add_bytes((Path(folder) / ".source-revision").as_posix(), (revision + "\n").encode())
+            add_bytes(".source-manifest.json", json.dumps(metadata, ensure_ascii=False, indent=2).encode())
+        archive_path.replace(destination / archive_path.name)
+    (destination / "build-info.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    print("CORRESPONDING_SOURCE", destination / "corresponding-source.tar.gz")
+
+
 def sign(app):
     """macdeployqt 会改写 bundle，使链接期 adhoc 签名失效；不重签 macOS 会 SIGKILL 掉。"""
     run("codesign", "--force", "--deep", "--sign", "-", str(app))
@@ -346,7 +428,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--verify-windows", type=Path, metavar="DIST",
                         help="仅验证已安装的 Windows 分发目录，不重新构建")
+    parser.add_argument("--source-materials", type=Path, metavar="DEST", help="仅生成许可证与完整对应源码包")
+    parser.add_argument("--binary", type=Path, help="对应源码所匹配的二进制")
+    parser.add_argument("--build-info", default="", help="编译器、Qt 与构型信息")
     args = parser.parse_args()
+    if args.source_materials is not None:
+        source_materials(args.source_materials, args.binary, args.build_info)
+        return
     if args.verify_windows is not None:
         verify_windows(args.verify_windows)
         return

@@ -187,7 +187,7 @@ jobs:
               $path = "3rd/ffmpeg-build$suffix/lib/$library.lib"
               if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "缺少共享 FFmpeg 库: $path" }
             }
-            foreach ($library in @("vorbisenc", "vorbis", "ogg", "opus", "mp3lame")) {
+            foreach ($library in @("vorbisenc", "vorbisfile", "vorbis", "ogg", "opus", "mp3lame")) {
               $path = "3rd/codec-build$suffix/lib/$library.lib"
               if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "缺少共享编码库: $path" }
             }

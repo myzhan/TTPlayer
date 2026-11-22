@@ -44,6 +44,8 @@ macOS 使用 Qt 6.8.x（含 Core5Compat）、nasm/yasm、`pkg-config` 和 FFmpeg
 | `3rd/ogg` | libogg 1.3.6 | Vorbis / Opus 的容器层 |
 | `3rd/vorbis` | libvorbis 1.3.7 | OGG Vorbis 编码 / 解码 |
 | `3rd/opus` | libopus 1.6.1 | Opus 编码 / 解码 |
+| `3rd/fluidlite` | FluidLite `4a01cf1`，LGPL-2.1-or-later | MIDI 按需合成；SF3 开启、stb_vorbis 关闭，静态链接同构型 vorbisfile/vorbis/ogg |
+| `3rd/libxmp` | libxmp 4.7.4 `5d4f6aa`，MIT | 只链接 lite 静态目标，支持 MOD/XM/S3M/IT；不使用内部解包器或外部 helpers |
 
 `TTPLAYER_VENDORED=ON`（默认）时 CMake 用 `add_subdirectory` 直接编 zlib / xz / libarchive /
 SDL3，不再让 `find_package` 去捞 Homebrew/apt/vcpkg 的同类库；libarchive 头直接取
@@ -58,6 +60,12 @@ CMake 再用 `-DCODEC_ROOT` 找到并静态链接同一份产物。macOS / Linux
 新增可选后端前先确认它不会悄悄链上系统动态库（实测 `otool -L` /
 `ldd`），否则就一并 vendored 或关掉。构建目录统一在 `build/` 下（Debug `build/`、
 Release `build/release/`），不得另开 `build-xxx` 旁路目录。
+
+默认 GM 音色为 MIT 的 FluidR3Mono_GM.sf3 v2.315，由 `scripts/prepare_soundfont.py` 固定 URL、
+18726092 字节和 SHA-256 校验后白名单提取到 `build/assets/`。CMake 用 Qt BIG_RESOURCES
+嵌入主程序（不进入图标辅助目标）；运行时不联网、不依赖外置音色。损坏缓存明确失败。
+安装阶段随包提供许可证及完整对应源码包（含全部静态依赖、本程序源码、构建脚本、音色包缓存），
+允许替换 LGPL 库并从源码重链接，具体步骤见 docs/development.md；不得去掉这些材料或改标第三方许可。
 
 FFmpeg 源码冻结为 **9.0**（子模块 pin 在 tag `n9.0`）：`scripts/ffmpeg_components.sh` 里的
 `FFMPEG_RELEASE` 是唯一版本声明，四个 `build_ffmpeg*.sh` 都会校验 `3rd/ffmpeg/RELEASE`，
@@ -167,6 +175,11 @@ python3 scripts/package.py               # 只生成本地 build/dist，不发�
   `app`（入口/崩溃/单实例）在最外层，只向下引。唯一的反向边是 `ui/SkinWindow.cpp` → `app/Application.h`
   （把拖入的文件转给外壳）。新建文件先定层再定目录，职责表见 development.md 第 1 节。
 - 所有解码走 Decoder / FFmpeg，所有归档走 libarchive 自定义 AVIO；归档不落地解压。
+- MIDI/模块经 MidiSequence / SequencedAudioSource 按需输出虚拟 RF64，再走现有 FFmpeg PCM/swr；
+  每源独占 synth/xmp，不存整曲 PCM。MIDI 限 32 MiB/100 万事件/24 小时，模块限 64 MiB。
+  随机定位重置并真实合成丢弃，最多每 1024 帧检查取消；长度查询不合成。FluidLite 全局 fileapi/SF3
+  临时状态只在后台初始化锁内使用，渲染不持全局锁。MIDI 末尾释放踏板/音符并保留 2 秒尾音，模块有限一遍。
+  新后端不得改变 URL/identityKey、schema 或输出回调职责；KAR 词复用既有内嵌优先规则。
 - 本地、CUE、归档、电台统一 resolver/importer，稳定身份不得互相截断或重造。
 - Qt 线程只提交用户意图和 UI 更新；开流、扫描、预取放后台。结果绑定 generation 与取消标志。
 - producer 独占 Decoder IO；设备 callback 只消费有界 PCM 环，不做 IO、不等待网络、不分配采样缓冲。

@@ -48,7 +48,7 @@ esac
 ZLIB_SRC="$ROOT/3rd/zlib"
 ZLIB_PREFIX="$ROOT/3rd/zlib-build"
 if [[ "$CONFIG" == Debug ]]; then ZLIB_PREFIX="$ZLIB_PREFIX/debug"; fi
-ZLIB_KEY="$CONFIG|$(git -C "$ZLIB_SRC" rev-parse HEAD 2>/dev/null || echo missing)"
+ZLIB_KEY="$CONFIG|$(source_revision "$ZLIB_SRC")"
 if [[ "${1:-}" == "--force" ]] || [[ ! -f "$ZLIB_PREFIX/.built-config" || "$(cat "$ZLIB_PREFIX/.built-config")" != "$ZLIB_KEY" ]]; then
     echo "=== 编译 zlib（$CONFIG）==="
     # codec-build 目录在首次构建时还不存在，日志重定向会直接报 No such file；先建父目录。
@@ -86,7 +86,7 @@ if [[ ! -f "$SRC/configure" ]]; then
 fi
 
 require_frozen_ffmpeg "$SRC"
-COMMIT=$(git -C "$SRC" rev-parse HEAD)
+COMMIT=$(source_revision "$SRC")
 ZLIB_NATIVE=$(cygpath -m "$ZLIB_PREFIX")
 ZLIB_NATIVE_LIBDIR=$(cygpath -m "$ZLIB_LIBDIR")
 

@@ -37,7 +37,7 @@ int Lyric::lineIndexAt(double t) const {
 }
 
 Lyric Lyric::parse(const QString &text) {
-    static const QRegularExpression tagPattern(QStringLiteral("\\[(\\d{1,2}):(\\d{2})(?:[.:](\\d{1,3}))?\\]"));
+    static const QRegularExpression tagPattern(QStringLiteral("\\[(\\d{1,4}):(\\d{2})(?:[.:](\\d{1,3}))?\\]"));
     static const QRegularExpression offsetPattern(QStringLiteral("\\[offset:\\s*([+-]?\\d+)\\s*\\]"));
 
     double offsetSec = 0;
