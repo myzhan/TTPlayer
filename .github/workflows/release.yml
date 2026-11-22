@@ -226,7 +226,8 @@ jobs:
       - name: Install and deploy
         shell: pwsh
         run: |
-          cmake --install build/release --config Release --prefix build/dist
+          # Qt 部署要求安装前缀为绝对路径；产物仍放在仓库的 build/dist。
+          cmake --install build/release --config Release --prefix "$env:GITHUB_WORKSPACE/build/dist"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           # CMake install 统一部署 Qt 插件与 app-local Release VC DLL，不附安装器。
       - name: Verify app-local runtime and smoke test

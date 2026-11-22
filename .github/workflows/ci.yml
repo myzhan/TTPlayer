@@ -240,7 +240,8 @@ jobs:
         shell: pwsh
         run: |
           # 直接部署刚通过自检的 Release，不另起 build/package 重编一遍。
-          cmake --install build/ci --config Release --prefix build/dist
+          # Qt 部署要求安装前缀为绝对路径；产物仍放在仓库的 build/dist。
+          cmake --install build/ci --config Release --prefix "$env:GITHUB_WORKSPACE/build/dist"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python scripts/package.py --verify-windows build/dist
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
