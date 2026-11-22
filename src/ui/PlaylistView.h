@@ -60,8 +60,8 @@ signals:
     void editRequested(const Track &track);
     void radioAddressRequested(const Track &track);
     void radioRetryRequested(const Track &track);
-    void activateRow(int row);                          // 双击
-    void removeRequested(const QList<int> &rows);       // 右键「从列表移除」（可多选）
+    void activateRow(int row);                    // 双击
+    void removeRequested(const QList<int> &rows); // 右键「从列表移除」（可多选）
     // 工具条已收进右键：页级的添加 / 列表两个子菜单由上层执行或现填
     void addFilesRequested();
     void addFolderRequested();

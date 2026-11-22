@@ -1342,8 +1342,8 @@ static int runResumeProbe(AudioEnginePtr engine, PlayerController &controller, Q
         w.collections().registerTracks(scene); // 先导入再播。
         controller.setTracks(scene);
         controller.setMode(PlayMode::Order);
-        controller.playRowAt(1);       // 从 seg2 开声（dummy）。
-        w.setAutoResumePlay(false);    // 关自动续播 → 恢复应停在暂停
+        controller.playRowAt(1);    // 从 seg2 开声（dummy）。
+        w.setAutoResumePlay(false); // 关自动续播 → 恢复应停在暂停
         const PlayQueue &q = controller.queue();
         check("phaseA_cursor_cue", q.current() && q.currentTrack().isCueSegment() && q.currentTrack().cueNumber() == 2);
     }

@@ -585,7 +585,6 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
                 }
             }
         }
-
     }
 
     // —— 页级动作：添加 / 列表 ——

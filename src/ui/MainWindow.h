@@ -116,14 +116,14 @@ private:
     bool m_sceneReady = false, m_savedEQVisible = false;
     friend class RegressionTests;
     void openFiles();
-    void openFolder(); // 播放列表右键「添加文件夹…」：选目录后整棵导入
+    void openFolder();     // 播放列表右键「添加文件夹…」：选目录后整棵导入
     void addRadioPrompt(); // 地址与显示信息一起填，仍走统一后台导入通路。
     void editRadioPrompt(const Track &track);
     void loadDirOrFiles(const QStringList &paths, const QHash<QString, QJsonObject> &radioEdits = {});
     void syncNowPlaying();
     void syncState();
     void applyVolume();
-    void toggleFavoriteCurrent();              // Cmd+D：当前曲加入 / 移出收藏
+    void toggleFavoriteCurrent(); // Cmd+D：当前曲加入 / 移出收藏
     void ensureDock();
     void showAuxiliary(QWidget *w);
     QList<QPointer<QWidget>> groupWindows() const;
