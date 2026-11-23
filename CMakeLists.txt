@@ -601,9 +601,24 @@ if(NOT APPLE OR TTPLAYER_BUNDLE)
     if(_tt_sdl_location)
       install(CODE "file(REAL_PATH \"${_tt_sdl_location}\" _sdl_real)\nfile(INSTALL DESTINATION \"\${CMAKE_INSTALL_PREFIX}/ttplayer.app/Contents/Frameworks\" TYPE FILE FILES \"\${_sdl_real}\")")
     endif()
-    if(TARGET Qt6::QOffscreenIntegrationPlugin)
-      install(FILES "$<TARGET_FILE:Qt6::QOffscreenIntegrationPlugin>" DESTINATION "ttplayer.app/Contents/PlugIns/platforms")
-    endif()
+    # Qt 6.8 的 macdeployqt 不能单独排除 SQL 驱动。安装所需插件后，让它部署这些插件的依赖。
+    foreach(_plugin QCocoaIntegrationPlugin QOffscreenIntegrationPlugin QSQLiteDriverPlugin)
+      if(NOT TARGET Qt6::${_plugin})
+        message(FATAL_ERROR "macOS 分发缺少 Qt 插件 ${_plugin}")
+      endif()
+    endforeach()
+    set(_tt_mac_plugins "")
+    foreach(_plugin QCocoaIntegrationPlugin QOffscreenIntegrationPlugin QSQLiteDriverPlugin
+            QMacStylePlugin QGifPlugin QICOPlugin QJpegPlugin QSvgPlugin QSvgIconPlugin
+            QSCNetworkReachabilityNetworkInformationPlugin QSecureTransportBackendPlugin
+            QTlsBackendCertOnlyPlugin QTlsBackendOpenSSLPlugin)
+      if(TARGET Qt6::${_plugin})
+        get_target_property(_type Qt6::${_plugin} QT_PLUGIN_TYPE)
+        set(_dir "ttplayer.app/Contents/PlugIns/${_type}")
+        install(FILES "$<TARGET_FILE:Qt6::${_plugin}>" DESTINATION "${_dir}")
+        list(APPEND _tt_mac_plugins "${_dir}/$<TARGET_FILE_NAME:Qt6::${_plugin}>")
+      endif()
+    endforeach()
   endif()
   if(WIN32)
     # windeployqt 不默认部署 offscreen；隔离冒烟必须使用包内同构型插件。
@@ -621,6 +636,14 @@ if(NOT APPLE OR TTPLAYER_BUNDLE)
         BIN_DIR "." LIB_DIR "." PLUGINS_DIR "plugins"
         GENERATE_QT_CONF NO_COMPILER_RUNTIME)
     ]])
+  elseif(APPLE)
+    list(JOIN _tt_mac_plugins " " _tt_mac_plugin_args)
+    qt6_generate_deploy_script(TARGET ttplayer OUTPUT_SCRIPT ttplayer_deploy CONTENT "
+      qt_deploy_runtime_dependencies(EXECUTABLE ttplayer.app
+        ADDITIONAL_MODULES ${_tt_mac_plugin_args}
+        DEPLOY_TOOL_OPTIONS -no-plugins)
+      qt_deploy_qt_conf(\"\${QT_DEPLOY_PREFIX}/ttplayer.app/Contents/Resources/qt.conf\"
+        PLUGINS_DIR PlugIns QML_DIR Resources/qml)")
   else()
     qt_generate_deploy_app_script(TARGET ttplayer OUTPUT_SCRIPT ttplayer_deploy
       NO_UNSUPPORTED_PLATFORM_ERROR)
@@ -635,11 +658,6 @@ if(NOT APPLE OR TTPLAYER_BUNDLE)
       endif()
       file(APPEND "${_tt_qt_conf}" "\n[Platforms]\nWindowsArguments = fontengine=freetype\n")
     ]])
-  endif()
-  if(APPLE)
-    # macdeployqt 把 sqldrivers 整个目录搬进来，其中 mimer 插件链到本机不存在的
-    # /usr/local/lib/libmimerapi.dylib，加载必失败；只留 state.db 需要的 sqlite 插件。
-    install(CODE "file(REMOVE \"\${CMAKE_INSTALL_PREFIX}/ttplayer.app/Contents/PlugIns/sqldrivers/libqsqlmimer.dylib\")")
   endif()
 endif()
 set(CPACK_PACKAGE_NAME TTPlayer)

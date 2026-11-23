@@ -39,10 +39,10 @@ def build_ffmpeg():
         run("bash", "scripts/build_ffmpeg_linux.sh")
 
 
-def build_bundle():
+def build_bundle(destination):
     run("cmake", "-S", ".", "-B", str(BUILD), "-DCMAKE_BUILD_TYPE=Release", "-DTTPLAYER_BUNDLE=ON")
     run("cmake", "--build", str(BUILD), "--config", "Release", "-j", "4")
-    run("cmake", "--install", str(BUILD), "--config", "Release", "--prefix", str(DIST))
+    run("cmake", "--install", str(BUILD), "--config", "Release", "--prefix", str(destination))
 
 
 WINDOWS_CRT = {"msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"}
@@ -330,11 +330,13 @@ def source_materials(destination, binary=None, build_info=""):
         shutil.copyfile(source, destination / name)
 
     files = set()
+    symlinks = set()
     revisions = {}
     snapshot = ROOT / ".source-manifest.json"
     if snapshot.is_file():
         previous = json.loads(snapshot.read_text(encoding="utf-8"))
         files.update(previous["files"])
+        symlinks.update(previous.get("symlinks", []))
         revisions.update(previous["revisions"])
     else:
         def collect(repository):
@@ -350,7 +352,10 @@ def source_materials(destination, binary=None, build_info=""):
                 if fields.startswith(b"160000 "):
                     collect(path)
                 elif path.exists() or path.is_symlink():
-                    files.add(path.relative_to(ROOT).as_posix())
+                    relative_name = path.relative_to(ROOT).as_posix()
+                    files.add(relative_name)
+                    if fields.startswith(b"120000 "):
+                        symlinks.add(relative_name)
         collect(ROOT)
         # 本地未提交的新产品源码也必须包含；不收集任意未跟踪的个人文件。
         pending = subprocess.check_output(["git", "-C", str(ROOT), "ls-files", "--others", "--exclude-standard", "-z"])
@@ -361,7 +366,7 @@ def source_materials(destination, binary=None, build_info=""):
     files.add(package.relative_to(ROOT).as_posix())
     # 安装后还要跑 Qt 部署工具与代码签名，两者都会改写主程序字节；这里记录的是链接产物的哈希，
     # 用来识别对应源码，不承诺与分发包内字节逐位相同。
-    metadata = {"revisions": revisions, "build": build_info, "files": {},
+    metadata = {"revisions": revisions, "build": build_info, "files": {}, "symlinks": [],
                 "binary_sha256": hashlib.sha256(Path(binary).read_bytes()).hexdigest() if binary else None,
                 "binary_sha256_scope": "linked executable, before deployment rewriting and code signing"}
     with tempfile.TemporaryDirectory(prefix="source-materials-", dir=destination) as temporary:
@@ -376,10 +381,24 @@ def source_materials(destination, binary=None, build_info=""):
                 path = ROOT / name
                 if Path(name).is_absolute() or ".." in Path(name).parts or not path.resolve().is_relative_to(ROOT):
                     raise RuntimeError(f"对应源码路径越界：{name}")
-                if not path.is_file():
+                if path.is_symlink() or name in symlinks:
+                    # Windows 的 Git 可能把链接检出为只含目标路径的普通文件。
+                    target = os.readlink(path) if path.is_symlink() else os.fsdecode(path.read_bytes())
+                    if Path(target).is_absolute() or not (path.parent / target).resolve().is_relative_to(ROOT):
+                        raise RuntimeError(f"对应源码链接越界：{name} -> {target}")
+                    info = tarfile.TarInfo("TTPlayer/" + name)
+                    info.type = tarfile.SYMTYPE
+                    info.mode = 0o777
+                    info.linkname = target
+                    archive.addfile(info)
+                    metadata["symlinks"].append(name)
+                    content = os.fsencode(target)
+                elif path.is_file():
+                    content = path.read_bytes()
+                    archive.add(path, arcname="TTPlayer/" + name, recursive=False)
+                else:
                     raise RuntimeError(f"对应源码文件缺失：{name}")
-                metadata["files"][name] = hashlib.sha256(path.read_bytes()).hexdigest()
-                archive.add(path, arcname="TTPlayer/" + name, recursive=False)
+                metadata["files"][name] = hashlib.sha256(content).hexdigest()
             for folder, revision in revisions.items():
                 add_bytes((Path(folder) / ".source-revision").as_posix(), (revision + "\n").encode())
             add_bytes(".source-manifest.json", json.dumps(metadata, ensure_ascii=False, indent=2).encode())
@@ -440,16 +459,32 @@ def main():
         return
     os.chdir(ROOT)
     build_ffmpeg()
-    build_bundle()
     if platform.system() == "Darwin":
-        app = DIST / "ttplayer.app"
-        sign(app)
-        with tempfile.TemporaryDirectory(prefix="ttplayer-icon-") as temporary:
-            png = export_icon(app, temporary)
-            make_icns(app, png, temporary)
-        sign(app)
-    elif platform.system() == "Windows":
-        verify_windows(DIST)
+        # macdeployqt 与签名会改写已安装的 Mach-O；每次从干净的安装树开始。
+        DIST.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="ttplayer-package-", dir=DIST) as temporary:
+            stage = Path(temporary)
+            build_bundle(stage)
+            app = stage / "ttplayer.app"
+            sign(app)
+            png = export_icon(app, stage)
+            make_icns(app, png, stage)
+            sign(app)
+            run("codesign", "--verify", "--deep", "--strict", str(app))
+            current = DIST / app.name
+            backup = stage / "previous.app"
+            if current.exists():
+                current.rename(backup)
+            try:
+                app.rename(current)
+            except OSError:
+                if backup.exists():
+                    backup.rename(current)
+                raise
+    else:
+        build_bundle(DIST)
+        if platform.system() == "Windows":
+            verify_windows(DIST)
     print("Prepared", DIST)
 
 
