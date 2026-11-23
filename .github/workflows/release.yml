@@ -317,10 +317,12 @@ jobs:
           if-no-files-found: error
 
   macos:
-    # 产物：TTPlayer-<ver>-macos-arm64.dmg（package.py 生成并 adhoc 签名的 ttplayer.app）
-    name: macOS arm64
+    # 产物：TTPlayer-<ver>-macos-universal.dmg（arm64 + x86_64 universal binary，覆盖所有 Mac）
+    name: macOS universal
     runs-on: macos-15
-    timeout-minutes: 75
+    timeout-minutes: 90
+    env:
+      TTPLAYER_ARCHS: "arm64 x86_64"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -354,18 +356,18 @@ jobs:
         run: |
           codesign --verify --deep --strict build/dist/ttplayer.app
           QT_QPA_PLATFORM=offscreen TTPLAYER_QT_STATE="$RUNNER_TEMP/state.json" \
-            build/dist/ttplayer.app/Contents/MacOS/ttplayer --version
+            "build/dist/ttplayer.app/Contents/MacOS/千千静听" --version
       - name: Pack dmg
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           hdiutil create -volname "TTPlayer" -srcfolder build/dist/ttplayer.app -ov -format UDZO \
-            "TTPlayer-$VERSION-macos-arm64.dmg"
+            "TTPlayer-$VERSION-macos-universal.dmg"
       - name: Upload macOS package
         uses: actions/upload-artifact@v4
         with:
-          name: macos-arm64
-          path: TTPlayer-*-macos-arm64.dmg
+          name: macos-universal
+          path: TTPlayer-*-macos-universal.dmg
           if-no-files-found: error
 
   publish:
@@ -395,9 +397,9 @@ jobs:
 
             - **Windows**：解压到可写目录（不要放 Program Files），运行 `bin/ttplayer.exe`。VC 运行时已随包附带，无需另行安装；用户数据保存在 exe 同目录。
             - **Linux**：按处理器选择 `linux-x86_64.AppImage` 或 `linux-arm64.AppImage`，`chmod +x` 后直接运行。x86_64 要求 glibc 2.35+（如 Ubuntu 22.04+）；arm64 要求 glibc 2.39+（如 Ubuntu 24.04+）。Qt 6 与 Qt 插件已内置，OpenGL、X11/xcb、DBus 运行库仍由系统提供。
-            - **macOS**：打开 dmg，把 ttplayer.app 拖进 Applications。包为 adhoc 签名、未公证，首次启动请右键「打开」。
+            - **macOS**：打开 dmg，把 ttplayer.app 拖进 Applications。Universal 包同时支持 Apple Silicon 和 Intel Mac。包为 adhoc 签名、未公证，首次启动请右键「打开」。
 
-            附件：`TTPlayer-<版本>-linux-x86_64.AppImage`、`TTPlayer-<版本>-linux-arm64.AppImage`、`TTPlayer-<版本>-windows-x64.zip`、`TTPlayer-<版本>-macos-arm64.dmg`。
+            附件：`TTPlayer-<版本>-linux-x86_64.AppImage`、`TTPlayer-<版本>-linux-arm64.AppImage`、`TTPlayer-<版本>-windows-x64.zip`、`TTPlayer-<版本>-macos-universal.dmg`。
 
             本版本使用 FFmpeg 9.0 静态链接。
           files: |

@@ -40,7 +40,12 @@ def build_ffmpeg():
 
 
 def build_bundle(destination):
-    run("cmake", "-S", ".", "-B", str(BUILD), "-DCMAKE_BUILD_TYPE=Release", "-DTTPLAYER_BUNDLE=ON")
+    cmake_args = ["-S", ".", "-B", str(BUILD), "-DCMAKE_BUILD_TYPE=Release", "-DTTPLAYER_BUNDLE=ON"]
+    # 多架构 universal 构建：环境变量 TTPLAYER_ARCHS 空格分隔（如 "arm64 x86_64"）。
+    archs = os.environ.get("TTPLAYER_ARCHS", "").split()
+    if platform.system() == "Darwin" and len(archs) > 1:
+        cmake_args.append(f"-DCMAKE_OSX_ARCHITECTURES={';'.join(archs)}")
+    run("cmake", *cmake_args)
     run("cmake", "--build", str(BUILD), "--config", "Release", "-j", "4")
     run("cmake", "--install", str(BUILD), "--config", "Release", "--prefix", str(destination))
 
@@ -421,7 +426,7 @@ def export_icon(app, temporary):
                TTPLAYER_SELFTEST="1",
                TTPLAYER_QT_STATE=str(folder / "state.json"),
                TTPLAYER_QT_ICON_EXPORT=str(png))
-    subprocess.run([str(app / "Contents/MacOS/ttplayer")], env=env, check=True)
+    subprocess.run([str(app / "Contents/MacOS/千千静听")], env=env, check=True)
     return png
 
 

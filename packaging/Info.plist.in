@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>ttplayer</string>
+<key>CFBundleExecutable</key><string>@TTPLAYER_BUNDLE_EXECUTABLE@</string>
 <key>CFBundleIdentifier</key><string>org.ttplayer.TTPlayer</string>
 <key>CFBundleName</key><string>千千静听</string>
 <key>CFBundleDisplayName</key><string>千千静听</string>
