@@ -2843,7 +2843,8 @@ public:
                             if (action->menu()) rootMenus << action->text();
                         const QStringList paths = menuPaths(menu);
                         unifiedListMenus &= !rootMenus.contains("列表") && !rootMenus.contains("添加") &&
-                                            !rootMenus.contains("加入列表") && !paths.contains("从列表移除") &&
+                                            !rootMenus.contains("加入列表") &&
+                                            (row < 0 || paths.contains("从列表移除")) &&
                                             !rootMenus.contains("歌单") &&
                                             std::none_of(paths.cbegin(), paths.cend(), [](const QString &text) {
                                                 return text.contains(QStringLiteral("歌单"));
@@ -2863,13 +2864,13 @@ public:
                     panel.m_view->selectAt(0, Qt::NoModifier);
                     const QStringList rowLocal = menuPathsFor(0);
                     check("menu_grouped_submenus",
-                          rowLocal.contains("文件/在文件管理器中打开目录") &&
-                              rowLocal.contains("文件/转换为其他格式…") &&
+                          rowLocal.contains("在文件管理器中打开目录") &&
+                              rowLocal.contains("转换为其他格式…") &&
                               sidebarPathsFor(Collections::kAllViewId).contains("播放模式/顺序播放") &&
                               sidebarPathsFor(Collections::kAllViewId).contains("添加/添加文件…") &&
                               sidebarPathsFor(Collections::kAllViewId).contains("新建列表…") &&
                               sidebarPathsFor(Collections::kAllViewId).contains("从列表移除") &&
-                              rowLocal.contains("文件/属性") && !rowLocal.contains("属性") &&
+                              rowLocal.contains("属性") &&
                               !rowLocal.contains("编辑显示信息…"));
                     check("menu_hides_radio_group_for_local",
                           !rowLocal.contains("电台/修改电台地址…") && !rowLocal.contains("电台/重命名台名…"));
@@ -2878,15 +2879,15 @@ public:
                     panel.m_view->selectAt(1, Qt::NoModifier);
                     const QStringList rowMissing = menuPathsFor(1);
                     check("menu_hides_convert_for_missing_file",
-                          rowMissing.contains("文件/属性") && !rowMissing.contains("文件/转换为其他格式…"));
+                          rowMissing.contains("属性") && !rowMissing.contains("转换为其他格式…"));
 
                     panel.m_view->selectAt(2, Qt::NoModifier);
                     const QStringList rowRadio = menuPathsFor(2);
                     check("menu_radio_group",
                           rowRadio.contains("电台/修改电台地址…") && rowRadio.contains("电台/重试这个电台") &&
                               rowRadio.contains("电台/重命名台名…") && rowRadio.contains("电台/移入分类/未分类") &&
-                              !rowRadio.contains("文件/在文件管理器中打开目录") && rowRadio.contains("编辑显示信息…") &&
-                              rowRadio.contains("文件/属性") && !rowRadio.contains("属性"));
+                              !rowRadio.contains("在文件管理器中打开目录") && rowRadio.contains("编辑显示信息…") &&
+                              rowRadio.contains("属性"));
                     check("menu_song_blank_has_no_list_actions", menuPathsFor(-1).isEmpty());
                     panel.m_view->selectAt(0, Qt::NoModifier);
                     panel.m_view->selectAt(2, Qt::ControlModifier);
@@ -2914,7 +2915,7 @@ public:
                     mcol.setAllTracks({local, cueOne, cueTwo, archived, radio, missing});
                     mctl.setTracks(mcol.currentTracks());
                     panel.m_view->selectAt(1, Qt::NoModifier);
-                    check("menu_cue_single_convert", menuPathsFor(1).contains("文件/转换为其他格式…"));
+                    check("menu_cue_single_convert", menuPathsFor(1).contains("转换为其他格式…"));
                     panel.m_view->selectAt(2, Qt::ControlModifier);
                     QMenu cueMenu;
                     panel.m_view->buildContextMenu(cueMenu, 1);
@@ -2930,22 +2931,22 @@ public:
                               converted[0].playEnd() == 0.4 && converted[1].playEnd() == -1);
                     QObject::disconnect(conversionConnection);
                     panel.m_view->selectAt(0, Qt::ControlModifier);
-                    check("menu_cue_and_local_convert", menuPathsFor(1).contains("文件/转换为其他格式…"));
+                    check("menu_cue_and_local_convert", menuPathsFor(1).contains("转换为其他格式…"));
                     bool mixedRejected = true;
                     for (int badRow : {3, 4, 5}) {
                         panel.m_view->selectAt(1, Qt::NoModifier);
                         panel.m_view->selectAt(badRow, Qt::ControlModifier);
-                        mixedRejected &= !menuPathsFor(1).contains("文件/转换为其他格式…");
+                        mixedRejected &= !menuPathsFor(1).contains("转换为其他格式…");
                     }
                     check("menu_cue_mixed_unsupported_rejected", mixedRejected);
                     // 本地、CUE、归档、电台、缺失文件及混合选区均不再提供单曲重定位。
                     bool relocationRemoved = true;
                     for (int row = 0; row < 6; ++row) {
                         panel.m_view->selectAt(row, Qt::NoModifier);
-                        relocationRemoved &= !menuPathsFor(row).contains("文件/重新定位文件…");
+                        relocationRemoved &= !menuPathsFor(row).contains("重新定位文件…");
                     }
                     panel.m_view->selectAllRows();
-                    relocationRemoved &= !menuPathsFor(0).contains("文件/重新定位文件…");
+                    relocationRemoved &= !menuPathsFor(0).contains("重新定位文件…");
                     check("menu_file_relocation_removed",
                           relocationRemoved &&
                               panel.m_view->metaObject()->indexOfSignal("relocateRequested(Track)") < 0 &&

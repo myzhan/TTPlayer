@@ -458,7 +458,7 @@ void PlaylistView::wheelEvent(QWheelEvent *event) {
     verticalScrollBar()->setValue(verticalScrollBar()->value() + delta);
 }
 
-// 歌曲区域右键只提供文件、属性、转换与电台操作；列表操作统一在左栏。
+// 歌曲区域右键：文件/电台操作 + 从列表移除（曲库非筛选态不给，与左栏分流一致）。
 void PlaylistView::contextMenuEvent(QContextMenuEvent *event) {
     const int row = rowAtPos(event->pos());
     const bool onRow = row >= 0 && row < m_tracks.size();
@@ -495,10 +495,9 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
         if (t.isRadio())
             connect(menu.addAction(QStringLiteral("编辑显示信息…")), &QAction::triggered, this,
                     [this, t] { emit editRequested(t); });
-        QMenu *file = SkinMenu::addSubmenu(menu, QStringLiteral("文件"));
         // 电台只提供属性；磁盘操作只对本地实体有意义。
         if (!t.isRadio()) {
-            connect(file->addAction(QStringLiteral("在文件管理器中打开目录")), &QAction::triggered, this, [t] {
+            connect(menu.addAction(QStringLiteral("在文件管理器中打开目录")), &QAction::triggered, this, [t] {
                 QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(t.url().toLocalFile()).absolutePath()));
             });
             // 多选里只要有一条不能转（电台 / 归档条目 / 文件不在）就整项不给，
@@ -507,12 +506,20 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
             for (const Track &track : std::as_const(picked))
                 allConvertible = allConvertible && AudioConvert::canConvert(track);
             if (allConvertible)
-                connect(file->addAction(QStringLiteral("转换为其他格式…")), &QAction::triggered, this,
+                connect(menu.addAction(QStringLiteral("转换为其他格式…")), &QAction::triggered, this,
                         [this, picked] { emit convertRequested(picked); });
-            file->addSeparator();
         }
-        connect(file->addAction(QStringLiteral("属性")), &QAction::triggered, this,
+        connect(menu.addAction(QStringLiteral("属性")), &QAction::triggered, this,
                 [this, t] { emit propertiesRequested(t); });
+
+        // —— 从列表移除（操作对象是"这首歌在当前列表里的存在"，曲库非筛选态不给） ——
+        const bool library = m_collections && m_collections->viewId() == Collections::kLibraryViewId;
+        if (!library || m_filterActive) {
+            menu.addSeparator();
+            connect(menu.addAction(QStringLiteral("从列表移除")), &QAction::triggered, this, [this, rows] {
+                emit removeRequested(rows);
+            });
+        }
 
         // —— 电台：台名/归属都记在地址上（R13） ——
         if (t.isRadio()) {
