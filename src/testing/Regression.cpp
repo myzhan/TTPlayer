@@ -2328,7 +2328,7 @@ public:
                 check("numeric_fonts_preserve_platform",
                       Fonts::numericSmall == Fonts::small && Fonts::numericTiny == Fonts::tiny);
                 check("approved_font_families",
-                      Fonts::base.families() == QStringList{"Segoe UI", "Helvetica Neue", "Arial", "Noto Sans",
+                      Fonts::base.families() == QStringList{"Helvetica Neue", "Arial", "Noto Sans",
                                                             "DejaVu Sans", "PingFang SC", "Microsoft YaHei",
                                                             "sans-serif"});
 #endif
