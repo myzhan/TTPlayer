@@ -469,8 +469,6 @@ endif()
 set(CPACK_PACKAGE_VERSION 1.1.5)
 option(TTPLAYER_BUNDLE "Build a macOS application bundle for distribution" OFF)
 if(APPLE AND TTPLAYER_BUNDLE)
-  set(TTPLAYER_BUNDLE_EXECUTABLE "千千静听")
-  set_target_properties(ttplayer PROPERTIES OUTPUT_NAME "${TTPLAYER_BUNDLE_EXECUTABLE}")
   configure_file(packaging/Info.plist.in "${CMAKE_CURRENT_BINARY_DIR}/Info.plist" @ONLY)
   set_target_properties(ttplayer PROPERTIES MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/Info.plist"
