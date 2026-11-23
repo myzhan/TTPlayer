@@ -4,9 +4,15 @@ import argparse
 import hashlib
 import io
 from pathlib import Path, PurePosixPath
+import sys
 import tarfile
 import tempfile
 import urllib.request
+
+# Windows CI 默认 cp1252，中文报错会触发 UnicodeEncodeError；统一强制 UTF-8。
+for _stream in (sys.stdout, sys.stderr):
+    if _stream.encoding and _stream.encoding.lower() not in {"utf-8", "utf8"}:
+        _stream.reconfigure(encoding="utf-8")
 
 URL = ("https://deb.debian.org/debian/pool/main/f/fluidr3mono-gm-soundfont/"
        "fluidr3mono-gm-soundfont_2.315-7_all.deb")
@@ -115,7 +121,7 @@ def prepare(folder):
             # 保留未改变资源的 mtime，避免每次配置都重新运行 rcc。
             if not target.exists() or target.read_bytes() != source.read_bytes():
                 source.replace(target)
-    print(f"默认音色已校验：{folder / 'FluidR3Mono_GM.sf3'}")
+    print(f"default soundfont verified: {folder / 'FluidR3Mono_GM.sf3'}")
 
 
 if __name__ == "__main__":

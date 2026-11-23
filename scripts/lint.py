@@ -190,8 +190,11 @@ def compile_units(build_dir):
     units = {}
     for entry in json.loads(db.read_text()):
         file = Path(entry["file"]).resolve()
-        # moc 产物目录是 `<target>_autogen`，按子串排除；只看产品源码
-        if not any("autogen" in part for part in file.parts) and file.suffix in {".cpp", ".mm"}:
+        # moc 产物目录是 `<target>_autogen`，rcc 产物落在 `.qt/rcc/qrc_*.cpp`；
+        # 二者内嵌二进制块，clang-tidy 对它们无意义（且会崩），只看产品源码。
+        if any("autogen" in part or part == "rcc" for part in file.parts):
+            continue
+        if file.suffix in {".cpp", ".mm"}:
             units[file] = entry.get("directory", str(ROOT))
     return units
 
