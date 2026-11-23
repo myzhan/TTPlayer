@@ -3582,6 +3582,15 @@ public:
                     out << "REVIEW_PROBE UI_windows_native_taskbar SKIP requires windows platform plugin\n";
                 }
 #endif
+#ifdef Q_OS_LINUX
+                // Linux 副面板同样须为工具窗并归属主窗，避免每个子窗各占一个任务栏入口。
+                const QList<QWidget *> linuxPanels{window.m_playlist, eq, window.m_lyricWindow};
+                check("UI_linux_owned_tool_panels",
+                      window.windowType() == Qt::Window &&
+                          std::all_of(linuxPanels.begin(), linuxPanels.end(), [&window](QWidget *sub) {
+                              return sub->isWindow() && sub->windowType() == Qt::Tool && sub->parentWidget() == &window;
+                          }));
+#endif
                 for (SkinWindow *sub : QList<SkinWindow *>{window.m_playlist, eq, window.m_lyricWindow}) {
                     check("UI_panel_accepts_drop", sub->acceptDrops());
                     bool received = false;

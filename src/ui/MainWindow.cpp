@@ -79,9 +79,9 @@ static constexpr int kSkinLayoutVersion = 7;
 
 namespace {
 
-// Windows 的工具面板归属主窗，主窗最小化/恢复时由系统收起/带回；其他平台保留原关系。
+// Windows/Linux 的工具面板归属主窗，主窗最小化/恢复时由系统收起/带回（同时不占独立任务栏入口）；macOS 保留原关系。
 QWidget *panelOwner(QWidget *mainWindow) {
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
     return mainWindow;
 #else
     Q_UNUSED(mainWindow)
