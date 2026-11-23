@@ -516,9 +516,8 @@ void PlaylistView::buildContextMenu(QMenu &menu, int row) {
         const bool library = m_collections && m_collections->viewId() == Collections::kLibraryViewId;
         if (!library || m_filterActive) {
             menu.addSeparator();
-            connect(menu.addAction(QStringLiteral("从列表移除")), &QAction::triggered, this, [this, rows] {
-                emit removeRequested(rows);
-            });
+            connect(menu.addAction(QStringLiteral("从列表移除")), &QAction::triggered, this,
+                    [this, rows] { emit removeRequested(rows); });
         }
 
         // —— 电台：台名/归属都记在地址上（R13） ——

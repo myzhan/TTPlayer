@@ -426,7 +426,7 @@ def export_icon(app, temporary):
                TTPLAYER_SELFTEST="1",
                TTPLAYER_QT_STATE=str(folder / "state.json"),
                TTPLAYER_QT_ICON_EXPORT=str(png))
-    subprocess.run([str(app / "Contents/MacOS/千千静听")], env=env, check=True)
+    subprocess.run([str(app / "Contents/MacOS/ttplayer")], env=env, check=True)
     return png
 
 

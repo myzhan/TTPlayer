@@ -2328,9 +2328,8 @@ public:
                 check("numeric_fonts_preserve_platform",
                       Fonts::numericSmall == Fonts::small && Fonts::numericTiny == Fonts::tiny);
                 check("approved_font_families",
-                      Fonts::base.families() == QStringList{"Helvetica Neue", "Arial", "Noto Sans",
-                                                            "DejaVu Sans", "PingFang SC", "Microsoft YaHei",
-                                                            "sans-serif"});
+                      Fonts::base.families() == QStringList{"Helvetica Neue", "Arial", "Noto Sans", "DejaVu Sans",
+                                                            "PingFang SC", "Microsoft YaHei", "sans-serif"});
 #endif
                 {
                     Collections sidebar;
@@ -2844,8 +2843,7 @@ public:
                         const QStringList paths = menuPaths(menu);
                         unifiedListMenus &= !rootMenus.contains("列表") && !rootMenus.contains("添加") &&
                                             !rootMenus.contains("加入列表") &&
-                                            (row < 0 || paths.contains("从列表移除")) &&
-                                            !rootMenus.contains("歌单") &&
+                                            (row < 0 || paths.contains("从列表移除")) && !rootMenus.contains("歌单") &&
                                             std::none_of(paths.cbegin(), paths.cend(), [](const QString &text) {
                                                 return text.contains(QStringLiteral("歌单"));
                                             });
@@ -2864,14 +2862,12 @@ public:
                     panel.m_view->selectAt(0, Qt::NoModifier);
                     const QStringList rowLocal = menuPathsFor(0);
                     check("menu_grouped_submenus",
-                          rowLocal.contains("在文件管理器中打开目录") &&
-                              rowLocal.contains("转换为其他格式…") &&
+                          rowLocal.contains("在文件管理器中打开目录") && rowLocal.contains("转换为其他格式…") &&
                               sidebarPathsFor(Collections::kAllViewId).contains("播放模式/顺序播放") &&
                               sidebarPathsFor(Collections::kAllViewId).contains("添加/添加文件…") &&
                               sidebarPathsFor(Collections::kAllViewId).contains("新建列表…") &&
                               sidebarPathsFor(Collections::kAllViewId).contains("从列表移除") &&
-                              rowLocal.contains("属性") &&
-                              !rowLocal.contains("编辑显示信息…"));
+                              rowLocal.contains("属性") && !rowLocal.contains("编辑显示信息…"));
                     check("menu_hides_radio_group_for_local",
                           !rowLocal.contains("电台/修改电台地址…") && !rowLocal.contains("电台/重命名台名…"));
 

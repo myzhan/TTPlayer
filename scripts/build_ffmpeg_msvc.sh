@@ -201,6 +201,7 @@ mkdir -p "$BDIR"
     --disable-everything --disable-autodetect \
     --enable-zlib \
     --enable-avformat --enable-avcodec --enable-avutil --enable-swresample \
+    --disable-avdevice --disable-swscale \
     "${COMPONENTS[@]}" ) || {
         result=$?
         tail -n 100 "$BDIR/ffbuild/config.log" >&2

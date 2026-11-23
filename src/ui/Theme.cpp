@@ -84,9 +84,9 @@ namespace Fonts {
 // 专有 .AppleSystemUIFont 在 Windows/Linux 上的 "missing font family" 回退不一致）。
 static QFont uiFont(int pt, bool bold) {
     QFont f;
-    f.setFamilies({QStringLiteral("Helvetica Neue"), QStringLiteral("Arial"),
-                   QStringLiteral("Noto Sans"), QStringLiteral("DejaVu Sans"), QStringLiteral("PingFang SC"),
-                   QStringLiteral("Microsoft YaHei"), QStringLiteral("sans-serif")});
+    f.setFamilies({QStringLiteral("Helvetica Neue"), QStringLiteral("Arial"), QStringLiteral("Noto Sans"),
+                   QStringLiteral("DejaVu Sans"), QStringLiteral("PingFang SC"), QStringLiteral("Microsoft YaHei"),
+                   QStringLiteral("sans-serif")});
 #ifdef Q_OS_WIN
     // Windows：Segoe UI 做拉丁字体优先，中文用微软雅黑 UI 打头，字号减 1 pt。
     --pt;
