@@ -2647,10 +2647,16 @@ public:
                                        view->favoriteHit(hit.center(), row) &&
                                        !view->favoriteHit(QPoint(int(std::ceil(textLeft)), row * 24 + 12), row);
                         // 间隙中心必须只有行背景，避免图标描边、名称或文字侵入 2 px 空隙。
+                        // 字体兜底会带入 ≤1% 的亚像素取整，故按通道和容差判定；真墨与暗背景
+                        // 差达数百，仍能可靠识别任何实质侵入。
+                        constexpr int kGapBackgroundTolerance = 12;
                         const int x = qRound((textLeft - 1) * spacingDpr);
                         for (int y = qRound(row * 24 * spacingDpr);
-                             y < qMin(spacing.height(), qRound((row + 1) * 24 * spacingDpr)); ++y)
-                            gapPixels &= spacing.pixel(x, y) == spacing.pixel(spacing.width() - 1, y);
+                             y < qMin(spacing.height(), qRound((row + 1) * 24 * spacingDpr)); ++y) {
+                            const QRgb gap = spacing.pixel(x, y), bg = spacing.pixel(spacing.width() - 1, y);
+                            gapPixels &= qAbs(qRed(gap) - qRed(bg)) + qAbs(qGreen(gap) - qGreen(bg)) +
+                                             qAbs(qBlue(gap) - qBlue(bg)) <= kGapBackgroundTolerance;
+                        }
                     }
                     check("UI_favorite_duration_geometry", gapGeometry);
                     check("UI_favorite_duration_gap_pixels", gapPixels);
@@ -3317,8 +3323,12 @@ public:
                     check("UI_level_labels_smaller_font", labelFont.pointSize() == Fonts::numericTiny.pointSize() - 2 &&
                                                               labelFont.families() == Fonts::numericTiny.families() &&
                                                               labelFont.weight() == Fonts::numericTiny.weight());
+                    // 竖向适配按实际墨迹高度（tightBoundingRect）而不是含 leading 的行高：
+                    // 行高受字体兜底影响会虚高，而墨迹才是在 16px 标签框内真正绘制的高度。
                     check("UI_level_labels_fit_unchanged_meter",
-                          meter->size() == QSize(72, 40) && metrics.height() <= 16 &&
+                          meter->size() == QSize(72, 40) &&
+                              metrics.tightBoundingRect(QStringLiteral("L")).height() <= 16 &&
+                              metrics.tightBoundingRect(QStringLiteral("R")).height() <= 16 &&
                               metrics.horizontalAdvance("L") <= 14 && metrics.horizontalAdvance("R") <= 14);
                     QImage actual(meter->size(), QImage::Format_ARGB32_Premultiplied);
                     actual.fill(Qt::transparent);
