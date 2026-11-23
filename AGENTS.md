@@ -12,6 +12,7 @@
 - 验证必须按影响面精准挑档：自检跑 `./scripts/selftest.sh affected` 或点名 suite，linter 跑 `python3 scripts/lint.py all`（只查改动）；不因无关改动顺手跑全量 `selftest.sh all` 与 `lint.py all --all`，全量留给 CI 与发布前。报告实际跑过的档与 PASS / SKIP 数。
 - 自检、截图、打包探针必须隔离用户存档（`TTPLAYER_QT_STATE` 指到临时目录，`state.db` 随同目录隔离），真实用户档前后逐字节一致；不得用旧快照覆盖用户期间的修改。
 - 没有明确指示，不 commit、不 push、不打 tag、不发布 Release。
+- **永远不 force push**（包括 `--force-with-lease`）。需要修正已推送的历史时，叠新提交而不是 rewrite。CI 修复占用了版本号？叠一个改回版本号的提交即可，不必 squash。
 - 音频素材只现场生成到测试目录；不把大音频、构建缓存、打包产物入仓。
 - 中文沟通，实测优先；竞态至少重复 30 次，性能改动附测量口径和数据。
 - 本文只写开发约定，不写过程记录；修复证据看 git 历史。
