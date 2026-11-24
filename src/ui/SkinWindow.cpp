@@ -4,8 +4,11 @@
 #include "SkinParts.h"
 #include "Painter.h"
 #include "app/Application.h"
-#if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
+#if defined(Q_OS_WIN) || defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
 #include "MainWindow.h"
+#endif
+#ifdef Q_OS_MACOS
+#include "platform/MacWindow.h"
 #endif
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -19,6 +22,10 @@
 #include <QPaintEvent>
 #include <QShowEvent>
 #include <QWindow>
+#ifdef Q_OS_MACOS
+#include <QPointer>
+#include <QTimer>
+#endif
 
 // 圆角半径与主窗一致：壳、mask（不再需要）、描边都对齐。
 static constexpr qreal kSkinRadius = 10.0;
@@ -67,8 +74,9 @@ Qt::Edges frameResizeEdges(const QWidget *w, QPointF p) {
 } // namespace
 
 SkinWindow::SkinWindow(const QString &title, TitleButtons buttons, QWidget *parent) : QWidget(parent) {
-#if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
-    // 副面板是工具窗，不占独立任务栏/Alt-Tab 入口；主窗仍是普通 Window。
+#if defined(Q_OS_WIN) || defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
+    // 副面板是工具窗：Windows/Linux 上不占独立任务栏/Alt-Tab 入口，macOS 上配合
+    // addChildWindow 归组移出 App Exposé（Dock「显示所有窗口」）；主窗仍是普通 Window。
     setWindowFlags(Qt::Tool | Qt::FramelessWindowHint);
 #else
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
@@ -142,7 +150,26 @@ float SkinWindow::shellAlpha() const {
 void SkinWindow::showEvent(QShowEvent *e) {
     QWidget::showEvent(e);
     if (m_body) m_body->update(); // body 透明，靠父窗 paintBody 铺底，尺寸落定后补一次
+#ifdef Q_OS_MACOS
+    // 副面板靠 child window 归组以移出 App Exposé 网格（详见 macApplyPanelUtility）。
+    // showEvent 当下平台 NSWindow 尚未 realize，winId() 拿到的是无效指针，直接强转
+    // NSView 会在 objc_retain 上崩溃（实测 SIGSEGV at 0x2）；延后并等 expose 后再施加。
+    scheduleMacTransient(0);
+#endif
 }
+
+#ifdef Q_OS_MACOS
+void SkinWindow::scheduleMacTransient(int attempt) {
+    // 有界重试：macMarkPanelTransient 在平台窗未 expose 时返回 false，隔 40ms 再试，
+    // 最多约 1s（25 次）。QPointer 防面板在回调前被销毁；context 传 this 使析构自动断开。
+    QPointer<SkinWindow> self(this);
+    QTimer::singleShot(attempt == 0 ? 0 : 40, this, [self, attempt] {
+        if (!self) return;
+        if (macApplyPanelUtility(self.data())) return;
+        if (attempt < 25) self->scheduleMacTransient(attempt + 1);
+    });
+}
+#endif
 
 void SkinWindow::setTitleBarVisible(bool visible) {
     m_titleBar->setVisible(visible);
@@ -164,7 +191,7 @@ void SkinWindow::onClose() {
     close();
 }
 void SkinWindow::onMinimize() {
-#if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
+#if defined(Q_OS_WIN) || defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
     // 工具窗没有任务栏恢复入口，最小化键统一交给主窗收起整组。
     if (auto *main = qobject_cast<MainWindow *>(parentWidget())) {
         main->hideGroupToBackground();

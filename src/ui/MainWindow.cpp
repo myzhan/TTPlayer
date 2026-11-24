@@ -23,6 +23,10 @@
 #include "Painter.h"
 #include "Theme.h"
 #include "SkinParts.h"
+#include "SkinWindow.h"
+#ifdef Q_OS_MACOS
+#include "platform/MacWindow.h"
+#endif
 #include "media/Decoder.h"
 #include "media/FFmpeg.h"
 
@@ -79,9 +83,11 @@ static constexpr int kSkinLayoutVersion = 7;
 
 namespace {
 
-// Windows/Linux 的工具面板归属主窗，主窗最小化/恢复时由系统收起/带回（同时不占独立任务栏入口）；macOS 保留原关系。
+// Windows/Linux/macOS 的工具面板归属主窗：Windows/Linux 主窗最小化/恢复时由系统收起/带回
+// （且不占独立任务栏入口）；macOS 靠这层 parent 拿到主窗 NSWindow 以 addChildWindow 归组
+// （移出 App Exposé）。
 QWidget *panelOwner(QWidget *mainWindow) {
-#if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
+#if defined(Q_OS_WIN) || defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
     return mainWindow;
 #else
     Q_UNUSED(mainWindow)
@@ -686,6 +692,14 @@ void MainWindow::setWindowPinTop(QWidget *w, bool on) {
         win->setFlags(f);
     else
         w->setWindowFlags(f);
+#ifdef Q_OS_MACOS
+    // Qt::Tool 面板：setFlags 后 Qt 会重算 NSWindow level，延后再补一次 utility 修正
+    // （hidesOnDeactivate / 按置顶态的 level）。只对皮肤副面板生效，不动主窗。
+    if (qobject_cast<SkinWindow *>(w)) {
+        QPointer<QWidget> target(w);
+        QTimer::singleShot(0, w, [target] { if (target) macApplyPanelUtility(target.data()); });
+    }
+#endif
 }
 
 // 置顶：用户置顶 = 整组置顶。主窗、可见副面板及辅助窗一起 stays-on-top；

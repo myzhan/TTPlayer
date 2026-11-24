@@ -418,6 +418,8 @@ if(APPLE)
   endif()
   target_sources(ttplayer PRIVATE src/platform/MediaSession_mac.mm)
   set_source_files_properties(src/platform/MediaSession_mac.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+  target_sources(ttplayer PRIVATE src/platform/MacWindow_mac.mm)
+  set_source_files_properties(src/platform/MacWindow_mac.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
   # pthread 只经 Threads::Threads 进链接行：vendored SDL3-static 的 INTERFACE_LINK_OPTIONS
   # 已带 -lpthread，再手写一个 pthread 会触发 ld 的 duplicate libraries 警告。
   target_link_libraries(ttplayer PRIVATE ${TTPLAYER_ZLIB_TARGET} m Threads::Threads

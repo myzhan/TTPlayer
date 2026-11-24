@@ -61,4 +61,8 @@ private:
     QWidget *m_body = nullptr;
     QWidget *m_titleBar = nullptr;
     bool m_followGlass = true;
+#ifdef Q_OS_MACOS
+    // 面板进 App Exposé 网格的抑制：show 后平台窗可能尚未 expose，有界重试直到施加成功。
+    void scheduleMacTransient(int attempt);
+#endif
 };
