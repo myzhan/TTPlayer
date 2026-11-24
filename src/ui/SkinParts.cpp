@@ -432,7 +432,13 @@ void TTButton::paintEvent(QPaintEvent *) {
 
     switch (m_face) {
     case Face::Glass: {
-        if (m_lit) {
+        if (isChecked()) {
+            // checkable 玻璃按钮（当前仅置顶）勾选态：实心黄底 + 描边，明显区别于淡 lit。
+            p.fillPath(path, Theme::textAccent);
+            p.setBrush(Qt::NoBrush);
+            p.setPen(QPen(scaledAlpha(Theme::inkOnGlassAccent, 0.9f), 1));
+            p.drawPath(path);
+        } else if (m_lit) {
             p.fillPath(path, scaledAlpha(Theme::textAccent, 0.22f));
             p.setBrush(Qt::NoBrush);
             p.setPen(QPen(scaledAlpha(Theme::inkOnGlassAccent, 0.9f), 1));
@@ -463,7 +469,9 @@ void TTButton::paintEvent(QPaintEvent *) {
     // 前景色（内容）
     QColor fg;
     if (m_face == Face::Glass || m_face == Face::None) {
-        if (m_lit)
+        if (m_face == Face::Glass && isChecked())
+            fg = hexc(0x1A1206); // 置顶黄底：深字压橙黄（与 Badge lit 同口径）
+        else if (m_lit)
             fg = Theme::textAccent; // 激活：橙黄 accent
         else if (hot)
             fg = Theme::textHighlight; // hover：亮白
