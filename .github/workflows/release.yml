@@ -356,7 +356,7 @@ jobs:
         run: |
           codesign --verify --deep --strict build/dist/ttplayer.app
           QT_QPA_PLATFORM=offscreen TTPLAYER_QT_STATE="$RUNNER_TEMP/state.json" \
-            "build/dist/ttplayer.app/Contents/MacOS/千千静听" --version
+            build/dist/ttplayer.app/Contents/MacOS/ttplayer --version
       - name: Pack dmg
         env:
           VERSION: ${{ steps.version.outputs.version }}
