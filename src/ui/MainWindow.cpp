@@ -697,7 +697,9 @@ void MainWindow::setWindowPinTop(QWidget *w, bool on) {
     // （hidesOnDeactivate / 按置顶态的 level）。只对皮肤副面板生效，不动主窗。
     if (qobject_cast<SkinWindow *>(w)) {
         QPointer<QWidget> target(w);
-        QTimer::singleShot(0, w, [target] { if (target) macApplyPanelUtility(target.data()); });
+        QTimer::singleShot(0, w, [target] {
+            if (target) macApplyPanelUtility(target.data());
+        });
     }
 #endif
 }

@@ -2457,11 +2457,10 @@ public:
                     const QPoint blank(10, sidebarPanel.m_groups->height() - 10);
                     check("UI_sidebar_context_new_list_everywhere",
                           everyRow && sidebarPanel.m_groups->rowAt(blank) < 0 && contextAt(blank) &&
-                              sidebarPaths.count("新建列表…") == 1 &&
-                              !sidebarPaths.contains("添加/添加文件…") &&
-                              !sidebarPaths.contains("添加/添加网络电台…") &&
-                              !sidebarPaths.contains("清空列表") && !sidebarPaths.contains("重命名列表…") &&
-                              sidebar.playlists().count() == 2 && sidebarChanges == 0);
+                              sidebarPaths.count("新建列表…") == 1 && !sidebarPaths.contains("添加/添加文件…") &&
+                              !sidebarPaths.contains("添加/添加网络电台…") && !sidebarPaths.contains("清空列表") &&
+                              !sidebarPaths.contains("重命名列表…") && sidebar.playlists().count() == 2 &&
+                              sidebarChanges == 0);
                     check("UI_sidebar_context_keeps_category_actions", categoriesUnchanged);
                     bool unopenedMenus = true;
                     for (int repeat = 0; repeat < 30; ++repeat) {
@@ -2661,7 +2660,8 @@ public:
                              y < qMin(spacing.height(), qRound((row + 1) * 24 * spacingDpr)); ++y) {
                             const QRgb gap = spacing.pixel(x, y), bg = spacing.pixel(spacing.width() - 1, y);
                             gapPixels &= qAbs(qRed(gap) - qRed(bg)) + qAbs(qGreen(gap) - qGreen(bg)) +
-                                             qAbs(qBlue(gap) - qBlue(bg)) <= kGapBackgroundTolerance;
+                                             qAbs(qBlue(gap) - qBlue(bg)) <=
+                                         kGapBackgroundTolerance;
                         }
                     }
                     check("UI_favorite_duration_geometry", gapGeometry);
@@ -2895,11 +2895,9 @@ public:
                     check("menu_radio_group",
                           rowRadio.contains("编辑…") && rowRadio.contains("电台/重试这个电台") &&
                               rowRadio.contains("电台/移入分类/未分类") &&
-                              !rowRadio.contains("在文件管理器中打开目录") &&
-                              !rowRadio.contains("转换为其他格式…") && rowRadio.contains("属性") &&
-                              !rowRadio.contains("从列表移除") &&
-                              !rowRadio.contains("电台/修改电台地址…") &&
-                              !rowRadio.contains("电台/重命名台名…"));
+                              !rowRadio.contains("在文件管理器中打开目录") && !rowRadio.contains("转换为其他格式…") &&
+                              rowRadio.contains("属性") && !rowRadio.contains("从列表移除") &&
+                              !rowRadio.contains("电台/修改电台地址…") && !rowRadio.contains("电台/重命名台名…"));
                     check("menu_song_blank_has_no_list_actions", menuPathsFor(-1).isEmpty());
                     panel.m_view->selectAt(0, Qt::NoModifier);
                     panel.m_view->selectAt(2, Qt::ControlModifier);
@@ -3040,9 +3038,9 @@ public:
 
                     // 电台页的「添加▸」仅给网络电台；自定义列表/曲库页才给本地文件与文件夹。
                     const QStringList radioPage = sidebarPathsFor(Collections::kRadioViewId);
-                    check("menu_radio_page_add_entry",
-                          radioPage.contains("添加/添加网络电台…") && !radioPage.contains("添加/添加文件…") &&
-                              !radioPage.contains("添加/添加文件夹…"));
+                    check("menu_radio_page_add_entry", radioPage.contains("添加/添加网络电台…") &&
+                                                           !radioPage.contains("添加/添加文件…") &&
+                                                           !radioPage.contains("添加/添加文件夹…"));
 
                     mcol.setViewId(Collections::kAllViewId);
                     mctl.setTracks(mcol.currentTracks());

@@ -532,8 +532,8 @@ void PlaylistWindow::buildSidebarMenu(QMenu &menu, const QString &id) {
                 emit addRequested();
                 return;
             }
-            const QStringList files = QFileDialog::getOpenFileNames(this, QStringLiteral("添加音频文件"), QDir::homePath(),
-                                                                    Importer::fileDialogFilter());
+            const QStringList files = QFileDialog::getOpenFileNames(this, QStringLiteral("添加音频文件"),
+                                                                    QDir::homePath(), Importer::fileDialogFilter());
             if (!files.isEmpty()) addPathsToCurrentPlaylist(files, id);
         });
         connect(add->addAction(QStringLiteral("添加文件夹…")), &QAction::triggered, this, [this, id, custom] {

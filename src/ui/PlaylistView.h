@@ -57,7 +57,7 @@ public:
 signals:
     void propertiesRequested(const Track &track);
     void convertRequested(const QList<Track> &tracks); // 右键「转换为其他格式…」（可多选）
-    void editRequested(const Track &track);            // 右键电台行「编辑…」：显示名 + 地址同张表单
+    void editRequested(const Track &track); // 右键电台行「编辑…」：显示名 + 地址同张表单
     void radioRetryRequested(const Track &track);
     void activateRow(int row);                        // 双击
     void removeRequested(const QList<int> &rows);     // Delete 快捷键移除选区。
