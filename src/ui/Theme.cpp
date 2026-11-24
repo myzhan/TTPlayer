@@ -84,9 +84,17 @@ namespace Fonts {
 // 专有 .AppleSystemUIFont 在 Windows/Linux 上的 "missing font family" 回退不一致）。
 static QFont uiFont(int pt, bool bold) {
     QFont f;
+#ifdef Q_OS_MACOS
+    // macOS：只列本机确定存在的族（Helvetica Neue 拉丁 + PingFang SC 中文），避免
+    // QCocoa 逐族解析别名时打 "Populating font family aliases ... missing font family"
+    // 告警（Arial/Noto/DejaVu/Microsoft YaHei/sans-serif 在 macOS 上都不是实存族名，
+    // 列了只会拖慢启动）。Helvetica Neue 恒在，无需 generic 兜底；styleHint 已是 SansSerif。
+    f.setFamilies({QStringLiteral("Helvetica Neue"), QStringLiteral("PingFang SC")});
+#else
     f.setFamilies({QStringLiteral("Helvetica Neue"), QStringLiteral("Arial"), QStringLiteral("Noto Sans"),
                    QStringLiteral("DejaVu Sans"), QStringLiteral("PingFang SC"), QStringLiteral("Microsoft YaHei"),
                    QStringLiteral("sans-serif")});
+#endif
 #ifdef Q_OS_WIN
     // Windows：Segoe UI 做拉丁字体优先，中文用微软雅黑 UI 打头，字号减 1 pt。
     --pt;

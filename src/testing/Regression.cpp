@@ -2327,9 +2327,13 @@ public:
                                                 Fonts::panelTitle.pointSize() == 13);
                 check("numeric_fonts_preserve_platform",
                       Fonts::numericSmall == Fonts::small && Fonts::numericTiny == Fonts::tiny);
+#ifdef Q_OS_MACOS
+                check("approved_font_families", Fonts::base.families() == QStringList{"Helvetica Neue", "PingFang SC"});
+#else
                 check("approved_font_families",
                       Fonts::base.families() == QStringList{"Helvetica Neue", "Arial", "Noto Sans", "DejaVu Sans",
                                                             "PingFang SC", "Microsoft YaHei", "sans-serif"});
+#endif
 #endif
                 {
                     Collections sidebar;
