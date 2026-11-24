@@ -468,7 +468,7 @@ else()
 endif()
 
 # Windows 版本资源与分发版本共用这一来源。
-set(CPACK_PACKAGE_VERSION 1.1.5)
+set(CPACK_PACKAGE_VERSION 1.1.6)
 option(TTPLAYER_BUNDLE "Build a macOS application bundle for distribution" OFF)
 if(APPLE AND TTPLAYER_BUNDLE)
   configure_file(packaging/Info.plist.in "${CMAKE_CURRENT_BINARY_DIR}/Info.plist" @ONLY)
