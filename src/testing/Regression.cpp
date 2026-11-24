@@ -2457,7 +2457,9 @@ public:
                     const QPoint blank(10, sidebarPanel.m_groups->height() - 10);
                     check("UI_sidebar_context_new_list_everywhere",
                           everyRow && sidebarPanel.m_groups->rowAt(blank) < 0 && contextAt(blank) &&
-                              sidebarPaths.count("新建列表…") == 1 && sidebarPaths.contains("添加/添加文件…") &&
+                              sidebarPaths.count("新建列表…") == 1 &&
+                              !sidebarPaths.contains("添加/添加文件…") &&
+                              !sidebarPaths.contains("添加/添加网络电台…") &&
                               !sidebarPaths.contains("清空列表") && !sidebarPaths.contains("重命名列表…") &&
                               sidebar.playlists().count() == 2 && sidebarChanges == 0);
                     check("UI_sidebar_context_keeps_category_actions", categoriesUnchanged);
@@ -2852,8 +2854,8 @@ public:
                             if (action->menu()) rootMenus << action->text();
                         const QStringList paths = menuPaths(menu);
                         unifiedListMenus &= !rootMenus.contains("列表") && !rootMenus.contains("添加") &&
-                                            !rootMenus.contains("加入列表") &&
-                                            (row < 0 || paths.contains("从列表移除")) && !rootMenus.contains("歌单") &&
+                                            !rootMenus.contains("加入列表") && !rootMenus.contains("歌单") &&
+                                            !paths.contains("从列表移除") &&
                                             std::none_of(paths.cbegin(), paths.cend(), [](const QString &text) {
                                                 return text.contains(QStringLiteral("歌单"));
                                             });
@@ -2873,13 +2875,14 @@ public:
                     const QStringList rowLocal = menuPathsFor(0);
                     check("menu_grouped_submenus",
                           rowLocal.contains("在文件管理器中打开目录") && rowLocal.contains("转换为其他格式…") &&
-                              sidebarPathsFor(Collections::kAllViewId).contains("播放模式/顺序播放") &&
-                              sidebarPathsFor(Collections::kAllViewId).contains("添加/添加文件…") &&
+                              rowLocal.contains("属性") && !rowLocal.contains("编辑…") &&
+                              !rowLocal.contains("从列表移除") &&
+                              !sidebarPathsFor(Collections::kAllViewId).contains("播放模式/顺序播放") &&
+                              !sidebarPathsFor(Collections::kAllViewId).contains("添加/添加文件…") &&
                               sidebarPathsFor(Collections::kAllViewId).contains("新建列表…") &&
-                              sidebarPathsFor(Collections::kAllViewId).contains("从列表移除") &&
-                              rowLocal.contains("属性") && !rowLocal.contains("编辑显示信息…"));
+                              sidebarPathsFor(Collections::kAllViewId).contains("从列表移除"));
                     check("menu_hides_radio_group_for_local",
-                          !rowLocal.contains("电台/修改电台地址…") && !rowLocal.contains("电台/重命名台名…"));
+                          !rowLocal.contains("电台/重试这个电台") && !rowLocal.contains("电台/移入分类/未分类"));
 
                     // 探不到的文件：不给「转换为其他格式…」（不再用灰项代替隐藏）
                     panel.m_view->selectAt(1, Qt::NoModifier);
@@ -2890,10 +2893,13 @@ public:
                     panel.m_view->selectAt(2, Qt::NoModifier);
                     const QStringList rowRadio = menuPathsFor(2);
                     check("menu_radio_group",
-                          rowRadio.contains("电台/修改电台地址…") && rowRadio.contains("电台/重试这个电台") &&
-                              rowRadio.contains("电台/重命名台名…") && rowRadio.contains("电台/移入分类/未分类") &&
-                              !rowRadio.contains("在文件管理器中打开目录") && rowRadio.contains("编辑显示信息…") &&
-                              rowRadio.contains("属性"));
+                          rowRadio.contains("编辑…") && rowRadio.contains("电台/重试这个电台") &&
+                              rowRadio.contains("电台/移入分类/未分类") &&
+                              !rowRadio.contains("在文件管理器中打开目录") &&
+                              !rowRadio.contains("转换为其他格式…") && rowRadio.contains("属性") &&
+                              !rowRadio.contains("从列表移除") &&
+                              !rowRadio.contains("电台/修改电台地址…") &&
+                              !rowRadio.contains("电台/重命名台名…"));
                     check("menu_song_blank_has_no_list_actions", menuPathsFor(-1).isEmpty());
                     panel.m_view->selectAt(0, Qt::NoModifier);
                     panel.m_view->selectAt(2, Qt::ControlModifier);
@@ -2905,11 +2911,11 @@ public:
                                      [&](const Track &track) { editedKey = track.identityKey(); });
                     QObject::connect(&panel, &PlaylistWindow::propertiesRequested, &panel,
                                      [&](const Track &track) { propertyKey = track.identityKey(); });
-                    QAction *edit = findMenuAction(mixedRadio, "编辑显示信息…");
+                    QAction *edit = findMenuAction(mixedRadio, "编辑…");
                     QAction *properties = findMenuAction(mixedRadio, "属性");
                     if (edit) edit->trigger();
                     if (properties) properties->trigger();
-                    check("menu_radio_edit_and_properties_dispatch", !findMenuAction(mixedLocal, "编辑显示信息…") &&
+                    check("menu_radio_edit_and_properties_dispatch", !findMenuAction(mixedLocal, "编辑…") &&
                                                                          editedKey == radio.identityKey() &&
                                                                          propertyKey == radio.identityKey());
 
@@ -3030,7 +3036,13 @@ public:
                     check("menu_blank_page_facts",
                           !blankCustom.contains("下一首播放") && !blankCustom.contains("从列表移除") &&
                               !blankCustom.contains("排序/按标题") && !blankCustom.contains("定位当前曲") &&
-                              !blankCustom.contains("清空列表") && blankCustom.contains("添加/添加网络电台…"));
+                              !blankCustom.contains("清空列表") && !blankCustom.contains("添加/添加网络电台…"));
+
+                    // 电台页的「添加▸」仅给网络电台；自定义列表/曲库页才给本地文件与文件夹。
+                    const QStringList radioPage = sidebarPathsFor(Collections::kRadioViewId);
+                    check("menu_radio_page_add_entry",
+                          radioPage.contains("添加/添加网络电台…") && !radioPage.contains("添加/添加文件…") &&
+                              !radioPage.contains("添加/添加文件夹…"));
 
                     mcol.setViewId(Collections::kAllViewId);
                     mctl.setTracks(mcol.currentTracks());
@@ -3108,10 +3120,14 @@ public:
                     for (const QString &text :
                          {QStringLiteral("添加文件…"), QStringLiteral("添加文件夹…"), QStringLiteral("添加网络电台…")})
                         if (QAction *action = findMenuAction(sidebarBlank, text)) action->trigger();
-                    check("menu_sidebar_blank_global_add_dispatch", dispatchedFiles && dispatchedFolder &&
-                                                                        dispatchedRadio &&
-                                                                        !findMenuAction(sidebarBlank, "清空列表") &&
-                                                                        !findMenuAction(sidebarBlank, "重命名列表…"));
+                    // 空白处不属于任何具体页——本地/电台添加项不再给，也不派任导入信号。
+                    check("menu_sidebar_blank_has_no_page_specific_add",
+                          !dispatchedFiles && !dispatchedFolder && !dispatchedRadio &&
+                              !findMenuAction(sidebarBlank, "添加文件…") &&
+                              !findMenuAction(sidebarBlank, "添加文件夹…") &&
+                              !findMenuAction(sidebarBlank, "添加网络电台…") &&
+                              !findMenuAction(sidebarBlank, "清空列表") &&
+                              !findMenuAction(sidebarBlank, "重命名列表…"));
                     QString category, categoryNote;
                     mcol.radios().createCategory("分类", &category, &categoryNote);
                     const QStringList categoryPaths = sidebarPathsFor(Collections::radioCatViewId(category));
@@ -3124,16 +3140,15 @@ public:
                     panel.hide();
                     QMenu controls;
                     panel.buildSidebarMenu(controls, Collections::kAllViewId);
-                    QAction *random = findMenuAction(controls, "随机播放");
+                    // 侧栏不再提供播放模式——TransportBar 的 m_mode 已唯一入口。
                     QAction *descending = findMenuAction(controls, "按标题降序");
-                    if (random) random->trigger();
                     if (descending) descending->trigger();
-                    check("menu_merged_mode_sort_dispatch",
-                          random && descending && mctl.mode() == PlayMode::Random && mctl.tracks().size() == 3 &&
+                    check("menu_merged_sort_dispatch_only",
+                          !findMenuAction(controls, "随机播放") && !findMenuAction(controls, "顺序播放") &&
+                              descending && mctl.tracks().size() == 3 &&
                               mctl.tracks().first().identityKey() == radio.identityKey() &&
                               mcol.currentTracks().size() == 3 &&
                               mcol.currentTracks().first().identityKey() == radio.identityKey());
-                    if (QAction *order = findMenuAction(controls, "顺序播放")) order->trigger();
                     if (QAction *ascending = findMenuAction(controls, "按标题")) ascending->trigger();
 
                     // 筛选态：清空/排序会连带命中之外的内容，先不列
@@ -3226,7 +3241,7 @@ public:
                             auto *title = dialog.findChild<QLineEdit *>("radioTitle");
                             auto *artist = dialog.findChild<QLineEdit *>("radioArtist");
                             auto *album = dialog.findChild<QLineEdit *>("radioAlbum");
-                            prefilled = address && address->isReadOnly() && address->text() == key && title &&
+                            prefilled = address && !address->isReadOnly() && address->text() == key && title &&
                                         title->text() == "Custom radio" && artist && artist->text() == "Artist" &&
                                         album && album->text() == "Album";
                             if (!fill(dialog, key, "Updated", "New artist", "New album")) return;

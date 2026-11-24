@@ -103,11 +103,12 @@ bool pathWithinRoot(const QString &path, const QString &root) {
 }
 
 // 添加与编辑共用一张表单；确认前不改变集合，取消时整组字段一起丢弃。
+// 编辑模式下地址也可改——上层 editRadioPrompt 会按 URL 是否变化分派 replace 或 editTrack。
 std::optional<Track> promptRadioInfo(QWidget *parent, const Track &current = {}) {
     const bool adding = current.isNull();
     QDialog dialog(parent);
     dialog.setObjectName(QStringLiteral("radioInfoDialog"));
-    dialog.setWindowTitle(adding ? QStringLiteral("添加网络电台") : QStringLiteral("编辑显示信息"));
+    dialog.setWindowTitle(adding ? QStringLiteral("添加网络电台") : QStringLiteral("编辑电台"));
     auto *root = new QVBoxLayout(&dialog);
     auto *form = new QFormLayout();
     auto field = [&](const char *name, const QString &label, const QString &value) {
@@ -118,7 +119,6 @@ std::optional<Track> promptRadioInfo(QWidget *parent, const Track &current = {})
     };
     auto *address = field("radioAddress", QStringLiteral("电台地址（http / https）"),
                           adding ? QString() : current.url().toString());
-    address->setReadOnly(!adding);
     auto *title = field("radioTitle", QStringLiteral("标题 / 台名"), adding ? QString() : current.title());
     title->setMaxLength(RadioStations::aliasLimit);
     title->setPlaceholderText(QStringLiteral("留空使用内置台名或地址"));
@@ -738,36 +738,6 @@ void MainWindow::togglePlaylistPanel() {
         connect(m_playlist, &PlaylistWindow::convertRequested, this,
                 [this](const QList<Track> &tracks) { (new ConvertWindow(tracks, this))->show(); });
         connect(m_playlist, &PlaylistWindow::editRequested, this, &MainWindow::editRadioPrompt);
-        auto replace = [this](const Track &old, Track replacement) {
-            const QString key = old.identityKey();
-            if (!m_collections.replaceKey(key, replacement)) {
-                QMessageBox::warning(this, QStringLiteral("无法替换"),
-                                     QStringLiteral("目标身份已在列表中，不能覆盖另一个条目"));
-                return;
-            }
-            m_controller->replaceTrackReferences({{key, replacement}});
-            if (!RadioPresets::nameFor(old.url()).isEmpty() && !m_declinedRadioKeys.contains(key))
-                m_declinedRadioKeys << key;
-            const bool gapless = m_controller->gaplessEnabled();
-            m_controller->setGaplessEnabled(false);
-            m_controller->setGaplessEnabled(gapless);
-            m_controller->setTracks(m_collections.currentTracks());
-            syncNowPlaying();
-            saveState();
-        };
-        connect(m_playlist, &PlaylistWindow::radioAddressRequested, this, [this, replace](const Track &track) {
-            bool ok = false;
-            const QString text =
-                QInputDialog::getText(this, QStringLiteral("修改电台地址"), QStringLiteral("HTTP / HTTPS 地址"),
-                                      QLineEdit::Normal, track.url().toString(), &ok);
-            if (!ok) return;
-            const QUrl url = RadioURL::normalize(text);
-            if (url.isEmpty()) return;
-            const bool playing =
-                m_controller->isPlaying() && m_controller->currentTrack().identityKey() == track.identityKey();
-            replace(track, Track::fromRadio(url));
-            if (playing) m_controller->retryRadio();
-        });
         if (m_dock) m_dock->registerPanel(SkinDock::Playlist, m_playlist);
     }
     const bool show = !m_playlist->isVisible();
@@ -1541,11 +1511,43 @@ void MainWindow::editRadioPrompt(const Track &track) {
     if (track.isNull() || !track.isRadio()) return;
     const auto radio = promptRadioInfo(this, track);
     if (!radio) return;
-    m_collections.editTrack(track.identityKey(), radio->title(), radio->artist(), radio->album());
+    // URL 变了走 replace 通道（集合层会搬列表成员/别名/分类归属）；
+    // 仅元数据变则直接写 editTrack（电台的 title 落到 alias 表）。
+    const bool urlChanged = radio->url() != track.url();
+    const bool wasPlaying =
+        m_controller->isPlaying() && m_controller->currentTrack().identityKey() == track.identityKey();
+    QString effectiveKey = track.identityKey();
+    if (urlChanged) {
+        const Track replacement = Track::fromRadio(radio->url());
+        if (!replaceRadioTrack(track, replacement)) return;
+        effectiveKey = replacement.identityKey();
+    }
+    m_collections.editTrack(effectiveKey, radio->title(), radio->artist(), radio->album());
     m_controller->setTracks(m_collections.currentTracks());
     if (m_playlist) m_playlist->refreshGroups();
     syncNowPlaying();
     saveState();
+    // 正在播的就是这一行且地址改了：用新 URL 重接，不靠 UI 手动重选。
+    if (urlChanged && wasPlaying) m_controller->retryRadio();
+}
+
+// 将电台行从 oldTrack 换到 replacement（新 URL）。目标身份已存在则弹提示并返回 false；
+// 成功时把集合/引用/declinedRadioKeys/无缝开关对齐，但不刷 UI，调用方自己接 setTracks。
+bool MainWindow::replaceRadioTrack(const Track &oldTrack, const Track &replacement) {
+    const QString key = oldTrack.identityKey();
+    if (!m_collections.replaceKey(key, replacement)) {
+        QMessageBox::warning(this, QStringLiteral("无法替换"),
+                             QStringLiteral("目标身份已在列表中，不能覆盖另一个条目"));
+        return false;
+    }
+    m_controller->replaceTrackReferences({{key, replacement}});
+    if (!RadioPresets::nameFor(oldTrack.url()).isEmpty() && !m_declinedRadioKeys.contains(key))
+        m_declinedRadioKeys << key;
+    // 拆掉无缝后台预取，避免旧 URL 的尾端 PCM 接进新流开头。
+    const bool gapless = m_controller->gaplessEnabled();
+    m_controller->setGaplessEnabled(false);
+    m_controller->setGaplessEnabled(gapless);
+    return true;
 }
 
 void MainWindow::loadDirOrFiles(const QStringList &paths, const QHash<QString, QJsonObject> &radioEdits) {

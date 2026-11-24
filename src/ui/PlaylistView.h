@@ -57,13 +57,11 @@ public:
 signals:
     void propertiesRequested(const Track &track);
     void convertRequested(const QList<Track> &tracks); // 右键「转换为其他格式…」（可多选）
-    void editRequested(const Track &track);
-    void radioAddressRequested(const Track &track);
+    void editRequested(const Track &track);            // 右键电台行「编辑…」：显示名 + 地址同张表单
     void radioRetryRequested(const Track &track);
     void activateRow(int row);                        // 双击
     void removeRequested(const QList<int> &rows);     // Delete 快捷键移除选区。
     void toggleFavoriteRequested(const QString &key); // 行内爱心只切换单个身份。
-    void radioAliasRequested(const QList<int> &rows); // 右键电台行「重命名台名…」（上层弹框取名）
     void radioMoveCategoryRequested(const QList<int> &rows,
                                     const QString &catId); // 移入分类（catId=未分类 id 则摘归属）
     void reorderRequested(int targetRow);                  // 拖拽：把当前选区整块移到 targetRow 前

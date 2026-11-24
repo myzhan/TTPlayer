@@ -477,77 +477,63 @@ void PlaylistView::contextMenuEvent(QContextMenuEvent *event) {
     if (!menu.isEmpty()) menu.exec(event->globalPos());
 }
 
-// 菜单树构造：动作一律用 triggered 连接，exec 只负责显示。探针可直接调用本函数核对分组
-// 与隐藏规则（exec 会阻塞，测试不能走它）。
+// 歌曲区右键：只管“这些曲目本身”。列表归属（加入列表 / 从列表移除）一律在左栏处理；
+// 电台元数据与地址合并为一个「编辑…」，连接与归类放到「电台 ▸」。
 void PlaylistView::buildContextMenu(QMenu &menu, int row) {
     const bool onRow = row >= 0 && row < m_tracks.size();
-    const QList<int> rows = onRow ? selectedRows() : QList<int>();
+    if (!onRow) return;
+    const QList<int> rows = selectedRows();
     QList<Track> picked;
     picked.reserve(rows.size());
     for (int r : rows)
         picked << m_tracks[r];
+    const Track t = m_tracks[row];
 
-    if (onRow) {
-        const Track t = m_tracks[row];
+    // 电台元数据合成一个「编辑…」：显示名 + 地址同一张表单；保存时地址变了走
+    // replace URL 通道，仅元数据变走别名通道（上层分派）。本地/CUE/归档仍只读。
+    if (t.isRadio())
+        connect(menu.addAction(QStringLiteral("编辑…")), &QAction::triggered, this,
+                [this, t] { emit editRequested(t); });
+    // 电台不提供磁盘操作；文件类动作只对本地实体有意义。
+    if (!t.isRadio()) {
+        connect(menu.addAction(QStringLiteral("在文件管理器中打开目录")), &QAction::triggered, this, [t] {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(t.url().toLocalFile()).absolutePath()));
+        });
+        // 多选里只要有一条不能转（电台 / 归档条目 / 文件不在）就整项不给，
+        // 不偷偷只转一部分。
+        bool allConvertible = !picked.isEmpty();
+        for (const Track &track : std::as_const(picked))
+            allConvertible = allConvertible && AudioConvert::canConvert(track);
+        if (allConvertible)
+            connect(menu.addAction(QStringLiteral("转换为其他格式…")), &QAction::triggered, this,
+                    [this, picked] { emit convertRequested(picked); });
+    }
+    connect(menu.addAction(QStringLiteral("属性")), &QAction::triggered, this,
+            [this, t] { emit propertiesRequested(t); });
 
-        // —— 显示信息 / 文件 ——
-        // 只编辑右键指向的电台；本地、CUE 与归档曲目的显示信息沿用原始元数据。
-        if (t.isRadio())
-            connect(menu.addAction(QStringLiteral("编辑显示信息…")), &QAction::triggered, this,
-                    [this, t] { emit editRequested(t); });
-        // 电台只提供属性；磁盘操作只对本地实体有意义。
-        if (!t.isRadio()) {
-            connect(menu.addAction(QStringLiteral("在文件管理器中打开目录")), &QAction::triggered, this, [t] {
-                QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(t.url().toLocalFile()).absolutePath()));
-            });
-            // 多选里只要有一条不能转（电台 / 归档条目 / 文件不在）就整项不给，
-            // 不偷偷只转一部分。
-            bool allConvertible = !picked.isEmpty();
-            for (const Track &track : std::as_const(picked))
-                allConvertible = allConvertible && AudioConvert::canConvert(track);
-            if (allConvertible)
-                connect(menu.addAction(QStringLiteral("转换为其他格式…")), &QAction::triggered, this,
-                        [this, picked] { emit convertRequested(picked); });
-        }
-        connect(menu.addAction(QStringLiteral("属性")), &QAction::triggered, this,
-                [this, t] { emit propertiesRequested(t); });
-
-        // —— 从列表移除（操作对象是"这首歌在当前列表里的存在"，曲库非筛选态不给） ——
-        const bool library = m_collections && m_collections->viewId() == Collections::kLibraryViewId;
-        if (!library || m_filterActive) {
-            menu.addSeparator();
-            connect(menu.addAction(QStringLiteral("从列表移除")), &QAction::triggered, this,
-                    [this, rows] { emit removeRequested(rows); });
-        }
-
-        // —— 电台：台名/归属都记在地址上（R13） ——
-        if (t.isRadio()) {
-            menu.addSeparator();
-            QMenu *radio = SkinMenu::addSubmenu(menu, QStringLiteral("电台"));
-            connect(radio->addAction(QStringLiteral("修改电台地址…")), &QAction::triggered, this,
-                    [this, t] { emit radioAddressRequested(t); });
-            connect(radio->addAction(QStringLiteral("重试这个电台")), &QAction::triggered, this,
-                    [this, t] { emit radioRetryRequested(t); });
-            if (m_collections) {
-                radio->addSeparator();
-                connect(radio->addAction(QStringLiteral("重命名台名…")), &QAction::triggered, this,
-                        [this, rows] { emit radioAliasRequested(rows); });
-                QMenu *cats = SkinMenu::addSubmenu(*radio, QStringLiteral("移入分类"));
-                const RadioStations &rs = m_collections->radios();
-                const QString cur = rs.categoryIDOf(t.identityKey());
-                QAction *uncat = cats->addAction(QStringLiteral("未分类"));
-                uncat->setCheckable(true);
-                uncat->setChecked(cur.isEmpty());
-                connect(uncat, &QAction::triggered, this,
-                        [this, rows] { emit radioMoveCategoryRequested(rows, RadioStations::uncategorizedID); });
-                for (const RadioCategory &c : rs.categories()) {
-                    QAction *act = cats->addAction(c.name);
-                    act->setCheckable(true);
-                    act->setChecked(cur == c.id);
-                    const QString catId = c.id;
-                    connect(act, &QAction::triggered, this,
-                            [this, rows, catId] { emit radioMoveCategoryRequested(rows, catId); });
-                }
+    // —— 电台：连接与归类，与「编辑…」同级但不同族 ——
+    if (t.isRadio()) {
+        menu.addSeparator();
+        QMenu *radio = SkinMenu::addSubmenu(menu, QStringLiteral("电台"));
+        connect(radio->addAction(QStringLiteral("重试这个电台")), &QAction::triggered, this,
+                [this, t] { emit radioRetryRequested(t); });
+        if (m_collections) {
+            radio->addSeparator();
+            QMenu *cats = SkinMenu::addSubmenu(*radio, QStringLiteral("移入分类"));
+            const RadioStations &rs = m_collections->radios();
+            const QString cur = rs.categoryIDOf(t.identityKey());
+            QAction *uncat = cats->addAction(QStringLiteral("未分类"));
+            uncat->setCheckable(true);
+            uncat->setChecked(cur.isEmpty());
+            connect(uncat, &QAction::triggered, this,
+                    [this, rows] { emit radioMoveCategoryRequested(rows, RadioStations::uncategorizedID); });
+            for (const RadioCategory &c : rs.categories()) {
+                QAction *act = cats->addAction(c.name);
+                act->setCheckable(true);
+                act->setChecked(cur == c.id);
+                const QString catId = c.id;
+                connect(act, &QAction::triggered, this,
+                        [this, rows, catId] { emit radioMoveCategoryRequested(rows, catId); });
             }
         }
     }

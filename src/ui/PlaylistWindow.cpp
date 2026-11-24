@@ -116,7 +116,6 @@ PlaylistWindow::PlaylistWindow(PlayerController *controller, Collections *collec
     connect(m_view, &PlaylistView::propertiesRequested, this, &PlaylistWindow::propertiesRequested);
     connect(m_view, &PlaylistView::convertRequested, this, &PlaylistWindow::convertRequested);
     connect(m_view, &PlaylistView::editRequested, this, &PlaylistWindow::editRequested);
-    connect(m_view, &PlaylistView::radioAddressRequested, this, &PlaylistWindow::radioAddressRequested);
     connect(m_view, &PlaylistView::radioRetryRequested, this, [this](const Track &track) {
         if (m_controller->currentTrack().isNull() ||
             m_controller->currentTrack().identityKey() != track.identityKey()) {
@@ -189,28 +188,8 @@ PlaylistWindow::PlaylistWindow(PlayerController *controller, Collections *collec
         emit collectionsChanged();
     });
 
-    // R13 右键电台行「重命名台名…」：台名记在地址上，空名 = 取消自定义（回落内置名/地址）。
-    connect(m_view, &PlaylistView::radioAliasRequested, this, [this](const QList<int> &rows) {
-        const QList<Track> cur = m_controller->tracks();
-        Track target;
-        for (const int row : rows)
-            if (row >= 0 && row < cur.size() && cur[row].isRadio()) {
-                target = cur[row];
-                break;
-            }
-        if (target.isNull()) return;
-        bool ok = false;
-        const QString curName = m_collections->radios().displayName(target.url());
-        const QString name =
-            QInputDialog::getText(this, QStringLiteral("重命名电台"), QStringLiteral("台名（留空=取消自定义）"),
-                                  QLineEdit::Normal, curName, &ok);
-        if (!ok) return;
-        m_collections->radios().setAlias(target.identityKey(), name);
-        m_collections->refreshRadioTitles();
-        if (!m_searchOpen) showPage(m_collections->viewId());
-        emit collectionsChanged();
-    });
-    // R13 右键电台行「移入分类」：只改归属，地址与台名不动；catId=未分类 id 则摘归属。
+    // R13 电台台名与地址在行右键「编辑…」里一并提交（上层写 alias 与 URL 两条保存通道）。
+    // 右键电台行「移入分类」：只改归属，地址与台名不动；catId=未分类 id 则摘归属。
     connect(m_view, &PlaylistView::radioMoveCategoryRequested, this,
             [this](const QList<int> &rows, const QString &catId) {
                 const QList<Track> cur = m_controller->tracks();
@@ -539,26 +518,36 @@ void PlaylistWindow::buildSidebarMenu(QMenu &menu, const QString &id) {
                     [this, id, removable, filtered] { removeTracks(id, removable, filtered); });
     }
     if (!menu.isEmpty()) menu.addSeparator();
-    QMenu *add = SkinMenu::addSubmenu(menu, QStringLiteral("添加"));
-    connect(add->addAction(QStringLiteral("添加文件…")), &QAction::triggered, this, [this, id, custom] {
-        if (!custom) {
-            emit addRequested();
-            return;
-        }
-        const QStringList files = QFileDialog::getOpenFileNames(this, QStringLiteral("添加音频文件"), QDir::homePath(),
-                                                                Importer::fileDialogFilter());
-        if (!files.isEmpty()) addPathsToCurrentPlaylist(files, id);
-    });
-    connect(add->addAction(QStringLiteral("添加文件夹…")), &QAction::triggered, this, [this, id, custom] {
-        if (!custom) {
-            emit addFolderRequested();
-            return;
-        }
-        const QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("添加文件夹"), QDir::homePath());
-        if (!dir.isEmpty()) addPathsToCurrentPlaylist({dir}, id);
-    });
-    connect(add->addAction(QStringLiteral("添加网络电台…")), &QAction::triggered, this,
-            &PlaylistWindow::radioRequested);
+    // 添加▸ 按页类型给项：
+    //   曲库 / 自定义列表 → 本地文件与文件夹
+    //   电台 / 电台分类（含未分类）→ 网络电台
+    //   全部 / 收藏 不显示添加▸（派生视图，要导入请回曲库）
+    const bool radioPage = id == Collections::kRadioViewId || Collections::isRadioCatView(id);
+    const bool localAdd = library || custom;
+    QMenu *add = nullptr;
+    if (radioPage || localAdd) add = SkinMenu::addSubmenu(menu, QStringLiteral("添加"));
+    if (localAdd && add) {
+        connect(add->addAction(QStringLiteral("添加文件…")), &QAction::triggered, this, [this, id, custom] {
+            if (!custom) {
+                emit addRequested();
+                return;
+            }
+            const QStringList files = QFileDialog::getOpenFileNames(this, QStringLiteral("添加音频文件"), QDir::homePath(),
+                                                                    Importer::fileDialogFilter());
+            if (!files.isEmpty()) addPathsToCurrentPlaylist(files, id);
+        });
+        connect(add->addAction(QStringLiteral("添加文件夹…")), &QAction::triggered, this, [this, id, custom] {
+            if (!custom) {
+                emit addFolderRequested();
+                return;
+            }
+            const QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("添加文件夹"), QDir::homePath());
+            if (!dir.isEmpty()) addPathsToCurrentPlaylist({dir}, id);
+        });
+    }
+    if (radioPage && add)
+        connect(add->addAction(QStringLiteral("添加网络电台…")), &QAction::triggered, this,
+                &PlaylistWindow::radioRequested);
 
     const Track currentTrack = m_controller->currentTrack();
     const QString playing = currentTrack.isNull() ? QString() : currentTrack.identityKey();
@@ -583,20 +572,7 @@ void PlaylistWindow::buildSidebarMenu(QMenu &menu, const QString &id) {
         connect(sort->addAction(QStringLiteral("还原原序")), &QAction::triggered, this,
                 [this, id] { sortView(-1, id); });
     }
-    QMenu *mode = SkinMenu::addSubmenu(menu, QStringLiteral("播放模式"));
-    const struct ModeRow {
-        const char *name;
-        PlayMode mode;
-    } modes[] = {{"顺序播放", PlayMode::Order},
-                 {"列表循环", PlayMode::ListLoop},
-                 {"单曲循环", PlayMode::SingleLoop},
-                 {"随机播放", PlayMode::Random}};
-    for (const ModeRow &row : modes) {
-        QAction *action = mode->addAction(QString::fromUtf8(row.name));
-        action->setCheckable(true);
-        action->setChecked(row.mode == m_controller->mode());
-        connect(action, &QAction::triggered, this, [this, value = row.mode] { m_controller->setMode(value); });
-    }
+    // 播放模式不在列表右键里——TransportBar 的 m_mode 循环键已唯一入口。
     if (!id.isEmpty() && !library && !filtered && !target.isEmpty())
         connect(menu.addAction(QStringLiteral("清空列表")), &QAction::triggered, this, [this, id] {
             if (id == m_collections->viewId() && m_view->filterActive()) return;

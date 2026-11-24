@@ -121,6 +121,9 @@ private:
     void openFolder();     // 播放列表右键「添加文件夹…」：选目录后整棵导入
     void addRadioPrompt(); // 地址与显示信息一起填，仍走统一后台导入通路。
     void editRadioPrompt(const Track &track);
+    // 将电台行从 oldTrack 换到 replacement（新 URL）；同步列表成员、别名、分类归属与播放引用。
+    // 目标已存在则弹提示并返回 false，调用方自行接住失败。
+    bool replaceRadioTrack(const Track &oldTrack, const Track &replacement);
     void loadDirOrFiles(const QStringList &paths, const QHash<QString, QJsonObject> &radioEdits = {});
     void syncNowPlaying();
     void syncState();
