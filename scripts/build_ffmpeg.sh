@@ -60,17 +60,26 @@ if [[ "${1:-}" == "--force" ]] || ! codecs_is_built "$CODEC_PREFIX" "$CODEC_KEY"
             export LDFLAGS="-mmacosx-version-min=$DEPLOYMENT_TARGET"
         fi
         echo "=== 编译外部编码库（ogg/vorbis/opus/lame, $arch）==="
+        local_lame_host=""
+        if [[ "$arch" != "native" ]]; then
+            case "$arch" in
+                arm64) local_lame_host="aarch64-apple-darwin" ;;
+                x86_64) local_lame_host="x86_64-apple-darwin" ;;
+                *) local_lame_host="${arch}-apple-darwin" ;;
+            esac
+        fi
         codec_build_cmake ogg "$CODEC_3RD/ogg" "$stage" \
             -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DINSTALL_DOCS=OFF "${cmake_flags[@]}" || exit 1
         codec_build_cmake opus "$CODEC_3RD/opus" "$stage" \
             -DBUILD_SHARED_LIBS=OFF -DOPUS_BUILD_TESTING=OFF -DOPUS_BUILD_PROGRAMS=OFF "${cmake_flags[@]}" || exit 1
         codec_build_cmake vorbis "$CODEC_3RD/vorbis" "$stage" \
             -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DCMAKE_PREFIX_PATH="$stage" "${cmake_flags[@]}" || exit 1
-        codec_build_lame "$stage" || exit 1
+        codec_build_lame "$stage" "$local_lame_host" || exit 1
         CODEC_STAGES+=("$stage")
     done
     codecs_merge_libs "$CODEC_PREFIX" "${CODEC_STAGES[@]}" || exit 1
     rm -rf "$CODEC_PREFIX"/.stage-* "$CODEC_PREFIX"/.obj-*
+    unset CFLAGS LDFLAGS
     codecs_finish_build "$CODEC_PREFIX" "$CODEC_KEY" "$CODEC_COMMIT"
 else
     echo "外部编码库已就绪（$CODEC_PREFIX），跳过编译"

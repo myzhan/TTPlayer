@@ -129,13 +129,19 @@ codec_build_cmake() {
 # Homebrew 装了就命中），那样 libmp3lame.a 不含内部 mpglib，却要链外部 -lmpg123，
 # 既引入未 vendor 的动态依赖，又让 FFmpeg 的 `-lmp3lame` 探测报未定义符号。
 # 调用方负责 export CFLAGS/LDFLAGS（交叉编译时放 -arch）。
+# 交叉编译时必须传 --host=<arch>-apple-darwin（$2），否则 configure 的 host_cpu
+# 探测到 native 架构，导致 WITH_XMM 关闭但 HAVE_XMMINTRIN_H 仍被定义（因为
+# CFLAGS 的 -arch 让 SSE 编译测试通过），最终 libmp3lame.a 缺 SSE 符号。
 codec_build_lame() {
     local stage="$1" bdir="$CODEC_BUILD/lame" log="$CODEC_BUILD/lame"
+    local host_arg=()
+    [[ -n "${2:-}" ]] && host_arg=(--host="$2")
     rm -rf "$bdir"
     mkdir -p "$bdir"
     if ! ( cd "$bdir" && CPPFLAGS="-I$CODEC_3RD/lame ${CPPFLAGS:-}" \
         "$CODEC_3RD/lame/configure" \
         --prefix="$stage" \
+        "${host_arg[@]}" \
         --disable-shared --enable-static \
         --disable-frontend --disable-mp3x --disable-gtktest --disable-dependency-tracking \
         --disable-libmpg123 --enable-decoder ) \
