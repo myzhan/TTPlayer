@@ -52,6 +52,10 @@ jobs:
       APPIMAGE_ARCH: ${{ matrix.appimage_arch }}
       GLIBC_BASELINE: ${{ matrix.glibc }}
       ELF_MACHINE: ${{ matrix.elf_machine }}
+      # 容器里 apt 装 ffmpeg 等包会连带触发 tzdata 的交互式时区问答，无人应答会
+      # 挂到 job 超时被取消（实测 arm64 ubuntu:24.04 栽过）；强制非交互 + 预置 TZ。
+      DEBIAN_FRONTEND: noninteractive
+      TZ: UTC
     defaults:
       run:
         shell: bash
