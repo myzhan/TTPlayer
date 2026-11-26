@@ -468,7 +468,7 @@ else()
 endif()
 
 # Windows 版本资源与分发版本共用这一来源。
-set(CPACK_PACKAGE_VERSION 1.1.6)
+set(CPACK_PACKAGE_VERSION 1.1.7)
 option(TTPLAYER_BUNDLE "Build a macOS application bundle for distribution" OFF)
 if(APPLE AND TTPLAYER_BUNDLE)
   configure_file(packaging/Info.plist.in "${CMAKE_CURRENT_BINARY_DIR}/Info.plist" @ONLY)
@@ -537,20 +537,15 @@ if(WIN32)
 else()
   install(TARGETS ttplayer BUNDLE DESTINATION . RUNTIME DESTINATION bin)
 endif()
-# LGPL 静态组件随包提供完整对应源码（含本程序源码），可直接修改并重建/重链接。
+# LGPL 完整对应源码由 Release 独立发布；包内只放指引文件。
 if(APPLE AND TTPLAYER_BUNDLE)
-  set(_tt_legal_dir "ttplayer.app/Contents/Resources/legal")
+  set(_tt_legal_dir "ttplayer.app/Contents/Resources")
 elseif(WIN32)
-  set(_tt_legal_dir "legal")
+  set(_tt_legal_dir ".")
 else()
-  set(_tt_legal_dir "share/ttplayer/legal")
+  set(_tt_legal_dir "share/ttplayer")
 endif()
-install(CODE "execute_process(COMMAND \"${Python3_EXECUTABLE}\" \"${CMAKE_CURRENT_SOURCE_DIR}/scripts/package.py\"
-  --source-materials \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${_tt_legal_dir}\"
-  --binary \"$<TARGET_FILE:ttplayer>\"
-  --build-info \"${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} Qt ${Qt6_VERSION} $<CONFIG> ${CMAKE_SYSTEM_PROCESSOR}\"
-  COMMAND_ERROR_IS_FATAL ANY)")
-install(FILES docs/development.md DESTINATION "${_tt_legal_dir}")
+install(FILES packaging/LEGAL.txt DESTINATION "${_tt_legal_dir}")
 if(UNIX AND NOT APPLE)
   set(_tt_linux_icon "${CMAKE_CURRENT_BINARY_DIR}/icons/$<CONFIG>/ttplayer.png")
   add_custom_command(OUTPUT "${_tt_linux_icon}"

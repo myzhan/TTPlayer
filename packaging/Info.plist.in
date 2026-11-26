@@ -6,7 +6,7 @@
 <key>CFBundleName</key><string>千千静听</string>
 <key>CFBundleDisplayName</key><string>千千静听</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.1.5</string>
+<key>CFBundleShortVersionString</key><string>1.1.7</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>CFBundleIconFile</key><string>AppIcon.icns</string>
 <key>LSMinimumSystemVersion</key><string>@CMAKE_OSX_DEPLOYMENT_TARGET@</string>

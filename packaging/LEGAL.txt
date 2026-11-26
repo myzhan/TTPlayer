@@ -1,0 +1,10 @@
+本程序静态链接了 FFmpeg 9.0（LGPLv3）、LAME（LGPL）、FluidLite（LGPL-2.1）
+及若干 BSD/MIT 组件。按许可证要求，完整对应源码（含全部第三方源码、本程序
+源码、构建脚本与音色数据）须可供接收者获取并重新链接。
+
+完整 legal 材料（许可证文本 + corresponding-source.tar.gz + build-info.json
++ development.md）见同一 GitHub Release 页面的独立附件：
+    TTPlayer-<版本>-legal.tar.gz
+
+获取地址：https://github.com/myzhan/TTPlayer/releases
+重建方法详见仓库 docs/development.md 或上述压缩包内同名文件。

@@ -374,11 +374,48 @@ jobs:
           path: TTPlayer-*-macos-universal.dmg
           if-no-files-found: error
 
+  legal:
+    # 独立生成 LGPL 完整对应源码包，不嵌入各平台安装包。
+    name: Legal source package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Resolve package version
+        id: version
+        run: |
+          version="dev"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then version="${GITHUB_REF_NAME#v}"; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Prepare soundfont
+        run: python3 scripts/prepare_soundfont.py
+      - name: Generate legal materials
+        run: |
+          python3 scripts/package.py --source-materials build/legal
+          cp docs/development.md build/legal/
+      - name: Pack legal archive
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: tar -czf "TTPlayer-$VERSION-legal.tar.gz" -C build legal
+      - name: Upload legal package
+        uses: actions/upload-artifact@v4
+        with:
+          name: legal
+          path: TTPlayer-*-legal.tar.gz
+          if-no-files-found: error
+
   publish:
-    # 只在推 v* tag 时运行；Linux 两档与 Windows/macOS 全部成功才创建 Release。workflow_dispatch 不发布。
+    # 只在推 v* tag 时运行；Linux 两档与 Windows/macOS/legal 全部成功才创建 Release。workflow_dispatch 不发布。
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, windows, macos]
+    needs: [linux, windows, macos, legal]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -403,7 +440,11 @@ jobs:
             - **Linux**：按处理器选择 `linux-x86_64.AppImage` 或 `linux-arm64.AppImage`，`chmod +x` 后直接运行。x86_64 要求 glibc 2.35+（如 Ubuntu 22.04+）；arm64 要求 glibc 2.39+（如 Ubuntu 24.04+）。Qt 6 与 Qt 插件已内置，OpenGL、X11/xcb、DBus 运行库仍由系统提供。
             - **macOS**：打开 dmg，把 ttplayer.app 拖进 Applications。Universal 包同时支持 Apple Silicon 和 Intel Mac。包为 adhoc 签名、未公证，首次启动请右键「打开」。
 
-            附件：`TTPlayer-<版本>-linux-x86_64.AppImage`、`TTPlayer-<版本>-linux-arm64.AppImage`、`TTPlayer-<版本>-windows-x64.zip`、`TTPlayer-<版本>-macos-universal.dmg`。
+            ## LGPL 合规
+
+            本程序静态链接 FFmpeg / LAME / FluidLite 等 LGPL 组件。完整对应源码（含全部第三方源码、构建脚本与音色数据）见同页附件 `TTPlayer-<版本>-legal.tar.gz`。
+
+            附件：`TTPlayer-<版本>-linux-x86_64.AppImage`、`TTPlayer-<版本>-linux-arm64.AppImage`、`TTPlayer-<版本>-windows-x64.zip`、`TTPlayer-<版本>-macos-universal.dmg`、`TTPlayer-<版本>-legal.tar.gz`。
 
             本版本使用 FFmpeg 9.0 静态链接。
           files: |

@@ -65,7 +65,8 @@ Release `build/release/`），不得另开 `build-xxx` 旁路目录。
 默认 GM 音色为 MIT 的 FluidR3Mono_GM.sf3 v2.315，由 `scripts/prepare_soundfont.py` 固定 URL、
 18726092 字节和 SHA-256 校验后白名单提取到 `build/assets/`。CMake 用 Qt BIG_RESOURCES
 嵌入主程序（不进入图标辅助目标）；运行时不联网、不依赖外置音色。损坏缓存明确失败。
-安装阶段随包提供许可证及完整对应源码包（含全部静态依赖、本程序源码、构建脚本、音色包缓存），
+LGPL 完整对应源码（含全部静态依赖、本程序源码、构建脚本、音色包缓存）不嵌入各平台安装包，
+由 Release 独立附件 `TTPlayer-<ver>-legal.tar.gz` 提供；主包内只装 `LEGAL.txt` 指引文件。
 允许替换 LGPL 库并从源码重链接，具体步骤见 docs/development.md；不得去掉这些材料或改标第三方许可。
 
 FFmpeg 源码冻结为 **9.0**（子模块 pin 在 tag `n9.0`）：`scripts/ffmpeg_components.sh` 里的
